@@ -10,14 +10,20 @@ macOS support; macOS packaging and validation are outside v1.
 The first increment is this plan and AGENTS.md. Implement subsequent milestones
 progressively, leaving a runnable increment and recording evidence at each step.
 
-- First usable history: p95 <=500 ms with no application history cache.
-- History storage: disposable disk index with bounded RAM.
-- Indexing: on demand, with nearby prefetch. Filtering may scan through EOF.
-- Memory target: application RSS <512 MiB, including during full-history search.
-- Disk budget: 4 GiB per repository, including sidecars and temporary history data.
-- Default batch maximum: 1,000 commits; publish the first viewport sooner.
-- Default graph display cap: 200 lanes with visible overflow continuation markers.
-- No startup full-history count and no all-history RAM collection.
+- V1 prioritizes functionality and Go workflow parity. Performance numbers are
+  aspirational guidance, not release or milestone gates; optimize measured
+  bottlenecks after the functionality works.
+- Aim for a first usable viewport around 500 ms, smooth scrolling and modest RAM.
+  Keep the earlier 512 MiB aspiration for context, not a hard retention limit.
+- Stream batches from Git and retain loaded rows in memory like gitk-go. Do not
+  introduce SQLite, a persistent history database or parsing cache without measured
+  need and a future agreed plan change.
+- Default batch maximum: 1,000 commits; publish a smaller initial viewport sooner.
+- Default graph display cap: 200 lanes, with explicit overflow continuation markers.
+- Avoid eager all-history loading, startup counts, blocking Git/highlighting on the
+  UI thread, duplicated large data, and creating widgets for every loaded row.
+- Bundle broad offline syntax coverage, not a six-language allowlist. Nix, Rust,
+  Go, shell, JSON and TOML are smoke cases, not the extent of supported languages.
 
 ## Reference inventory
 
@@ -48,43 +54,40 @@ order. Port behavior and relevant fixtures rather than translating Tk plumbing.
 ### Modules and interfaces
 
 Use one Cargo package initially, with a library for testable application code and
-a thin binary entrypoint. Separate Git, history storage, pure model, diff/syntax,
-and GPUI view/controller modules. Do not expose GPUI types from the Git/store APIs.
+a thin binary entrypoint. Separate Git, in-memory history, pure model, diff/syntax,
+and GPUI view/controller modules. Do not expose GPUI types from the Git/model APIs.
 
 The history service accepts repository identity, generation, range and query
-requests. It returns bounded pages, indexed counts, completion state and errors.
+requests. It returns nearby display rows, loaded counts, completion state and errors.
 Use stable commit IDs and row ordinals rather than owning commit copies in every
 UI state structure. Diff requests identify a commit or local-change kind; results
 identify their generation and expose a line-addressable document plus file ranges.
 All asynchronous requests support cancellation and discard obsolete results.
 
-### Git and storage
+### Git and in-memory history
 
-- Invoke system Git directly with argument arrays. Use a cancellable streaming log
-  process with bounded record/stderr handling; drain, terminate and reap children.
+- Invoke system Git with argument arrays. Use a cancellable streaming log process
+  with bounded records/stderr and pending batches; drain, terminate and reap children.
 - Resolve repository root, Git/common directories and worktree identity. Support
   linked worktrees, detached HEAD, empty/unborn repositories and shallow history.
-- Stream metadata into SQLite using rusqlite, batched transactions and bounded
-  channels. Store ordinal, commit data, searchable text and compact graph geometry.
-  Store full diff contents separately, never in the history index.
-- Page by indexed ordinal ranges. Bound SQLite page caches and application caches
-  by bytes; avoid unbounded mmap and memory proportional to history or match count.
-- Publish initial rows before cache initialization or ancillary work can delay the
-  viewport. Prefetch roughly two viewports around visible rows, then pause reads.
-- Preserve trimmed case-insensitive substring search over hash, author name/email
-  and full message. Use normalized text and incremental background scans, not FTS
-  token matching that would change substring semantics. Persist result positions
-  on disk and serve result ordinal ranges. Show partial versus complete results.
-- Cache timelines under the platform cache directory, keyed by repository/worktree,
-  resolved HEAD, traversal settings and schema version. Refresh ref badges
-  independently. Changed/incompatible timelines rebuild lazily; v1 needs no
-  complicated history-splicing algorithm or durable cache schema migration.
-- Prune inactive timelines first. At the disk budget or on write failure, stop
-  extension, preserve available browsing and expose a recoverable error. Never
-  silently fall back to unbounded RAM. Exclude disposable data from watchers.
-- Serialize conflicting repository operations and cancel old jobs on switch/reload.
-  Preserve selection by commit ID where possible; retain a stable scroll anchor
-  as pages arrive. End navigates to the last currently indexed matching row.
+- Follow the original streaming batch model. Keep loaded rows and compact graph
+  geometry in memory, publish the first viewport promptly, and load more near the
+  end of the list. Pause consumption when browsing demand is satisfied.
+- Retain commit data once. Avoid duplicate full messages, normalized search-text
+  copies and per-widget metadata collections. Repeated author identities may be
+  shared where straightforward; do not build elaborate packing/indexing machinery
+  before measurements establish a need.
+- Preserve trimmed, case-insensitive substring filtering over hash, author
+  name/email and full message. Filter loaded rows on a worker. Like Go, continue
+  streaming when there are no matches or the filtered viewport needs more results.
+  Show filtered/loaded counts and distinguish a partial history from EOF.
+- Keep display work virtualized. Small nearby display caches and compact match
+  positions are fine; there is no database or persistent parsing cache. Loaded
+  history intentionally grows with browsing demand, so record RSS at comparable
+  loaded counts when evaluating Rust against Go.
+- Reload/repository switching cancels obsolete work and releases old history.
+  Refresh ref labels independently, preserve selection by commit ID where possible,
+  and keep a stable scroll anchor as batches arrive. End means last loaded match.
 
 ### GPUI, diffs and platform integration
 
@@ -99,10 +102,18 @@ All asynchronous requests support cancellation and discard obsolete results.
   show additions; merges show first-parent diffs. Retain per-file jump navigation.
 - Parse and spool large diffs to temporary disk files with line offsets. Fetch
   nearby text and spans only. Selection and copying must span unloaded lines.
-- Use syntect in background workers. Bundle licensed grammars including Nix, Rust,
-  Go, shell, JSON and TOML. Syntax foreground colors coexist with diff backgrounds.
-  Track old/new parser state separately and reset at discontinuous hunks. Unknown
-  languages retain diff colors; extremely long lines may skip syntax with notice.
+- Use syntect on background workers with a broad compatible grammar collection,
+  such as the full two-face bundle plus available default grammars. Support as many
+  bundled languages as practical; no exact Chroma parity is required.
+- Include filename/extension detection, known extensionless filenames and shebangs.
+  Provide an actual language/alias inventory through docs and a CLI listing. Bundle
+  grammars and licenses offline and load them on a worker, away from initial UI work.
+- Keep Nix, Rust, Go, shell, JSON and TOML as required smoke cases. Also exercise
+  representative families such as Python, JavaScript/TypeScript, C/C++, Java,
+  HTML/CSS, YAML, SQL, Markdown, Ruby and other included grammars.
+- Syntax foreground colors coexist with diff backgrounds. Track old/new parsing
+  state separately and reset at discontinuous hunks. Unknown languages retain diff
+  colors; extremely long lines may skip syntax with notice.
 - Keep ordinary local branch switching protections. Never auto-stash or force a
   checkout. Display actionable Git errors and leave the current view recoverable.
 - Use notify with debouncing for Git metadata and relevant worktree locations;
@@ -146,22 +157,24 @@ Acceptance: documents are ASCII, coherent, and leave subsequent work tracked.
 
 Acceptance: nix build and checks pass; installed binary launches outside the shell.
 
-### 3. Streamed, bounded history
+### 3. Streamed in-memory history
 
 - [ ] Cancellable Git stream and repository discovery.
-- [ ] SQLite timeline, ordinal paging, disk budget and bounded caches.
+- [ ] Compact in-memory loaded rows, bounded batches and minimal duplicate data.
 - [ ] Virtualized columns, graph/ref badges and incremental batch publication.
-- [ ] On-demand prefetch, progressive filtering and disk-backed match positions.
+- [ ] On-demand loading, progressive filtering and compact match positions.
 - [ ] Selection/scroll preservation, partial/EOF/error status and text graph mode.
 
-Acceptance: deep browsing and full search do not grow RAM with total commit count;
-startup target is measured before moving expensive work into the startup path.
+Acceptance: streamed history, graph, navigation and filtering work like Go without
+creating a history database/cache. Include a nixpkgs responsiveness smoke check;
+performance measurements guide follow-up work and do not block the milestone.
 
 ### 4. Highlighted, selectable diffs
 
 - [ ] Metadata, root/first-parent diffs, file list and per-file jumps.
 - [ ] Virtualized line rendering, disk spool and bounded span/text caches.
-- [ ] Required language grammars and asynchronous highlighting.
+- [ ] Broad bundled grammars, filename/shebang detection, language inventory and
+  asynchronous highlighting, tested across representative language families.
 - [ ] Cross-line selection and copy with/without +/- markers.
 - [ ] Binary, rename, unusual-path, oversized-diff and long-line handling.
 
@@ -178,7 +191,7 @@ selection, and large diffs remain navigable without unbounded RAM.
 - [ ] CLI behavior, errors and version output.
 - [ ] Keyboard navigation and focus behavior listed below.
 
-Shortcut inventory: arrows/p/k and n/j move commits; Home/End navigate indexed rows;
+Shortcut inventory: arrows/p/k and n/j move commits; Home/End navigate loaded rows;
 Ctrl+PageUp/PageDown scroll history; Delete/Backspace/b/B and Space page the diff;
 u/U and d/D scroll 18 lines; Ctrl+Shift+C copies without markers; / focuses filter;
 Escape leaves filter or closes dialog; F5 reloads; F1 shows help; Ctrl+O opens a
@@ -193,39 +206,40 @@ switch failures preserve worktree contents and an actionable current view.
 
 - [ ] Screenshot/layout comparison at matching dimensions and scale.
 - [ ] Routine checks and real Wayland/X11 smoke tests pass.
-- [ ] nixpkgs startup, scrolling, selection, full search and memory measured.
+- [ ] nixpkgs responsiveness smoke check; record readily available startup and
+  memory observations, and track measured bottlenecks for later optimization.
 - [ ] Compare with Go on identical hardware/revision/workload and record results.
-- [ ] Document remaining limitations; do not call v1 complete with missing parity
-  or failed acceptance targets.
+- [ ] Document remaining functional limitations and optimization opportunities;
+  missing functional parity blocks v1, aspirational timing/RSS misses do not.
 
 ## Validation protocol
 
-Use release builds. On the reference machine measure 20 process launches, each
-without the Rust history index. Target p95 <=500 ms from process launch to the
-first painted, selectable history viewport with keyboard navigation working.
-Measure warm reopening and cold OS filesystem conditions separately; do not drop
-system caches during routine automation. Exclude build time, include GUI startup.
-Initial diffs, exact totals, refs and worktree status need not finish within 500 ms.
+Prioritize functional tests, GUI correctness and completing the workflows. Run
+formatting, Clippy, relevant tests, Nix checks and Wayland/X11 smoke checks at
+milestones. Use small deterministic repositories for routine coverage and a local
+nixpkgs smoke check to catch obvious responsiveness or memory mistakes.
 
-At 60 Hz target steady-scroll p95 frame time <=16.7 ms and selection feedback
-<=100 ms. Report diff/highlight completion separately. Target app RSS <512 MiB
-through full-history search and deep browsing. Record Git child RSS, aggregate
-peak process memory, cache/spool disk use and workload duration separately.
-These are acceptance targets, not claims that performance has been achieved.
+The earlier numbers (roughly 500 ms first usable history, 16.7 ms steady frame
+work, 100 ms selection feedback and 512 MiB RSS) remain useful aspirations only.
+Do not delay v1 for profiling, exhaustive benchmarks, memory packing, indexing or
+micro-optimizations when the functionality is still incomplete. Record material
+bottlenecks and improve them after the basic application is functional.
 
-Store benchmark commands and results with hardware, OS/display/GPU, repository and
-source revisions, toolchain, viewport size, cache state and sample count. Include
-Go comparisons. Track startup phases rather than using first Git output as a
-proxy for an interactive window. Keep million-commit benchmarks opt-in.
+When comparing performance, use release builds and equivalent loaded commit counts
+and workloads in Go/Rust. Distinguish application RSS from Git child RSS, and CPU
+paint callbacks from actual presentation. Record hardware, repository/source
+revision and cache conditions. Comprehensive 20-launch and million-commit benchmark
+runs are optional follow-up work, not v1 release gates.
 
-Routine fixtures must cover graph merges/page boundaries; interrupted indexing;
-partial searches/cancellation; stale results; schema/HEAD changes; full/read-only
-disks; watcher bursts/failures; protected branch-switch failures; worktrees;
-detached/unborn/shallow history; Unicode/non-UTF8 paths; binary/renamed files;
-cross-page copying; huge diffs and representative multiline syntax.
+Routine fixtures should cover graph merges/batch boundaries, interrupted streaming,
+filtering/cancellation, stale results, HEAD changes, watcher bursts/failures,
+protected branch-switch failures, worktrees, detached/unborn/shallow history,
+unusual filenames, binary/renamed files, copying across virtualized lines, large
+diffs and representative multiline syntax across a broad language collection.
 
-Once the toolchain exists, run the commands in AGENTS.md. Do not add expensive
-GUI/repository benchmarks to every unit-test run.
+Temporary files for exceptionally large diffs are distinct from a persistent
+history database; clean them up on selection/repository change and shutdown. No
+commit history or filter index should persist between runs.
 
 ## Progress log
 
@@ -367,3 +381,20 @@ acceptance benchmark. Nix package/flake verification is rerun before committing.
 Nix build and flake checks pass. The installed release package also passed the
 own-window screenshot/graceful-close test, reporting WindowPainted at 103948 us
 in that single warm run. Milestone 2 is complete; v1 acceptance remains open.
+
+### 2026-11-03: revised v1 priorities requested by the user
+
+The current design above supersedes the earlier disk-backed-history and strict
+performance-gate decisions in this historical log. Use Go-style in-memory streamed
+batches without SQLite or a persistent history cache. Only revisit disk storage
+if measurements establish a concrete need and the change is agreed.
+
+Broaden syntax coverage to the full practical bundled grammar set. The six initial
+languages are tests, not an allowlist, and exact Chroma coverage is not required.
+Document actual support and keep grammars available offline.
+
+Functionality and workflow parity come first. Timing and memory aspirations should
+prevent obviously costly designs, not block milestones or require elaborate early
+optimization. Keep implementing and commit between completed milestones; stop only
+when user input is genuinely required. The in-progress Git backend remains work
+for milestone 3; no SQLite implementation was created.

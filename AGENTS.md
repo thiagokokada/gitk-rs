@@ -10,8 +10,8 @@ without waiting for confirmation. Stop only when user input is actually required
 ## Architecture
 
 - Use Rust and GPUI. Linux/NixOS is the first supported platform. Isolate OS
-  integration so Git, storage, models, and most UI logic remain portable to macOS.
-- Keep Git process management and disk storage independent of GPUI. Keep state
+  integration so Git, history, models, and most UI logic remain portable to macOS.
+- Keep Git process management and history data independent of GPUI. Keep state
   transitions and display preparation pure where possible. Avoid abstraction-only
   wrappers and speculative backend/plugin systems.
 - Use typed IDs and generation tokens for asynchronous work. Reject stale results
@@ -23,17 +23,24 @@ without waiting for confirmation. Stop only when user input is actually required
 
 ## Performance invariants
 
-- Never run blocking Git, SQLite, filesystem scans, or highlighting in render paths
+- Never run blocking Git, filesystem scans, or highlighting in render paths
   or on the UI thread. Never wait for a total history count before showing rows.
 - Virtualize history and diff lines. Paint graph geometry only for visible rows.
-- Bound queues, caches, pending work, and retained text by bytes. Do not accumulate
-  all commits, graph rows, search matches, or diff spans in application memory.
-- Use disk-backed ordinal paging, not deep SQL OFFSET queries or repeated Git
-  --skip scans. Stop prefetching when browsing demand is satisfied.
+- Match Go's streaming batch model: retain loaded history in memory, avoid eager
+  whole-history loading and duplicate large data, and keep pending batches bounded.
+  Virtualization limits drawing work; it does not bound total retained history.
+- Do not introduce SQLite or a persistent history/parsing cache without measured
+  need and an agreed plan change. Continue one Git stream, avoiding repeated --skip
+  scans. Pause prefetch when browsing demand is satisfied.
+- Bundle broad offline language coverage, not a small allowlist. Preserve grammar
+  licenses, detect filenames/shebangs and document actual supported languages.
+- Functionality and workflow parity take priority in v1. Timing/RSS numbers are
+  aspirations, not release gates. Avoid obvious performance mistakes, record
+  meaningful bottlenecks, and defer elaborate optimization until features work.
 - Avoid whole-worktree recursive watcher expansion on nixpkgs. Coalesce events and
   reconcile status periodically; watch failure must leave manual reload usable.
-- Record before/after measurements for performance changes. Test both cold app
-  indexes and warm reopen. Report application and child-process memory separately.
+- When optimizing, compare equivalent workloads and loaded counts with Go. Report
+  application and child-process memory separately; never invent measurements.
 
 ## Dependencies, verification, and documentation
 
@@ -47,7 +54,7 @@ without waiting for confirmation. Stop only when user input is actually required
   - nix develop --command cargo test --all-targets --locked
   - nix build
   - nix flake check
-- Add meaningful tests for parsing, paging, state transitions, cancellation, and
+- Add meaningful tests for parsing, batching, state transitions, cancellation, and
   failure handling. Use small deterministic Git fixtures in normal checks; keep
   million-commit benchmarks opt-in. Smoke-test real Wayland and X11 separately.
 - Run checks relevant to the increment. Documentation-only changes need link,

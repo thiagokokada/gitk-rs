@@ -1,7 +1,9 @@
 # gitk-rs
 
-A Rust/GPUI port of gitk-go for Linux/NixOS, designed for bounded-memory browsing
-of very large Git histories. See [PLAN.md](PLAN.md) for milestones and acceptance
+A Rust/GPUI port of gitk-go for Linux/NixOS, designed for streaming Git history browsing
+with virtualized rendering. Loaded rows stay in memory like gitk-go; no persistent
+history database/cache is planned. V1 prioritizes functionality, with performance
+aspirations guiding design rather than blocking delivery. See [PLAN.md](PLAN.md) for milestones and acceptance
 criteria and [AGENTS.md](AGENTS.md) for contributor instructions.
 
 **Status:** initial scaffold, not a working Git history viewer. The window shell
