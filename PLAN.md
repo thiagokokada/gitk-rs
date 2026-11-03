@@ -139,8 +139,9 @@ Acceptance: documents are ASCII, coherent, and leave subsequent work tracked.
 
 - [x] Cargo package, pinned GPUI and Cargo.lock.
 - [x] Nix flake, lockfile, shell, package, app and checks.
-- [ ] Real window opens with readable fonts on NixOS Wayland and X11.
-- [ ] Instrument launch, first painted history, selection and frame timings.
+- [x] Real window opens with readable fonts on NixOS Wayland and X11.
+- [x] Instrument launch/window painting and bounded CPU frame timings. Connect
+  history/selection paint markers when those views exist in milestones 3 and 4.
 - [x] Preserve licenses and add usage/development README.
 
 Acceptance: nix build and checks pass; installed binary launches outside the shell.
@@ -340,3 +341,29 @@ Milestone 2 remains open for visual inspection and timing instrumentation. The
 window is still a scaffold. No history, diff, syntax-highlighting, memory or
 500 ms startup acceptance is claimed. The earlier daemon/network blocker is
 resolved through reviewed execution exceptions; it is not a remaining blocker.
+
+### 2026-11-03: foundation instrumentation and visual review
+
+Initial repository commit: b4704ff. Added --timings with a 64-record nonblocking
+queue and an off-thread writer retaining at most 512 CPU render-to-paint samples.
+The foundation records window creation and CPU paint callbacks; the same timing
+API exposes history/selection phases to connect when those views exist. Moved
+those connections to their owning milestones rather than requiring nonexistent
+history views to complete the foundation.
+
+Inspected an own-window X11 screenshot at /tmp/gitk-rs-foundation.png: readable
+system fonts, expected dark panes and status bar. Both native backends had already
+passed the startup smoke checks, using the same view/text system. The screenshot
+test additionally exposed a shutdown borrow panic in GPUI's X11 backend. App::defer
+was insufficient because its effects still run inside the native close callback;
+yielding through a foreground task's 1 ms timer before quitting fixes the path.
+The test now closes its own window with WM_DELETE_WINDOW and requires exit code 0.
+
+Validation: formatting, Clippy, all four CLI tests and executable build pass.
+Graceful X11 close and timing-writer shutdown pass; the latest debug run reported
+WindowCreated at 179767 us and WindowPainted at 244099 us. These are CPU callback
+timestamps for the scaffold, NOT history startup, GPU presentation or a 20-run
+acceptance benchmark. Nix package/flake verification is rerun before committing.
+Nix build and flake checks pass. The installed release package also passed the
+own-window screenshot/graceful-close test, reporting WindowPainted at 103948 us
+in that single warm run. Milestone 2 is complete; v1 acceptance remains open.

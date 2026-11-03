@@ -4,6 +4,8 @@ Read PLAN.md before changing this repository. Implement milestones in order and
 update their checklist and progress log with evidence after each increment.
 Do not mark a milestone complete until its acceptance checks pass. Report blocked
 checks and unfinished behavior explicitly; never invent benchmark results.
+Commit each validated milestone, and continue with the next authorized milestone
+without waiting for confirmation. Stop only when user input is actually required.
 
 ## Architecture
 

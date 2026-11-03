@@ -1,9 +1,10 @@
 use std::{ffi::OsString, path::PathBuf};
 
-pub const HELP: &str = "Usage: gitk-rs [--mode dark|light] [--] [REPOSITORY]\n\
+pub const HELP: &str = "Usage: gitk-rs [--mode dark|light] [--timings] [--] [REPOSITORY]\n\
     --help, -h       Show help\n\
     --version, -V    Show version\n\
     --mode MODE     Choose dark (default) or light appearance\n\n\
+    --timings       Report startup paint callbacks and bounded CPU frame samples\n\n\
     This development scaffold does not load Git history yet.";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -16,6 +17,7 @@ pub enum Theme {
 pub struct Config {
     pub repository: PathBuf,
     pub theme: Theme,
+    pub timings: bool,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -31,11 +33,16 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
     let mut repository = None;
     let mut theme = Theme::Dark;
     let mut positional_only = false;
+    let mut timings = false;
     while let Some(arg) = args.next() {
         if !positional_only {
             match arg.to_str() {
                 Some("--help" | "-h") => return Ok(Command::Help),
                 Some("--version" | "-V") => return Ok(Command::Version),
+                Some("--timings") => {
+                    timings = true;
+                    continue;
+                }
                 Some("--") => {
                     positional_only = true;
                     continue;
@@ -61,6 +68,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
     Ok(Command::Open(Config {
         repository: repository.unwrap_or_else(|| PathBuf::from(".")),
         theme,
+        timings,
     }))
 }
 
@@ -79,6 +87,7 @@ mod tests {
             Ok(Command::Open(Config {
                 repository: PathBuf::from("."),
                 theme: Theme::Dark,
+                timings: false,
             }))
         );
         assert_eq!(
@@ -86,6 +95,7 @@ mod tests {
             Ok(Command::Open(Config {
                 repository: PathBuf::from("repo with spaces"),
                 theme: Theme::Light,
+                timings: false,
             }))
         );
     }
@@ -111,6 +121,7 @@ mod tests {
             Ok(Command::Open(Config {
                 repository: PathBuf::from("--help"),
                 theme: Theme::Dark,
+                timings: false,
             }))
         );
     }
@@ -125,6 +136,7 @@ mod tests {
             Ok(Command::Open(Config {
                 repository: path.into(),
                 theme: Theme::Dark,
+                timings: false,
             }))
         );
     }

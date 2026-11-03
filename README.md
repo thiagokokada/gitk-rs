@@ -33,7 +33,7 @@ nix flake check
 ./result/bin/gitk-rs /path/to/repository
 ```
 
-The scaffold accepts --mode dark|light, --help and --version. A path beginning
+The scaffold accepts --mode dark|light, --timings, --help and --version. A path beginning
 with a dash can follow --. Repository paths may contain spaces or non-UTF8 bytes.
 The GUI uses the published [GPUI 0.2.2 API](https://docs.rs/gpui/0.2.2/gpui/).
 Linux enables Wayland and X11; macOS dependency configuration is preparatory and
@@ -43,6 +43,11 @@ for GUI smoke tests. The package supplies loaders, not a machine-specific driver
 The remaining CLI controls are tracked in the plan and are not accepted yet.
 The small [xattr compatibility patch](vendor/README.md) is required by GPUI's
 transitive archive dependency on current libc releases.
+
+--timings reports window creation and first CPU paint callback timestamps to stderr
+and a bounded recent-sample CPU render-to-paint p95 on graceful exit. Its writer
+runs off the UI thread. These measurements exclude process-loader time and do not
+measure compositor presentation, GPU execution, or history readiness yet.
 
 ## Environment limitations observed
 
