@@ -13,6 +13,16 @@ preferences. See the [validation report](docs/VALIDATION.md) for evidence, scree
 
 ![Linux viewer on nixpkgs](docs/screenshots/gitk-rs.png)
 
+## Running
+
+From this checkout, specify the flake explicitly before application arguments:
+
+```sh
+nix run . -- ~/Projects/nixpkgs
+```
+
+From another directory, use `nix run ~/Projects/gitk-rs -- ~/Projects/nixpkgs`.
+
 ## Development
 
 Nix with flakes enabled supplies Rust and native libraries. The flake pins nixpkgs;

@@ -611,4 +611,18 @@ and functional resource caps are documented in docs/VALIDATION.md.
 Matched-size Go/Rust screenshots, source/store revisions, same-machine nixpkgs
 observations and remaining optimization opportunities are documented. Performance
 observations are not release gates. The first Linux release is ready to run with
-nix run -- /path/to/repository; all planned milestones are complete.
+nix run . -- /path/to/repository; all planned milestones are complete.
+
+
+### 2026-11-04: correct Nix launch instructions
+
+The previously suggested nix run command omitted the explicit flake installable.
+Nix consequently treated the repository argument as the flake to run, even when
+invoked from gitk-rs. Corrected it to nix run . -- /path/to/repository and added
+README examples for both the checkout and another working directory. This was
+a documentation/command error, not evidence of a caller working-directory error.
+
+Validation: local documentation links, command consistency, whitespace and AGENTS
+ASCII checks pass. nix eval --raw .#apps.x86_64-linux.default.program resolves to
+the gitk-rs executable. The explicit-flake version probe triggers a package build;
+no application source changed in this correction.
