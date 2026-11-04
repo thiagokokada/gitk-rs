@@ -183,13 +183,13 @@ selection, and large diffs remain navigable without unbounded RAM.
 
 ### 5. Complete existing workflows
 
-- [ ] Staged/unstaged/untracked rows, including unmerged status.
-- [ ] Open repository, local branch dialog and protected branch switching.
-- [ ] Automatic reload toggle, F5/manual reload and status reconciliation.
-- [ ] Light/dark themes, UI/fixed-font preferences, menus, about and F1 help.
-- [ ] Copy commit reference, file path, selection and marker-free selection.
-- [ ] CLI behavior, errors and version output.
-- [ ] Keyboard navigation and focus behavior listed below.
+- [x] Staged/unstaged/untracked rows, including unmerged status.
+- [x] Open repository, local branch dialog and protected branch switching.
+- [x] Automatic reload toggle, F5/manual reload and status reconciliation.
+- [x] Light/dark themes, UI/fixed-font preferences, menus, about and F1 help.
+- [x] Copy commit reference, file path, selection and marker-free selection.
+- [x] CLI behavior, errors and version output.
+- [x] Keyboard navigation and focus behavior listed below.
 
 Shortcut inventory: arrows/p/k and n/j move commits; Home/End navigate loaded rows;
 Ctrl+PageUp/PageDown scroll history; Delete/Backspace/b/B and Space page the diff;
@@ -472,3 +472,56 @@ build and all twenty-six tests. nix build passed before that final positioning
 adjustment; its rebuilt package is also produced by the final flake check.
 Milestone 4 is complete. The next milestone covers local changes, dialogs,
 preferences, menus and automatic reload.
+
+### 2026-11-04: remaining workflows implemented, final checks pending
+
+Milestone 4 commit: 6b286b1. Implemented staged/unstaged/untracked rows, conflict
+status and ordinary protected git switch operations. Local diffs include untracked
+files and compare conflicted worktree entries against ours; duplicate unmerged
+numstat entries are collapsed. The repository worker handles status, refs, branch
+listing/switching and a bounded nonrecursive watch set away from rendering.
+Events coalesce for 350 ms; five-second reconciliation covers unwatched locations
+and watcher failures. F5 remains independent of watching, and --nowatch/--verbose
+are available. Ref labels refresh without discarding retained history; reload
+preserves nearby selection by commit ID where possible.
+
+Added a native repository picker, searchable local-branch dialog, menus, copy
+reference/path/selection actions, F1/About, light/dark switching, resizable panes,
+and atomic font preferences in gitk-rs's own config directory. Original Emacs
+filter controls are scoped to input focus. Bundled GPUI Component 0.5.1 icons and
+included their Apache/Lucide/Feather notices. Split dialog logic into its own module.
+
+Thirty-two tests, formatting, Clippy and the development build pass before the
+last layout/focus checks. New fixtures cover staged/unstaged/untracked/renamed and
+unmerged status, protected switch failures preserving contents, watcher event
+bursts, disabled-watcher manual refresh, repository generation changes and atomic
+preferences. A disposable-repository X11 GUI script verifies local Nix/Rust and
+staged Go diffs, a rejected switch with unchanged contents followed by a successful
+switch, help, isolated preference saving, theme switching, filtering and reload.
+Screenshots include /tmp/gitk-rs-local-nix.png, /tmp/gitk-rs-branch-protected.png,
+/tmp/gitk-rs-preferences.png and /tmp/gitk-rs-light-theme.png. No user repository or
+preferences were modified by these interaction tests. Final clean Nix and native
+backend validation are pending; milestone 5 remains open until they pass.
+
+
+### 2026-11-04: workflow milestone validated
+
+Final formatting, Clippy and all thirty-two tests pass. Clean nix flake check and
+nix build pass; installed package /nix/store/jnb6narwwc49nhpggp9867brcdbma4dr-gitk-rs-0.1.0
+launches outside the shell on Wayland and X11 and remains alive for eight seconds
+on each backend. Its help/version/language inventory commands also pass.
+
+The final X11 fixture test additionally exercises branch filtering and opening an
+alternate repository by path, asserting its branch in the verbose state log and
+inspecting its actual history/diff. It exposed and fixed a stale repository path
+in history requests. Closing a successful branch dialog now restores keyboard
+focus. Native file-picker failure offers a path-entry fallback, also available
+with Ctrl+Shift+O. Last desktop artifacts include /tmp/gitk-rs-repository-opened.png
+and /tmp/gitk-rs-branch-filtered.png. Native picker selection itself has not been
+automated; the path-opening workflow and repository transition are verified.
+
+Running target/debug/gitk-rs outside nix develop failed with NoWaylandLib and
+missing libvulkan.so.1, as expected for an unwrapped development binary. Repeating
+inside the pinned shell passes; the installed wrapper passes outside it. No host
+library or permission settings were changed. Milestone 5 is complete. Continue to
+release acceptance, same-machine reference observations and remaining limitations.

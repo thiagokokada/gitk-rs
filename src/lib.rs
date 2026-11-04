@@ -9,3 +9,6 @@ pub mod timing;
 
 #[cfg(test)]
 mod test_support;
+
+pub mod preferences;
+pub mod workspace;

@@ -134,7 +134,8 @@ pub struct DiffDocument {
 
 impl DiffDocument {
     pub fn load(selection: &DiffSelection, cancellation: &Cancellation) -> Result<Self> {
-        let mut files = load_files(selection, cancellation)?;
+        let commands = DiffCommands::new(selection, cancellation)?;
+        let mut files = load_files(selection, &commands, cancellation)?;
         let mut output =
             BufWriter::new(tempfile::tempfile().context("create temporary diff document")?);
         let mut index = Vec::new();
@@ -163,64 +164,74 @@ impl DiffDocument {
                 0,
             )?;
         }
-        let args = diff_args(&selection.source, false);
-        let mut stream =
-            GitStream::spawn(&selection.repository, &args, cancellation.clone(), &[0])?;
         let mut file = None;
         let mut hunk = 0;
         let mut in_hunk = false;
         let mut notice = None;
-        loop {
-            if cancellation.load(Ordering::Acquire) {
-                bail!("diff operation cancelled");
-            }
-            let record = match stream.record(b'\n') {
-                Ok(Some(record)) => record,
-                Ok(None) => break,
-                Err(error) => {
-                    notice = Some(format!("Diff preview stopped: {error:#}"));
+        for command in 0..commands.len() {
+            let args = commands.args(command, false);
+            let mut stream = GitStream::spawn(
+                &selection.repository,
+                &args,
+                cancellation.clone(),
+                commands.allowed(command),
+            )?;
+            loop {
+                if cancellation.load(Ordering::Acquire) {
+                    bail!("diff operation cancelled");
+                }
+                let record = match stream.record(b'\n') {
+                    Ok(Some(record)) => record,
+                    Ok(None) => break,
+                    Err(error) => {
+                        notice = Some(format!("Diff preview stopped: {error:#}"));
+                        break;
+                    }
+                };
+                let line = String::from_utf8_lossy(&record.bytes);
+                if line.starts_with("diff --git ") {
+                    file = Some(file.map_or(0, |index| index + 1));
+                    if let Some(section) = file.and_then(|file_index| files.get_mut(file_index)) {
+                        section.start_line = Some(index.len());
+                    }
+                    hunk = 0;
+                    in_hunk = false;
+                }
+                let kind = if line.starts_with("@@") {
+                    in_hunk = true;
+                    hunk = index.len();
+                    LineKind::Hunk
+                } else if in_hunk {
+                    match line.as_bytes().first() {
+                        Some(b'+') => LineKind::Added,
+                        Some(b'-') => LineKind::Removed,
+                        Some(b' ') => LineKind::Context,
+                        _ => LineKind::Header,
+                    }
+                } else {
+                    LineKind::Header
+                };
+                if index.len() >= MAX_LINES || offset + line.len() as u64 + 1 > MAX_DIFF_BYTES {
+                    notice =
+                        Some("Diff preview is limited to 256 MiB or one million lines.".into());
                     break;
                 }
-            };
-            let line = String::from_utf8_lossy(&record.bytes);
-            if line.starts_with("diff --git ") {
-                file = Some(file.map_or(0, |index| index + 1));
-                if let Some(section) = file.and_then(|file_index| files.get_mut(file_index)) {
-                    section.start_line = Some(index.len());
-                }
-                hunk = 0;
-                in_hunk = false;
+                max_width = max_width.max(line.len().min(MAX_DISPLAY_BYTES));
+                write_line(
+                    &mut output,
+                    &mut index,
+                    &mut offset,
+                    &line,
+                    kind,
+                    file,
+                    hunk,
+                )?;
             }
-            let kind = if line.starts_with("@@") {
-                in_hunk = true;
-                hunk = index.len();
-                LineKind::Hunk
-            } else if in_hunk {
-                match line.as_bytes().first() {
-                    Some(b'+') => LineKind::Added,
-                    Some(b'-') => LineKind::Removed,
-                    Some(b' ') => LineKind::Context,
-                    _ => LineKind::Header,
-                }
-            } else {
-                LineKind::Header
-            };
-            if index.len() >= MAX_LINES || offset + line.len() as u64 + 1 > MAX_DIFF_BYTES {
-                notice = Some("Diff preview is limited to 256 MiB or one million lines.".into());
+            drop(stream);
+            if notice.is_some() {
                 break;
             }
-            max_width = max_width.max(line.len().min(MAX_DISPLAY_BYTES));
-            write_line(
-                &mut output,
-                &mut index,
-                &mut offset,
-                &line,
-                kind,
-                file,
-                hunk,
-            )?;
         }
-        drop(stream);
         if index.len() == header.lines().count() {
             write_line(
                 &mut output,
@@ -470,61 +481,145 @@ fn diff_args(source: &DiffSource, numstat: bool) -> Vec<OsString> {
             args.push(commit.id.as_str().into());
         }
         DiffSource::Local { staged: true } => args.push("--cached".into()),
-        _ => {}
+        DiffSource::Local { staged: false } => args.push("--ours".into()),
     }
     args
 }
 
-fn load_files(selection: &DiffSelection, cancellation: &Cancellation) -> Result<Vec<FileSection>> {
-    let mut stream = GitStream::spawn(
-        &selection.repository,
-        &diff_args(&selection.source, true),
-        cancellation.clone(),
-        &[0],
-    )?;
+struct DiffCommands {
+    source: DiffSource,
+    untracked: Vec<PathBuf>,
+}
+impl DiffCommands {
+    fn new(selection: &DiffSelection, cancellation: &Cancellation) -> Result<Self> {
+        let mut untracked = Vec::new();
+        if matches!(selection.source, DiffSource::Local { staged: false }) {
+            let mut stream = GitStream::spawn(
+                &selection.repository,
+                &["ls-files", "--others", "--exclude-standard", "-z"],
+                cancellation.clone(),
+                &[0],
+            )?;
+            let mut bytes = 0;
+            while let Some(record) = stream.record(0)? {
+                bytes += record.bytes.len() + std::mem::size_of::<PathBuf>();
+                ensure!(bytes <= 16 * 1024 * 1024, "untracked paths exceed 16 MiB");
+                let path = path_from_bytes(record.bytes)?;
+                ensure!(
+                    path.is_relative()
+                        && !path
+                            .components()
+                            .any(|c| matches!(c, std::path::Component::ParentDir)),
+                    "invalid untracked path"
+                );
+                untracked.push(path);
+            }
+        }
+        Ok(Self {
+            source: selection.source.clone(),
+            untracked,
+        })
+    }
+    fn len(&self) -> usize {
+        self.untracked.len() + 1
+    }
+    fn allowed(&self, command: usize) -> &'static [i32] {
+        if command == 0 { &[0] } else { &[0, 1] }
+    }
+    fn args(&self, command: usize, numstat: bool) -> Vec<OsString> {
+        if command == 0 {
+            return diff_args(&self.source, numstat);
+        }
+        let mut args = vec![
+            "diff",
+            "--no-color",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--no-index",
+            "--src-prefix=a/",
+            "--dst-prefix=b/",
+        ]
+        .into_iter()
+        .map(OsString::from)
+        .collect::<Vec<_>>();
+        if numstat {
+            args.extend(["--numstat", "-z"].map(OsString::from));
+        }
+        args.extend([
+            OsString::from("--"),
+            OsString::from("/dev/null"),
+            self.untracked[command - 1].as_os_str().to_owned(),
+        ]);
+        args
+    }
+}
+
+fn load_files(
+    selection: &DiffSelection,
+    commands: &DiffCommands,
+    cancellation: &Cancellation,
+) -> Result<Vec<FileSection>> {
     let mut files = Vec::new();
     let mut bytes = 0;
-    while let Some(record) = stream.record(0)? {
-        if record.bytes.iter().all(|b| matches!(b, b'\r' | b'\n')) {
-            continue;
+    for command in 0..commands.len() {
+        let mut stream = GitStream::spawn(
+            &selection.repository,
+            &commands.args(command, true),
+            cancellation.clone(),
+            commands.allowed(command),
+        )?;
+        while let Some(record) = stream.record(0)? {
+            if record.bytes.iter().all(|b| matches!(b, b'\r' | b'\n')) {
+                continue;
+            }
+            bytes += record.bytes.len();
+            ensure!(
+                bytes < 16 * 1024 * 1024,
+                "diff file metadata exceeds 16 MiB"
+            );
+            let mut parts = record.bytes.splitn(3, |b| *b == b'\t');
+            let added = std::str::from_utf8(parts.next().context("missing numstat additions")?)?
+                .trim()
+                .parse()
+                .ok();
+            let removed = std::str::from_utf8(parts.next().context("missing numstat removals")?)?
+                .parse()
+                .ok();
+            let path = parts.next().context("missing numstat filename")?;
+            let (path, old_path) = if path.is_empty() {
+                let old = stream.record(0)?.context("missing rename source")?;
+                let new = stream.record(0)?.context("missing rename destination")?;
+                bytes += old.bytes.len() + new.bytes.len();
+                (
+                    path_from_bytes(new.bytes)?,
+                    Some(path_from_bytes(old.bytes)?),
+                )
+            } else {
+                (path_from_bytes(path.to_vec())?, None)
+            };
+            // Git emits a zero-count unmerged entry followed by its actual patch
+            // numstat. Keep one navigation entry in the patch's file order.
+            if let Some(previous) = files
+                .last_mut()
+                .filter(|f: &&mut FileSection| f.path == path && f.old_path == old_path)
+            {
+                previous.added = added;
+                previous.removed = removed;
+            } else {
+                files.push(FileSection {
+                    path,
+                    old_path,
+                    added,
+                    removed,
+                    start_line: None,
+                });
+            }
         }
-        bytes += record.bytes.len();
-        ensure!(
-            bytes < 16 * 1024 * 1024,
-            "diff file metadata exceeds 16 MiB"
-        );
-        let mut parts = record.bytes.splitn(3, |b| *b == b'\t');
-        let added = std::str::from_utf8(parts.next().context("missing numstat additions")?)?
-            .trim()
-            .parse()
-            .ok();
-        let removed = std::str::from_utf8(parts.next().context("missing numstat removals")?)?
-            .parse()
-            .ok();
-        let path = parts.next().context("missing numstat filename")?;
-        let (path, old_path) = if path.is_empty() {
-            let old = stream.record(0)?.context("missing rename source")?;
-            let new = stream.record(0)?.context("missing rename destination")?;
-            bytes += old.bytes.len() + new.bytes.len();
-            (
-                path_from_bytes(new.bytes)?,
-                Some(path_from_bytes(old.bytes)?),
-            )
-        } else {
-            (path_from_bytes(path.to_vec())?, None)
-        };
-        files.push(FileSection {
-            path,
-            old_path,
-            added,
-            removed,
-            start_line: None,
-        });
     }
     Ok(files)
 }
 
-fn path_from_bytes(bytes: Vec<u8>) -> Result<PathBuf> {
+pub(crate) fn path_from_bytes(bytes: Vec<u8>) -> Result<PathBuf> {
     #[cfg(unix)]
     {
         use std::os::unix::ffi::OsStringExt;
@@ -975,6 +1070,37 @@ mod tests {
             )
             .unwrap();
         assert_eq!(copy, "λ".repeat(10000));
+    }
+
+    #[test]
+    fn local_diffs_include_untracked_files_and_unborn_staged_changes() {
+        let fixture = Fixture::new();
+        std::fs::write(
+            fixture.root().join("untracked\nλ.nix"),
+            "{ answer = 42; }\n",
+        )
+        .unwrap();
+        let selection = DiffSelection {
+            id: SelectionId(1),
+            repository: fixture.root().into(),
+            source: DiffSource::Local { staged: false },
+        };
+        let document = DiffDocument::load(&selection, &cancel()).unwrap();
+        assert_eq!(document.files.len(), 1);
+        assert_eq!(
+            document.files[0].path,
+            std::path::Path::new("untracked\nλ.nix")
+        );
+        assert_eq!(document.files[0].added, Some(1));
+        assert!(document.files[0].start_line.is_some());
+        fixture.git(&["add", "."]);
+        let selection = DiffSelection {
+            source: DiffSource::Local { staged: true },
+            ..selection
+        };
+        let document = DiffDocument::load(&selection, &cancel()).unwrap();
+        assert_eq!(document.files.len(), 1);
+        assert_eq!(document.files[0].added, Some(1));
     }
 
     #[test]

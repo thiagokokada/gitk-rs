@@ -18,6 +18,7 @@ fn main() -> Result<()> {
     let engine = HistoryEngine::spawn(Request {
         generation: Generation(1),
         id: 0,
+        refs_revision: 0,
         repository,
         range: 0..wanted,
         query: String::new(),

@@ -26,6 +26,7 @@ pub struct Generation(pub u64);
 pub struct Request {
     pub generation: Generation,
     pub id: u64,
+    pub refs_revision: u64,
     pub repository: PathBuf,
     pub range: Range<usize>,
     pub query: String,
@@ -265,6 +266,7 @@ struct Session {
     graph: GraphBuilder,
     refs: Arc<Refs>,
     refs_loaded: bool,
+    refs_revision: u64,
     eof: bool,
     query: String,
     matches: Vec<usize>,
@@ -288,6 +290,7 @@ impl Session {
             graph: GraphBuilder::new(request.graph_columns),
             refs: Arc::new(Refs::new()),
             refs_loaded: false,
+            refs_revision: 0,
             eof,
             query: String::new(),
             matches: Vec::new(),
@@ -318,12 +321,13 @@ impl Session {
         }
         // Publish a small first viewport before ref discovery or further batches.
         if self.entries.is_empty() && !self.eof {
-            self.load(64, 64)?;
+            self.load(request.batch.clamp(1, 64), 64)?;
             return Ok(true);
         }
-        if !self.refs_loaded {
+        if !self.refs_loaded || self.refs_revision != request.refs_revision {
             self.refs = Arc::new(load_refs(&self.repository, &self.cancellation)?);
             self.refs_loaded = true;
+            self.refs_revision = request.refs_revision;
             return Ok(true);
         }
         let needed = request.range.end.saturating_add(64);
@@ -468,6 +472,7 @@ mod tests {
         Request {
             generation: Generation(1),
             id: 1,
+            refs_revision: 0,
             repository: fixture.root().to_owned(),
             range: 0..10,
             query: String::new(),

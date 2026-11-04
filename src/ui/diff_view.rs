@@ -7,7 +7,11 @@ use gitk_rs::{
     git::Commit,
 };
 use gpui::{prelude::*, *};
-use gpui_component::scroll::Scrollbar;
+use gpui_component::{
+    menu::{ContextMenuExt, PopupMenuItem},
+    resizable::{h_resizable, resizable_panel},
+    scroll::Scrollbar,
+};
 use std::{
     cell::RefCell, collections::HashMap, ops::Range, path::PathBuf, rc::Rc, sync::Arc,
     time::Duration,
@@ -32,6 +36,8 @@ pub(super) struct DiffPane {
     handle: DiffHandle,
     focus: FocusHandle,
     settings: DiffSettings,
+    font: SharedString,
+    font_size: f32,
     identity: Option<(String, u64)>,
     page: DiffPage,
     snapshot: Option<DiffSnapshot>,
@@ -88,6 +94,8 @@ impl DiffPane {
             handle,
             focus: cx.focus_handle(),
             settings,
+            font: fixed_font().into(),
+            font_size: 13.,
             identity: None,
             page: DiffPage {
                 selection: SelectionId(0),
@@ -105,6 +113,24 @@ impl DiffPane {
             layouts: Rc::new(RefCell::new(HashMap::new())),
             _poll: poll,
         }
+    }
+
+    pub(super) fn set_font(&mut self, font: SharedString, font_size: f32, cx: &mut Context<Self>) {
+        self.font = font;
+        self.font_size = font_size;
+        cx.notify();
+    }
+    pub(super) fn set_theme(&mut self, dark: bool, cx: &mut Context<Self>) {
+        self.settings.dark = dark;
+        self.page.settings = self.settings;
+        self.page.id += 1;
+        if let Some(snapshot) = &mut self.snapshot {
+            for line in &mut snapshot.lines {
+                line.spans.clear();
+            }
+        }
+        self.handle.page(self.page.clone());
+        cx.notify();
     }
 
     pub(super) fn load(
@@ -125,6 +151,32 @@ impl DiffPane {
                 id: self.page.selection,
                 repository,
                 source: DiffSource::Commit(commit),
+            },
+            self.page.clone(),
+        );
+    }
+
+    pub(super) fn load_local(
+        &mut self,
+        repository: PathBuf,
+        staged: bool,
+        revision: u64,
+        cx: &mut Context<Self>,
+    ) {
+        let identity = (
+            if staged { "staged" } else { "unstaged" }.to_owned(),
+            revision,
+        );
+        if self.identity.as_ref() == Some(&identity) {
+            return;
+        }
+        self.clear("Loading local changes…", cx);
+        self.identity = Some(identity);
+        self.handle.select(
+            DiffSelection {
+                id: self.page.selection,
+                repository,
+                source: DiffSource::Local { staged },
             },
             self.page.clone(),
         );
@@ -213,7 +265,10 @@ impl DiffPane {
             .as_ref()
             .and_then(|s| index.checked_sub(s.start).and_then(|i| s.lines.get(i)))
         else {
-            return div().h(px(20.)).child("Loading…").into_any_element();
+            return div()
+                .h(px(self.font_size * 1.55))
+                .child("Loading…")
+                .into_any_element();
         };
         let dark = self.settings.dark;
         let background = match (dark, line.kind) {
@@ -234,11 +289,16 @@ impl DiffPane {
             .selection
             .and_then(|selection| selection.on_line(index, line.text.len()));
         let layouts = self.layouts.clone();
-        let width = self.snapshot.as_ref().map_or(100, |s| s.max_width).max(100) as f32 * 8. + 24.;
+        let font_size = self.font_size;
+        let line_height = px(font_size * 1.55);
+        let width =
+            self.snapshot.as_ref().map_or(100, |s| s.max_width).max(100) as f32 * font_size * 0.65
+                + 24.;
         div()
             .id(("diff-line", index))
-            .h(px(20.))
+            .h(px(self.font_size * 1.55))
             .w(px(width))
+            .min_w_full()
             .bg(rgb(background))
             .cursor_text()
             .on_mouse_down(
@@ -335,7 +395,7 @@ impl DiffPane {
                         push(offset, display.text.len(), default);
                         let shaped = window.text_system().shape_line(
                             display.text.clone().into(),
-                            px(13.),
+                            px(font_size),
                             &runs,
                             None,
                         );
@@ -358,12 +418,12 @@ impl DiffPane {
                             window.paint_quad(fill(
                                 Bounds::new(
                                     point(bounds.left() + start, bounds.top()),
-                                    size(end - start, px(20.)),
+                                    size(end - start, line_height),
                                 ),
                                 rgba(0x4285f4aa),
                             ));
                         }
-                        let _ = layout.shaped.paint(bounds.origin, px(20.), window, cx);
+                        let _ = layout.shaped.paint(bounds.origin, line_height, window, cx);
                     },
                 )
                 .size_full(),
@@ -419,93 +479,145 @@ impl Render for DiffPane {
             .on_action(cx.listener(|this, _: &LinesDown, _, cx| this.scroll_lines(18, cx)))
             .on_action(cx.listener(|this, _: &LinesUp, _, cx| this.scroll_lines(-18, cx)))
             .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .h_full()
-                    .flex()
-                    .flex_col()
-                    .border_1()
-                    .border_color(rgb(border))
-                    .font_family(fixed_font())
+                h_resizable("diff-split")
                     .child(
-                        div()
-                            .relative()
-                            .flex_1()
-                            .min_h_0()
-                            .overflow_hidden()
-                            .child(
-                                uniform_list(
-                                    "diff-lines",
-                                    count,
-                                    cx.processor(|this, range: Range<usize>, _, cx| {
-                                        this.ensure(range.clone());
-                                        range.map(|i| this.row(i, cx)).collect::<Vec<_>>()
-                                    }),
+                        resizable_panel().child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .h_full()
+                                .flex()
+                                .flex_col()
+                                .border_1()
+                                .border_color(rgb(border))
+                                .font_family(self.font.clone())
+                                .child(
+                                    div()
+                                        .relative()
+                                        .flex_1()
+                                        .min_h_0()
+                                        .overflow_hidden()
+                                        .child(
+                                            uniform_list(
+                                                "diff-lines",
+                                                count,
+                                                cx.processor(|this, range: Range<usize>, _, cx| {
+                                                    this.ensure(range.clone());
+                                                    range
+                                                        .map(|i| this.row(i, cx))
+                                                        .collect::<Vec<_>>()
+                                                }),
+                                            )
+                                            .track_scroll(self.scroll.clone())
+                                            .with_horizontal_sizing_behavior(
+                                                ListHorizontalSizingBehavior::Unconstrained,
+                                            )
+                                            .size_full(),
+                                        )
+                                        .child(Scrollbar::new(&self.scroll).id("diff-scrollbar")),
                                 )
-                                .track_scroll(self.scroll.clone())
-                                .with_horizontal_sizing_behavior(
-                                    ListHorizontalSizingBehavior::Unconstrained,
-                                )
-                                .size_full(),
-                            )
-                            .child(Scrollbar::new(&self.scroll).id("diff-scrollbar")),
+                                .when(!self.message.is_empty(), |pane| {
+                                    pane.child(div().px_2().py_1().child(self.message.clone()))
+                                }),
+                        ),
                     )
-                    .when(!self.message.is_empty(), |pane| {
-                        pane.child(div().px_2().py_1().child(self.message.clone()))
-                    }),
-            )
-            .child(
-                div()
-                    .w(px(280.))
-                    .h_full()
-                    .flex_shrink_0()
-                    .border_1()
-                    .border_color(rgb(border))
-                    .relative()
                     .child(
-                        uniform_list(
-                            "diff-files",
-                            files.len() + 1,
-                            cx.processor(move |_this, range: Range<usize>, _, cx| {
-                                range
-                                    .map(|i| {
-                                        let (label, line) = if i == 0 {
-                                            ("Commit".into(), Some(0))
-                                        } else {
-                                            let file = &files[i - 1];
-                                            let stats = match (file.added, file.removed) {
-                                                (Some(a), Some(r)) => format!("+{a} -{r}"),
-                                                _ => "binary".into(),
-                                            };
-                                            let path = file
-                                                .path
-                                                .to_string_lossy()
-                                                .escape_debug()
-                                                .to_string();
-                                            (format!("{path}  {stats}"), file.start_line)
-                                        };
-                                        div()
-                                            .id(("diff-file", i))
-                                            .h(px(24.))
-                                            .px_2()
-                                            .truncate()
-                                            .cursor_pointer()
-                                            .child(label)
-                                            .on_click(cx.listener(move |this, _, _, cx| {
-                                                if let Some(line) = line {
-                                                    this.jump(line, cx);
-                                                }
-                                            }))
-                                    })
-                                    .collect::<Vec<_>>()
-                            }),
-                        )
-                        .track_scroll(self.files_scroll.clone())
-                        .size_full(),
-                    )
-                    .child(Scrollbar::vertical(&self.files_scroll).id("files-scrollbar")),
+                        resizable_panel().size(px(280.)).child(
+                            div()
+                                .w_full()
+                                .h_full()
+                                .flex_shrink_0()
+                                .border_1()
+                                .border_color(rgb(border))
+                                .relative()
+                                .child(
+                                    uniform_list(
+                                        "diff-files",
+                                        files.len() + 1,
+                                        cx.processor(move |this, range: Range<usize>, _, cx| {
+                                            range
+                                                .map(|i| {
+                                                    let (label, line) = if i == 0 {
+                                                        ("Commit".into(), Some(0))
+                                                    } else {
+                                                        let file = &files[i - 1];
+                                                        let stats = match (file.added, file.removed)
+                                                        {
+                                                            (Some(a), Some(r)) => {
+                                                                format!("+{a} -{r}")
+                                                            }
+                                                            _ => "binary".into(),
+                                                        };
+                                                        let path = file
+                                                            .path
+                                                            .to_string_lossy()
+                                                            .escape_debug()
+                                                            .to_string();
+                                                        (
+                                                            format!("{path}  {stats}"),
+                                                            file.start_line,
+                                                        )
+                                                    };
+                                                    let path = files
+                                                        .get(i.saturating_sub(1))
+                                                        .filter(|_| i > 0)
+                                                        .map(|f| {
+                                                            f.path.to_string_lossy().into_owned()
+                                                        });
+                                                    div()
+                                                        .id(("diff-file", i))
+                                                        .h(px((this.font_size * 1.9).max(24.)))
+                                                        .px_2()
+                                                        .truncate()
+                                                        .cursor_pointer()
+                                                        .child(label)
+                                                        .on_click(cx.listener(
+                                                            move |this, _, _, cx| {
+                                                                if let Some(line) = line {
+                                                                    this.jump(line, cx);
+                                                                }
+                                                            },
+                                                        ))
+                                                        .context_menu(move |menu, _, _| {
+                                                            if let Some(path) = path.clone() {
+                                                                menu.item(
+                                                                    PopupMenuItem::new(
+                                                                        "Copy file path",
+                                                                    )
+                                                                    .on_click(move |_, _, cx| {
+                                                                        cx.write_to_clipboard(
+                                                                    ClipboardItem::new_string(
+                                                                        path.clone(),
+                                                                    ),
+                                                                )
+                                                                    }),
+                                                                )
+                                                            } else {
+                                                                menu
+                                                            }
+                                                        })
+                                                })
+                                                .collect::<Vec<_>>()
+                                        }),
+                                    )
+                                    .track_scroll(self.files_scroll.clone())
+                                    .size_full(),
+                                )
+                                .child(
+                                    Scrollbar::vertical(&self.files_scroll).id("files-scrollbar"),
+                                ),
+                        ),
+                    ),
             )
+            .context_menu({
+                let focus = self.focus.clone();
+                move |menu, _, _| {
+                    menu.action_context(focus.clone())
+                        .menu("Copy selection", Box::new(Copy))
+                        .menu("Copy without diff markers", Box::new(CopyCode))
+                        .menu("Select all", Box::new(SelectAll))
+                }
+            })
     }
 }
 
@@ -514,14 +626,18 @@ pub(super) fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-c", Copy, Some("Diff")),
         KeyBinding::new("ctrl-shift-c", CopyCode, Some("Diff")),
         KeyBinding::new("ctrl-a", SelectAll, Some("Diff")),
-        KeyBinding::new("space", PageDown, Some("GitHistory && !Input")),
-        KeyBinding::new("backspace", PageUp, Some("GitHistory && !Input")),
-        KeyBinding::new("delete", PageUp, Some("GitHistory && !Input")),
-        KeyBinding::new("shift-b", PageUp, Some("GitHistory && !Input")),
-        KeyBinding::new("shift-u", LinesUp, Some("GitHistory && !Input")),
-        KeyBinding::new("shift-d", LinesDown, Some("GitHistory && !Input")),
-        KeyBinding::new("b", PageUp, Some("GitHistory && !Input")),
-        KeyBinding::new("u", LinesUp, Some("GitHistory && !Input")),
-        KeyBinding::new("d", LinesDown, Some("GitHistory && !Input")),
+        KeyBinding::new("space", PageDown, Some("GitHistory && !Input && !Dialog")),
+        KeyBinding::new("backspace", PageUp, Some("GitHistory && !Input && !Dialog")),
+        KeyBinding::new("delete", PageUp, Some("GitHistory && !Input && !Dialog")),
+        KeyBinding::new("shift-b", PageUp, Some("GitHistory && !Input && !Dialog")),
+        KeyBinding::new("shift-u", LinesUp, Some("GitHistory && !Input && !Dialog")),
+        KeyBinding::new(
+            "shift-d",
+            LinesDown,
+            Some("GitHistory && !Input && !Dialog"),
+        ),
+        KeyBinding::new("b", PageUp, Some("GitHistory && !Input && !Dialog")),
+        KeyBinding::new("u", LinesUp, Some("GitHistory && !Input && !Dialog")),
+        KeyBinding::new("d", LinesDown, Some("GitHistory && !Input && !Dialog")),
     ]);
 }

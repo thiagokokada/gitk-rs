@@ -10,7 +10,9 @@ pub const HELP: &str = "Usage: gitk-rs [--mode dark|light] [--timings] [--] [REP
     --text-graph    Use a text graph instead of canvas geometry\n\
     --nosyntax      Disable syntax highlighting\n\
     --list-languages List bundled languages and extensions\n\
-    --licenses      Print bundled grammar/theme license notices";
+    --licenses      Print bundled grammar/theme license notices\n\
+    --nowatch       Disable automatic repository refresh\n\
+    --verbose       Report repository refreshes and operations";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Theme {
@@ -27,6 +29,8 @@ pub struct Config {
     pub graph_columns: usize,
     pub text_graph: bool,
     pub syntax: bool,
+    pub watch: bool,
+    pub verbose: bool,
 }
 
 impl Default for Config {
@@ -39,6 +43,8 @@ impl Default for Config {
             graph_columns: 200,
             text_graph: false,
             syntax: true,
+            watch: true,
+            verbose: false,
         }
     }
 }
@@ -70,6 +76,8 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
     let mut graph_columns = 200;
     let mut text_graph = false;
     let mut syntax = true;
+    let mut watch = true;
+    let mut verbose = false;
     while let Some(arg) = args.next() {
         if !positional_only {
             match arg.to_str() {
@@ -94,6 +102,14 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
                     if graph_columns > 200 {
                         return Err("--graph-cols must be between 1 and 200".into());
                     }
+                    continue;
+                }
+                Some("--nowatch") => {
+                    watch = false;
+                    continue;
+                }
+                Some("--verbose") => {
+                    verbose = true;
                     continue;
                 }
                 Some("--nosyntax") => {
@@ -130,6 +146,8 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
         graph_columns,
         text_graph,
         syntax,
+        watch,
+        verbose,
     }))
 }
 

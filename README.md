@@ -6,10 +6,10 @@ history database/cache is planned. V1 prioritizes functionality, with performanc
 aspirations guiding design rather than blocking delivery. See [PLAN.md](PLAN.md) for milestones and acceptance
 criteria and [AGENTS.md](AGENTS.md) for contributor instructions.
 
-**Status:** streamed history viewing works, including graph/ref labels, filtering,
-keyboard navigation, reload, commit metadata and selectable, highlighted diffs
-with file jumps. Local changes and the remaining dialogs/workflows are still being
-implemented. See PLAN.md.
+**Status:** the Linux viewer includes streamed history, graph/ref labels, filtering,
+selectable highlighted diffs, local staged/unstaged/untracked changes, protected
+branch switching, repository opening, automatic refresh, themes and saved font
+preferences. Release acceptance is tracked in PLAN.md.
 
 ## Development
 
@@ -36,7 +36,8 @@ nix flake check
 ```
 
 The viewer accepts --mode dark|light, --timings, --limit N, --graph-cols N,
---text-graph, --nosyntax, --list-languages, --licenses, --help and --version. A path beginning
+--text-graph, --nosyntax, --nowatch, --verbose, --list-languages, --licenses,
+--help and --version. A path beginning
 with a dash can follow --. Repository paths may contain spaces or non-UTF8 bytes.
 The GUI uses the published [GPUI 0.2.2 API](https://docs.rs/gpui/0.2.2/gpui/).
 Linux enables Wayland and X11; macOS dependency configuration is preparatory and
@@ -57,7 +58,23 @@ individual lines display up to 16 KiB and clipboard selections up to 16 MiB. Lim
 are reported in the viewer. Hunk gaps reset parsing state, so partial multiline
 constructs can be imperfectly colored. Grammar/theme acknowledgements ship in
 assets/licenses and the Nix package's share/doc/gitk-rs directory.
-The remaining CLI controls/workflows are tracked in the plan.
+Ctrl+O opens a repository using the desktop file picker. Ctrl+Shift+O opens
+a path-entry dialog, also used as a fallback when the picker is unavailable. Ctrl+B opens local
+branches; arrows and Enter select one. Git errors remain visible without discarding
+changes. F1 opens shortcut help. The Menu button exposes these actions, copy commit
+reference, font preferences, automatic reload, theme and About. Right-click a commit
+or file for copying; the diff menu offers both selection-copy modes.
+
+Ctrl+, opens font preferences; Ctrl+Enter applies and saves. Preferences live at
+$XDG_CONFIG_HOME/gitk-rs/preferences.json (normally ~/.config/gitk-rs). Font families
+refer to installed system fonts. Alt+T switches theme; Alt+R toggles automatic
+reload. The filter keeps the original Emacs controls: Ctrl+A/E go to start/end,
+Ctrl+B/F move a character, Ctrl+W deletes a word, Ctrl+U/K delete to start/end and
+Ctrl+D deletes forward. Escape returns focus to history.
+
+Automatic refresh uses a bounded set of nonrecursive watches plus a five-second
+background status reconciliation. Watch failures leave periodic/manual refresh
+available; --nowatch disables automatic refresh. No history data persists.
 The small [xattr compatibility patch](vendor/README.md) is required by GPUI's
 transitive archive dependency on current libc releases.
 

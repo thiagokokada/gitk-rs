@@ -1,3 +1,4 @@
+mod dialogs;
 mod diff_view;
 
 use gitk_rs::{
@@ -5,7 +6,12 @@ use gitk_rs::{
     diff::{DiffEngine, DiffHandle, DiffSettings},
     graph::GraphRow,
     history::{Entry, Generation, HistoryEngine, HistoryHandle, RefKind, Request, Snapshot},
+    preferences::Preferences,
     timing::{Phase, Timing, TimingGuard},
+    workspace::{
+        Operation, WorkspaceEngine, WorkspaceGeneration, WorkspaceHandle, WorkspaceRequest,
+        WorkspaceSnapshot,
+    },
 };
 use gpui::{
     AnyElement, App, Application, Bounds, Context, Entity, FocusHandle, KeyBinding, PathBuilder,
@@ -15,7 +21,10 @@ use gpui::{
 };
 use gpui_component::{
     Root, ThemeMode,
+    button::Button,
     input::{Input, InputEvent, InputState},
+    menu::{ContextMenuExt, DropdownMenu, PopupMenuItem},
+    resizable::{resizable_panel, v_resizable},
     scroll::Scrollbar,
 };
 use std::{
@@ -36,15 +45,68 @@ actions!(
         FocusFilter,
         BlurFilter,
         HistoryPageUp,
-        HistoryPageDown
+        HistoryPageDown,
+        ToggleWatch,
+        OpenRepository,
+        OpenRepositoryPath,
+        OpenBranches,
+        Help,
+        About,
+        CloseDialog,
+        BranchUp,
+        BranchDown,
+        BranchAccept,
+        FontPreferences,
+        ApplyPreferences,
+        ToggleTheme,
+        CopyCommit
     ]
 );
 
+struct WindowServices {
+    history: HistoryHandle,
+    workspace: WorkspaceHandle,
+    diff: DiffHandle,
+}
+
+enum DialogKind {
+    Help,
+    About,
+    Branches,
+    Preferences,
+    OpenRepository,
+}
+
 struct HistoryWindow {
     config: Config,
+    preferences: Preferences,
+    ui_font_input: Entity<InputState>,
+    fixed_font_input: Entity<InputState>,
+    font_size_input: Entity<InputState>,
+    reload_selection: Option<gitk_rs::git::CommitId>,
     focus: FocusHandle,
     timing: Timing,
     history: HistoryHandle,
+    workspace: WorkspaceHandle,
+    workspace_generation: WorkspaceGeneration,
+    workspace_snapshot: Option<WorkspaceSnapshot>,
+    local_rows: Vec<bool>,
+    local_selection: Option<bool>,
+    dialog: Option<DialogKind>,
+    dialog_focus: FocusHandle,
+    restore_focus: bool,
+    restore_repository_focus: bool,
+    branches: Vec<String>,
+    filtered_branches: Vec<usize>,
+    branch_filter: Entity<InputState>,
+    _branch_subscription: Subscription,
+    repository_input: Entity<InputState>,
+    _repository_subscription: Subscription,
+    branch_index: usize,
+    branch_scroll: UniformListScrollHandle,
+    operation_id: u64,
+    pending_operation: Option<(u64, bool)>,
+    operation_message: String,
     request: Request,
     snapshot: Option<Snapshot>,
     selected: Option<(usize, Arc<Entry>)>,
@@ -64,12 +126,44 @@ impl HistoryWindow {
     fn new(
         config: Config,
         timing: Timing,
-        history: HistoryHandle,
-        diff_handle: DiffHandle,
+        services: WindowServices,
+        preferences: Preferences,
         request: Request,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        apply_fonts(&preferences, cx);
+        let WindowServices {
+            history,
+            workspace,
+            diff: diff_handle,
+        } = services;
+        let ui_font_input =
+            cx.new(|cx| InputState::new(window, cx).default_value(preferences.ui_font.clone()));
+        let fixed_font_input =
+            cx.new(|cx| InputState::new(window, cx).default_value(preferences.fixed_font.clone()));
+        let font_size_input = cx
+            .new(|cx| InputState::new(window, cx).default_value(preferences.font_size.to_string()));
+        let branch_filter =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Filter local branches"));
+        let branch_subscription = cx.subscribe_in(
+            &branch_filter,
+            window,
+            |this, _, event, _, cx| match event {
+                InputEvent::Change => this.filter_branches(cx),
+                InputEvent::PressEnter { .. } => this.switch_branch(this.branch_index, cx),
+                _ => {}
+            },
+        );
+        let repository_input = cx.new(|cx| InputState::new(window, cx));
+        let repository_subscription =
+            cx.subscribe_in(&repository_input, window, |this, _, event, _, cx| {
+                if matches!(event, InputEvent::PressEnter { .. })
+                    && matches!(this.dialog, Some(DialogKind::OpenRepository))
+                {
+                    this.apply_repository_path(cx);
+                }
+            });
         let focus = cx.focus_handle();
         focus.focus(window);
         let filter =
@@ -100,7 +194,10 @@ impl HistoryWindow {
                     .timer(Duration::from_millis(16))
                     .await;
                 if this
-                    .update(cx, |this, cx| this.consume_snapshot(cx))
+                    .update(cx, |this, cx| {
+                        this.consume_snapshot(cx);
+                        this.consume_workspace(cx);
+                    })
                     .is_err()
                 {
                     break;
@@ -117,8 +214,40 @@ impl HistoryWindow {
                 cx,
             )
         });
+        diff.update(cx, |diff, cx| {
+            diff.set_font(
+                preferences.fixed_font.clone().into(),
+                preferences.font_size,
+                cx,
+            )
+        });
         Self {
+            preferences,
+            ui_font_input,
+            fixed_font_input,
+            font_size_input,
+            reload_selection: None,
             diff,
+            workspace,
+            workspace_generation: WorkspaceGeneration(1),
+            workspace_snapshot: None,
+            local_rows: Vec::new(),
+            local_selection: None,
+            dialog: None,
+            dialog_focus: cx.focus_handle(),
+            restore_focus: false,
+            restore_repository_focus: false,
+            branches: Vec::new(),
+            filtered_branches: Vec::new(),
+            branch_filter,
+            _branch_subscription: branch_subscription,
+            repository_input,
+            _repository_subscription: repository_subscription,
+            branch_index: 0,
+            branch_scroll: UniformListScrollHandle::new(),
+            operation_id: 0,
+            pending_operation: None,
+            operation_message: String::new(),
             config,
             focus,
             timing,
@@ -152,6 +281,12 @@ impl HistoryWindow {
         {
             return;
         }
+        if self.config.verbose {
+            eprintln!(
+                "gitk-rs: history generation={} branch={} loaded={} visible={}",
+                snapshot.generation.0, snapshot.branch, snapshot.loaded, snapshot.visible
+            );
+        }
         if let Some(error) = &snapshot.error {
             self.detail = error.clone().into();
         } else if snapshot.eof && snapshot.visible == 0 {
@@ -162,11 +297,24 @@ impl HistoryWindow {
             }
             .into();
         }
-        if snapshot.eof && snapshot.visible == 0
-            || snapshot.error.is_some() && self.selected.is_none()
+        if self.local_selection.is_none()
+            && (snapshot.eof && snapshot.visible == 0
+                || snapshot.error.is_some() && self.selected.is_none())
         {
             self.diff
                 .update(cx, |diff, cx| diff.clear(&self.detail, cx));
+        }
+        if let Some(id) = &self.reload_selection {
+            if let Some(offset) = snapshot
+                .rows
+                .iter()
+                .position(|entry| &entry.commit.id == id)
+            {
+                self.pending_selection = Some(snapshot.start + offset + self.local_rows.len());
+                self.reload_selection = None;
+            } else if snapshot.eof {
+                self.reload_selection = None;
+            }
         }
         self.snapshot = Some(snapshot);
         if self.preserve_filter_selection {
@@ -174,17 +322,24 @@ impl HistoryWindow {
             if let Some(index) = snapshot.anchor_position
                 && let Some((_, entry)) = &self.selected
             {
-                self.set_selection(index, entry.clone(), cx);
+                self.set_selection(index + self.local_rows.len(), entry.clone(), cx);
                 self.scroll.scroll_to_item(index, ScrollStrategy::Center);
                 self.preserve_filter_selection = false;
             } else if !snapshot.filtering && snapshot.visible > 0 {
                 self.selected = None;
-                self.pending_selection = Some(0);
+                self.pending_selection = Some(self.local_rows.len());
                 self.preserve_filter_selection = false;
             } else if snapshot.eof && snapshot.visible == 0 {
                 self.selected = None;
                 self.preserve_filter_selection = false;
             }
+        }
+        if let Some(staged) = self
+            .pending_selection
+            .and_then(|i| self.local_rows.get(i))
+            .copied()
+        {
+            self.select_local(staged, cx);
         }
         if let Some(index) = self.pending_selection
             && let Some(entry) = self.cached(index)
@@ -195,16 +350,131 @@ impl HistoryWindow {
         cx.notify();
     }
 
+    fn refresh_workspace(&self) {
+        self.workspace.configure(WorkspaceRequest {
+            generation: self.workspace_generation,
+            repository: self.config.repository.clone(),
+            watch: self.config.watch,
+        });
+    }
+
+    fn consume_workspace(&mut self, cx: &mut Context<Self>) {
+        if let Some(result) = self.workspace.take_result()
+            && result.generation == self.workspace_generation
+            && self.pending_operation.is_some_and(|p| p.0 == result.id)
+        {
+            let switching = self.pending_operation.take().unwrap().1;
+            match result.result {
+                Ok(branches) if !switching => {
+                    self.branches = branches;
+                    self.filter_branches(cx);
+                    self.branch_index = 0;
+                    self.operation_message.clear();
+                }
+                Ok(_) => {
+                    self.dialog = None;
+                    self.restore_focus = true;
+                    self.operation_message = "Branch switched.".into();
+                    self.reload(cx);
+                }
+                Err(error) => self.operation_message = error,
+            }
+            cx.notify();
+        }
+        let Some(snapshot) = self.workspace.take_snapshot() else {
+            return;
+        };
+        if snapshot.generation != self.workspace_generation {
+            return;
+        }
+        if self.config.verbose {
+            eprintln!("gitk-rs: repository refresh {}", snapshot.revision);
+        }
+        let refs_changed = self
+            .workspace_snapshot
+            .as_ref()
+            .is_some_and(|old| old.refs_fingerprint != snapshot.refs_fingerprint);
+        let head_changed = self
+            .workspace_snapshot
+            .as_ref()
+            .and_then(|s| s.repository.as_ref())
+            .zip(snapshot.repository.as_ref())
+            .is_some_and(|(old, new)| old.head != new.head || old.branch != new.branch);
+        let old_count = self.local_rows.len();
+        self.local_rows.clear();
+        if snapshot.status.unstaged {
+            self.local_rows.push(false);
+        }
+        if snapshot.status.staged {
+            self.local_rows.push(true);
+        }
+        if let Some((index, _)) = &mut self.selected {
+            *index = index.saturating_sub(old_count) + self.local_rows.len();
+        }
+        if let Some(index) = &mut self.pending_selection {
+            *index = index.saturating_sub(old_count) + self.local_rows.len();
+        }
+        if let Some(staged) = self.local_selection {
+            if self.local_rows.contains(&staged) {
+                self.diff.update(cx, |diff, cx| {
+                    diff.load_local(
+                        self.config.repository.clone(),
+                        staged,
+                        snapshot.revision,
+                        cx,
+                    )
+                });
+            } else {
+                self.local_selection = None;
+                self.pending_selection = Some(0);
+            }
+        }
+        if let Some(error) = &snapshot.error {
+            self.operation_message = error.clone();
+        }
+        self.workspace_snapshot = Some(snapshot);
+        if self.snapshot.as_ref().is_some_and(|s| s.visible == 0)
+            && self.selected.is_none()
+            && self.local_selection.is_none()
+            && !self.local_rows.is_empty()
+        {
+            self.select_local(self.local_rows[0], cx);
+        }
+        if head_changed {
+            self.reload(cx);
+        } else if refs_changed {
+            self.request.refs_revision += 1;
+            self.submit();
+        }
+        cx.notify();
+    }
+
+    fn select_local(&mut self, staged: bool, cx: &mut Context<Self>) {
+        self.selected = None;
+        self.local_selection = Some(staged);
+        self.pending_selection = None;
+        let revision = self.workspace_snapshot.as_ref().map_or(0, |s| s.revision);
+        self.diff.update(cx, |diff, cx| {
+            diff.load_local(self.config.repository.clone(), staged, revision, cx)
+        });
+    }
+
     fn cached(&self, index: usize) -> Option<Arc<Entry>> {
         let snapshot = self.snapshot.as_ref()?;
         snapshot
             .rows
-            .get(index.checked_sub(snapshot.start)?)
+            .get(
+                index
+                    .checked_sub(self.local_rows.len())?
+                    .checked_sub(snapshot.start)?,
+            )
             .cloned()
     }
 
     fn ensure_rows(&mut self, range: Range<usize>) {
         self.viewport = range.clone();
+        let range = range.start.saturating_sub(self.local_rows.len())
+            ..range.end.saturating_sub(self.local_rows.len());
         if range.is_empty() {
             return;
         }
@@ -232,12 +502,21 @@ impl HistoryWindow {
                 cx,
             )
         });
+        self.local_selection = None;
         self.selected = Some((index, entry));
     }
 
     fn select(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         self.focus.focus(window);
-        if let Some(entry) = self.cached(index) {
+        if let Some(staged) = self.local_rows.get(index).copied() {
+            self.selected = None;
+            self.local_selection = Some(staged);
+            self.pending_selection = None;
+            let revision = self.workspace_snapshot.as_ref().map_or(0, |s| s.revision);
+            self.diff.update(cx, |diff, cx| {
+                diff.load_local(self.config.repository.clone(), staged, revision, cx)
+            });
+        } else if let Some(entry) = self.cached(index) {
             self.set_selection(index, entry, cx);
         } else {
             self.pending_selection = Some(index);
@@ -251,10 +530,15 @@ impl HistoryWindow {
         let Some(snapshot) = &self.snapshot else {
             return;
         };
-        let maximum = snapshot.visible.saturating_sub(usize::from(snapshot.eof));
+        let maximum =
+            (snapshot.visible + self.local_rows.len()).saturating_sub(usize::from(snapshot.eof));
         let index = self
             .pending_selection
             .or_else(|| self.selected.as_ref().map(|s| s.0))
+            .or_else(|| {
+                self.local_selection
+                    .and_then(|staged| self.local_rows.iter().position(|s| *s == staged))
+            })
             .unwrap_or(0)
             .saturating_add_signed(delta)
             .min(maximum);
@@ -262,25 +546,60 @@ impl HistoryWindow {
     }
 
     fn reload(&mut self, cx: &mut Context<Self>) {
+        self.request.repository = self.config.repository.clone();
+        let index = self
+            .selected
+            .as_ref()
+            .map_or(0, |s| s.0.saturating_sub(self.local_rows.len()));
+        self.reload_selection = self.selected.as_ref().map(|s| s.1.commit.id.clone());
         self.request.generation.0 += 1;
-        self.request.range = 0..128;
+        let start = (index / 128).saturating_sub(1) * 128;
+        self.request.range = start..start + 512;
         self.snapshot = None;
         self.selected = None;
-        self.pending_selection = Some(0);
+        self.pending_selection = self
+            .local_selection
+            .is_none()
+            .then_some(index + self.local_rows.len());
         self.preserve_filter_selection = false;
         self.detail = "Loading commits…".into();
         self.diff
             .update(cx, |diff, cx| diff.clear("Loading commits…", cx));
         self.submit();
-        self.scroll.scroll_to_item(0, ScrollStrategy::Top);
+        self.refresh_workspace();
+        self.scroll
+            .scroll_to_item(index + self.local_rows.len(), ScrollStrategy::Center);
         cx.notify();
     }
 
     fn row(&mut self, index: usize, cx: &mut Context<Self>) -> AnyElement {
+        if let Some(staged) = self.local_rows.get(index).copied() {
+            let selected = self.local_selection == Some(staged);
+            let unmerged = self
+                .workspace_snapshot
+                .as_ref()
+                .is_some_and(|s| s.status.unmerged);
+            return div()
+                .id(("local", index))
+                .h(px((self.preferences.font_size * 2.).max(26.)))
+                .px_2()
+                .bg(rgb(if selected { 0x285b8e } else { 0x344236 }))
+                .text_color(rgb(0xffffff))
+                .cursor_pointer()
+                .child(if staged {
+                    "●  Staged changes"
+                } else if unmerged {
+                    "●  Unstaged changes (merge conflicts)"
+                } else {
+                    "●  Unstaged and untracked changes"
+                })
+                .on_click(cx.listener(move |this, _, window, cx| this.select(index, window, cx)))
+                .into_any_element();
+        }
         let Some(entry) = self.cached(index) else {
             return div()
                 .id(("loading", index))
-                .h(px(26.))
+                .h(px((self.preferences.font_size * 2.).max(26.)))
                 .px_2()
                 .child("Loading more commits…")
                 .into_any_element();
@@ -349,11 +668,12 @@ impl HistoryWindow {
             }));
         div()
             .id(("commit", index))
-            .h(px(26.))
+            .h(px((self.preferences.font_size * 2.).max(26.)))
             .w_full()
             .flex()
             .items_center()
             .bg(rgb(background))
+            .when(is_selected, |row| row.text_color(rgb(0xffffff)))
             .cursor_pointer()
             .on_click(cx.listener(move |this, _, window, cx| this.select(index, window, cx)))
             .child(
@@ -394,8 +714,29 @@ impl HistoryWindow {
                         .replace('T', " "),
                 ),
             )
+            .context_menu({
+                let reference = format!("{} {}", entry.commit.id.as_str(), entry.commit.summary());
+                move |menu, _, _| {
+                    menu.item(PopupMenuItem::new("Copy commit reference").on_click({
+                        let reference = reference.clone();
+                        move |_, _, cx| {
+                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                                reference.clone(),
+                            ))
+                        }
+                    }))
+                }
+            })
             .into_any_element()
     }
+}
+
+fn apply_fonts(preferences: &Preferences, cx: &mut App) {
+    let theme = gpui_component::Theme::global_mut(cx);
+    theme.font_family = preferences.ui_font.clone().into();
+    theme.font_size = px(preferences.font_size);
+    theme.mono_font_family = preferences.fixed_font.clone().into();
+    theme.mono_font_size = px(preferences.font_size);
 }
 
 pub(crate) fn fixed_font() -> &'static str {
@@ -461,7 +802,16 @@ fn paint_graph(
 }
 
 impl Render for HistoryWindow {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if std::mem::take(&mut self.restore_focus)
+            || self.dialog.is_none() && self.dialog_focus.is_focused(window)
+        {
+            self.focus.focus(window);
+        }
+        if std::mem::take(&mut self.restore_repository_focus) {
+            self.repository_input
+                .update(cx, |input, cx| input.focus(window, cx));
+        }
         let started = Instant::now();
         let timing = self.timing.clone();
         let history_ready = self.snapshot.as_ref().is_some_and(|s| !s.rows.is_empty());
@@ -491,10 +841,9 @@ impl Render for HistoryWindow {
                 )
             },
         );
-        let count = self
-            .snapshot
-            .as_ref()
-            .map_or(0, |s| s.visible + usize::from(!s.eof && s.error.is_none()));
+        let count = self.snapshot.as_ref().map_or(0, |s| {
+            self.local_rows.len() + s.visible + usize::from(!s.eof && s.error.is_none())
+        });
         div()
             .relative()
             .track_focus(&self.focus)
@@ -507,7 +856,11 @@ impl Render for HistoryWindow {
             .on_action(cx.listener(|this, _: &First, window, cx| this.select(0, window, cx)))
             .on_action(cx.listener(|this, _: &Last, window, cx| {
                 if let Some(s) = &this.snapshot {
-                    this.select(s.visible.saturating_sub(1), window, cx);
+                    this.select(
+                        (s.visible + this.local_rows.len()).saturating_sub(1),
+                        window,
+                        cx,
+                    );
                 }
             }))
             .on_action(cx.listener(|this, _: &diff_view::PageDown, _, cx| {
@@ -521,6 +874,89 @@ impl Render for HistoryWindow {
             }))
             .on_action(cx.listener(|this, _: &diff_view::LinesUp, _, cx| {
                 this.diff.update(cx, |diff, cx| diff.scroll_lines(-18, cx))
+            }))
+            .on_action(cx.listener(|this, _: &FontPreferences, window, cx| {
+                this.dialog = Some(DialogKind::Preferences);
+                this.operation_message.clear();
+                this.ui_font_input
+                    .update(cx, |input, cx| input.focus(window, cx));
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &ApplyPreferences, window, cx| {
+                this.apply_preferences(window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &ToggleTheme, window, cx| {
+                this.config.theme = if this.config.theme == Theme::Dark {
+                    Theme::Light
+                } else {
+                    Theme::Dark
+                };
+                gpui_component::Theme::change(
+                    if this.config.theme == Theme::Dark {
+                        ThemeMode::Dark
+                    } else {
+                        ThemeMode::Light
+                    },
+                    Some(window),
+                    cx,
+                );
+                apply_fonts(&this.preferences, cx);
+                this.diff.update(cx, |diff, cx| {
+                    diff.set_theme(this.config.theme == Theme::Dark, cx)
+                });
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &CopyCommit, _, cx| {
+                if let Some((_, entry)) = &this.selected {
+                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(format!(
+                        "{} {}",
+                        entry.commit.id.as_str(),
+                        entry.commit.summary()
+                    )));
+                }
+            }))
+            .on_action(cx.listener(|this, _: &ToggleWatch, _, cx| {
+                this.config.watch = !this.config.watch;
+                this.refresh_workspace();
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &OpenRepository, _, cx| this.open_repository(cx)))
+            .on_action(cx.listener(|this, _: &OpenRepositoryPath, window, cx| {
+                this.open_repository_path(window, cx)
+            }))
+            .on_action(
+                cx.listener(|this, _: &OpenBranches, window, cx| this.open_branches(window, cx)),
+            )
+            .on_action(cx.listener(|this, _: &Help, window, cx| {
+                this.dialog = Some(DialogKind::Help);
+                this.dialog_focus.focus(window);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &About, window, cx| {
+                this.dialog = Some(DialogKind::About);
+                this.dialog_focus.focus(window);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &CloseDialog, window, cx| {
+                this.dialog = None;
+                this.focus.focus(window);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &BranchUp, _, cx| {
+                this.branch_index = this.branch_index.saturating_sub(1);
+                this.branch_scroll
+                    .scroll_to_item(this.branch_index, ScrollStrategy::Center);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &BranchDown, _, cx| {
+                this.branch_index =
+                    (this.branch_index + 1).min(this.filtered_branches.len().saturating_sub(1));
+                this.branch_scroll
+                    .scroll_to_item(this.branch_index, ScrollStrategy::Center);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &BranchAccept, _, cx| {
+                this.switch_branch(this.branch_index, cx)
             }))
             .on_action(cx.listener(|this, _: &Reload, _, cx| this.reload(cx)))
             .on_action(cx.listener(|this, _: &HistoryPageUp, _, cx| {
@@ -548,13 +984,53 @@ impl Render for HistoryWindow {
             .flex_col()
             .gap_2()
             .p_3()
-            .text_size(px(13.))
+            .text_size(px(self.preferences.font_size))
+            .font_family(gpui::SharedString::from(self.preferences.ui_font.clone()))
             .bg(rgb(background))
             .text_color(rgb(foreground))
             .child(
                 div()
-                    .truncate()
-                    .child(format!("Repository: {}", self.config.repository.display())),
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .flex_1()
+                            .truncate()
+                            .child(format!("Repository: {}", self.config.repository.display())),
+                    )
+                    .child(
+                        Button::new("application-menu")
+                            .label("Menu")
+                            .dropdown_menu({
+                                let focus = self.focus.clone();
+                                let watch = self.config.watch;
+                                let dark = self.config.theme == Theme::Dark;
+                                move |menu, _, _| {
+                                    menu.action_context(focus.clone())
+                                        .menu("Open repository…", Box::new(OpenRepository))
+                                        .menu(
+                                            "Open repository by path…",
+                                            Box::new(OpenRepositoryPath),
+                                        )
+                                        .menu("Switch local branch…", Box::new(OpenBranches))
+                                        .menu("Reload", Box::new(Reload))
+                                        .menu_with_check(
+                                            "Automatic reload",
+                                            watch,
+                                            Box::new(ToggleWatch),
+                                        )
+                                        .separator()
+                                        .menu("Copy commit reference", Box::new(CopyCommit))
+                                        .menu("Font preferences…", Box::new(FontPreferences))
+                                        .menu_with_check("Dark theme", dark, Box::new(ToggleTheme))
+                                        .separator()
+                                        .menu("Keyboard shortcuts", Box::new(Help))
+                                        .menu("About", Box::new(About))
+                                        .menu("Quit", Box::new(Quit))
+                                }
+                            }),
+                    ),
             )
             .child(
                 div()
@@ -583,49 +1059,103 @@ impl Render for HistoryWindow {
                             .py_2()
                             .bg(rgb(panel))
                             .cursor_pointer()
-                            .child("Reload")
+                            .child(if self.config.watch {
+                                "Reload (Auto On)"
+                            } else {
+                                "Reload (Auto Off)"
+                            })
                             .on_click(cx.listener(|this, _, _, cx| this.reload(cx))),
                     ),
             )
             .child(
+                div().flex_1().min_h_0().child(
+                    v_resizable("main-split")
+                        .child(
+                            resizable_panel().size(px(265.)).child(
+                                section()
+                                    .size_full()
+                                    .flex()
+                                    .flex_col()
+                                    .overflow_hidden()
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .h(px((self.preferences.font_size * 2.).max(26.)))
+                                            .items_center()
+                                            .bg(rgb(border))
+                                            .child(
+                                                div()
+                                                    .w(px(280.))
+                                                    .flex_shrink_0()
+                                                    .px_2()
+                                                    .child("Graph"),
+                                            )
+                                            .child(div().flex_1().px_2().child("Commit"))
+                                            .child(
+                                                div()
+                                                    .w(px(280.))
+                                                    .flex_shrink_0()
+                                                    .px_2()
+                                                    .child("Author"),
+                                            )
+                                            .child(
+                                                div()
+                                                    .w(px(145.))
+                                                    .flex_shrink_0()
+                                                    .px_2()
+                                                    .child("Date"),
+                                            ),
+                                    )
+                                    .child(
+                                        div()
+                                            .relative()
+                                            .flex_1()
+                                            .min_h_0()
+                                            .child(
+                                                uniform_list(
+                                                    "history",
+                                                    count,
+                                                    cx.processor(
+                                                        |this, range: Range<usize>, _, cx| {
+                                                            this.ensure_rows(range.clone());
+                                                            range
+                                                                .map(|index| this.row(index, cx))
+                                                                .collect::<Vec<_>>()
+                                                        },
+                                                    ),
+                                                )
+                                                .track_scroll(self.scroll.clone())
+                                                .size_full(),
+                                            )
+                                            .child(
+                                                Scrollbar::vertical(&self.scroll)
+                                                    .id("history-scrollbar"),
+                                            ),
+                                    ),
+                            ),
+                        )
+                        .child(resizable_panel().child(self.diff.clone())),
+                ),
+            )
+            .child(
                 section()
-                    .h(px(265.))
-                    .flex()
-                    .flex_col()
-                    .overflow_hidden()
-                    .child(
-                        div()
-                            .flex()
-                            .h(px(26.))
-                            .items_center()
-                            .bg(rgb(border))
-                            .child(div().w(px(280.)).flex_shrink_0().px_2().child("Graph"))
-                            .child(div().flex_1().px_2().child("Commit"))
-                            .child(div().w(px(280.)).flex_shrink_0().px_2().child("Author"))
-                            .child(div().w(px(145.)).flex_shrink_0().px_2().child("Date")),
+                    .px_2()
+                    .py_1()
+                    .child(status)
+                    .when(
+                        !self.operation_message.is_empty() && self.dialog.is_none(),
+                        |row| row.child(format!("  — {}", self.operation_message)),
                     )
-                    .child(
-                        div()
-                            .relative()
-                            .flex_1()
-                            .min_h_0()
-                            .child(
-                                uniform_list(
-                                    "history",
-                                    count,
-                                    cx.processor(|this, range: Range<usize>, _, cx| {
-                                        this.ensure_rows(range.clone());
-                                        range.map(|index| this.row(index, cx)).collect::<Vec<_>>()
-                                    }),
-                                )
-                                .track_scroll(self.scroll.clone())
-                                .size_full(),
-                            )
-                            .child(Scrollbar::vertical(&self.scroll).id("history-scrollbar")),
+                    .when_some(
+                        self.workspace_snapshot
+                            .as_ref()
+                            .and_then(|s| s.watcher_error.clone()),
+                        |row, error| row.child(format!("  — {error}")),
                     ),
             )
-            .child(div().flex_1().min_h_0().child(self.diff.clone()))
-            .child(section().px_2().py_1().child(status))
+            .when(self.dialog.is_some(), |root| {
+                root.child(self.dialog_element(cx))
+            })
             .when(timing.enabled(), |root| {
                 root.child(
                     canvas(
@@ -651,11 +1181,16 @@ impl Render for HistoryWindow {
 }
 
 pub fn run(config: Config, launched: Instant) {
+    let preferences = Preferences::load().unwrap_or_else(|error| {
+        eprintln!("gitk-rs: preferences: {error:#}");
+        Preferences::default()
+    });
     let guard = TimingGuard::start(config.timings, launched);
     let timing = guard.timing();
     let request = Request {
         generation: Generation(1),
         id: 0,
+        refs_revision: 0,
         repository: config.repository.clone(),
         range: 0..128,
         query: String::new(),
@@ -665,76 +1200,160 @@ pub fn run(config: Config, launched: Instant) {
     };
     let engine = HistoryEngine::spawn(request.clone());
     let history = engine.handle();
+    let workspace_engine = WorkspaceEngine::spawn(WorkspaceRequest {
+        generation: WorkspaceGeneration(1),
+        repository: config.repository.clone(),
+        watch: config.watch,
+    });
+    let workspace = workspace_engine.handle();
     let diff_engine = DiffEngine::spawn();
     let diff_handle = diff_engine.handle();
-    Application::new().run(move |cx: &mut App| {
-        gpui_component::init(cx);
-        diff_view::bind_keys(cx);
-        gpui_component::Theme::change(
-            match config.theme {
-                Theme::Dark => ThemeMode::Dark,
-                Theme::Light => ThemeMode::Light,
-            },
-            None,
-            cx,
-        );
-        cx.bind_keys([
-            KeyBinding::new("ctrl-q", Quit, None),
-            KeyBinding::new("f5", Reload, None),
-            KeyBinding::new("ctrl-pageup", HistoryPageUp, Some("GitHistory && !Input")),
-            KeyBinding::new(
-                "ctrl-pagedown",
-                HistoryPageDown,
-                Some("GitHistory && !Input"),
-            ),
-            KeyBinding::new("/", FocusFilter, Some("GitHistory && !Input")),
-            KeyBinding::new("escape", BlurFilter, Some("GitHistory")),
-            KeyBinding::new("down", Next, Some("GitHistory && !Input")),
-            KeyBinding::new("j", Next, Some("GitHistory && !Input")),
-            KeyBinding::new("n", Next, Some("GitHistory && !Input")),
-            KeyBinding::new("up", Previous, Some("GitHistory && !Input")),
-            KeyBinding::new("k", Previous, Some("GitHistory && !Input")),
-            KeyBinding::new("p", Previous, Some("GitHistory && !Input")),
-            KeyBinding::new("home", First, Some("GitHistory && !Input")),
-            KeyBinding::new("end", Last, Some("GitHistory && !Input")),
-        ]);
-        cx.on_window_closed(|cx| {
-            if cx.windows().is_empty() {
-                // Native X11 close still holds its client borrow during App::defer.
-                cx.spawn(async |cx| {
-                    cx.background_executor()
-                        .timer(Duration::from_millis(1))
-                        .await;
-                    let _ = cx.update(|cx| {
-                        if cx.windows().is_empty() {
-                            cx.quit();
-                        }
+    Application::new()
+        .with_assets(gpui_component_assets::Assets)
+        .run(move |cx: &mut App| {
+            gpui_component::init(cx);
+            diff_view::bind_keys(cx);
+            gpui_component::Theme::change(
+                match config.theme {
+                    Theme::Dark => ThemeMode::Dark,
+                    Theme::Light => ThemeMode::Light,
+                },
+                None,
+                cx,
+            );
+            cx.bind_keys([
+                KeyBinding::new(
+                    "ctrl-c",
+                    CopyCommit,
+                    Some("GitHistory && !Input && !Diff && !Dialog"),
+                ),
+                KeyBinding::new("ctrl-q", Quit, None),
+                KeyBinding::new("ctrl-,", FontPreferences, Some("GitHistory && !Dialog")),
+                KeyBinding::new("ctrl-enter", ApplyPreferences, Some("Dialog")),
+                KeyBinding::new(
+                    "alt-t",
+                    ToggleTheme,
+                    Some("GitHistory && !Input && !Dialog"),
+                ),
+                KeyBinding::new(
+                    "alt-r",
+                    ToggleWatch,
+                    Some("GitHistory && !Input && !Dialog"),
+                ),
+                KeyBinding::new("ctrl-a", gpui_component::input::MoveHome, Some("Input")),
+                KeyBinding::new("ctrl-e", gpui_component::input::MoveEnd, Some("Input")),
+                KeyBinding::new("ctrl-b", gpui_component::input::MoveLeft, Some("Input")),
+                KeyBinding::new("ctrl-f", gpui_component::input::MoveRight, Some("Input")),
+                KeyBinding::new(
+                    "ctrl-w",
+                    gpui_component::input::DeleteToPreviousWordStart,
+                    Some("Input"),
+                ),
+                KeyBinding::new(
+                    "ctrl-u",
+                    gpui_component::input::DeleteToBeginningOfLine,
+                    Some("Input"),
+                ),
+                KeyBinding::new(
+                    "ctrl-k",
+                    gpui_component::input::DeleteToEndOfLine,
+                    Some("Input"),
+                ),
+                KeyBinding::new("ctrl-d", gpui_component::input::Delete, Some("Input")),
+                KeyBinding::new("ctrl-o", OpenRepository, Some("GitHistory && !Dialog")),
+                KeyBinding::new(
+                    "ctrl-shift-o",
+                    OpenRepositoryPath,
+                    Some("GitHistory && !Dialog"),
+                ),
+                KeyBinding::new(
+                    "ctrl-b",
+                    OpenBranches,
+                    Some("GitHistory && !Input && !Dialog"),
+                ),
+                KeyBinding::new("f1", Help, Some("GitHistory && !Dialog")),
+                KeyBinding::new("escape", CloseDialog, Some("Dialog")),
+                KeyBinding::new("escape", CloseDialog, Some("Dialog > Input")),
+                KeyBinding::new("escape", BlurFilter, Some("Input && !Dialog")),
+                KeyBinding::new("up", BranchUp, Some("Dialog")),
+                KeyBinding::new("down", BranchDown, Some("Dialog")),
+                KeyBinding::new("down", BranchDown, Some("BranchDialog > Input")),
+                KeyBinding::new("up", BranchUp, Some("BranchDialog > Input")),
+                KeyBinding::new("ctrl-n", BranchDown, Some("BranchDialog > Input")),
+                KeyBinding::new("ctrl-p", BranchUp, Some("BranchDialog > Input")),
+                KeyBinding::new("enter", BranchAccept, Some("Dialog")),
+                KeyBinding::new("f5", Reload, None),
+                KeyBinding::new(
+                    "ctrl-pageup",
+                    HistoryPageUp,
+                    Some("GitHistory && !Input && !Dialog"),
+                ),
+                KeyBinding::new(
+                    "ctrl-pagedown",
+                    HistoryPageDown,
+                    Some("GitHistory && !Input && !Dialog"),
+                ),
+                KeyBinding::new("/", FocusFilter, Some("GitHistory && !Input && !Dialog")),
+                KeyBinding::new("escape", BlurFilter, Some("GitHistory && !Dialog")),
+                KeyBinding::new("down", Next, Some("GitHistory && !Input && !Dialog")),
+                KeyBinding::new("j", Next, Some("GitHistory && !Input && !Dialog")),
+                KeyBinding::new("n", Next, Some("GitHistory && !Input && !Dialog")),
+                KeyBinding::new("up", Previous, Some("GitHistory && !Input && !Dialog")),
+                KeyBinding::new("k", Previous, Some("GitHistory && !Input && !Dialog")),
+                KeyBinding::new("p", Previous, Some("GitHistory && !Input && !Dialog")),
+                KeyBinding::new("home", First, Some("GitHistory && !Input && !Dialog")),
+                KeyBinding::new("end", Last, Some("GitHistory && !Input && !Dialog")),
+            ]);
+            cx.on_window_closed(|cx| {
+                if cx.windows().is_empty() {
+                    // Native X11 close still holds its client borrow during App::defer.
+                    cx.spawn(async |cx| {
+                        cx.background_executor()
+                            .timer(Duration::from_millis(1))
+                            .await;
+                        let _ = cx.update(|cx| {
+                            if cx.windows().is_empty() {
+                                cx.quit();
+                            }
+                        });
+                    })
+                    .detach();
+                }
+            })
+            .detach();
+            let bounds = Bounds::centered(None, size(px(1280.), px(850.)), cx);
+            if let Err(error) = cx.open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(bounds)),
+                    ..Default::default()
+                },
+                move |window, cx| {
+                    window.set_window_title("gitk-rs");
+                    timing.mark(Phase::WindowCreated);
+                    let view = cx.new(|cx| {
+                        HistoryWindow::new(
+                            config,
+                            timing,
+                            WindowServices {
+                                history,
+                                workspace,
+                                diff: diff_handle,
+                            },
+                            preferences,
+                            request,
+                            window,
+                            cx,
+                        )
                     });
-                })
-                .detach();
+                    cx.new(|cx| Root::new(view, window, cx))
+                },
+            ) {
+                eprintln!("gitk-rs: unable to open window: {error}");
+                cx.quit();
             }
-        })
-        .detach();
-        let bounds = Bounds::centered(None, size(px(1280.), px(850.)), cx);
-        if let Err(error) = cx.open_window(
-            WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                ..Default::default()
-            },
-            move |window, cx| {
-                window.set_window_title("gitk-rs");
-                timing.mark(Phase::WindowCreated);
-                let view = cx.new(|cx| {
-                    HistoryWindow::new(config, timing, history, diff_handle, request, window, cx)
-                });
-                cx.new(|cx| Root::new(view, window, cx))
-            },
-        ) {
-            eprintln!("gitk-rs: unable to open window: {error}");
-            cx.quit();
-        }
-        cx.activate(true);
-    });
+            cx.activate(true);
+        });
     drop(engine);
     drop(diff_engine);
+    drop(workspace_engine);
 }
