@@ -1,5 +1,6 @@
 {
   lib,
+  stdenv,
   clang,
   cmake,
   fontconfig,
@@ -45,8 +46,14 @@ rustPlatform.buildRustPackage rec {
     pkg-config
     rustPlatform.bindgenHook
   ];
+
   nativeCheckInputs = [ git ];
+
   buildInputs = [
+    openssl
+    zlib
+  ]
+  ++ lib.optionals stdenv.hostPlatform.isLinux [
     fontconfig
     freetype
     libx11
@@ -55,15 +62,15 @@ rustPlatform.buildRustPackage rec {
     libxi
     libxkbcommon
     libxrandr
-    openssl
     vulkan-loader
     wayland
-    zlib
   ];
 
   postInstall = ''
     mkdir -p $out/share/doc/gitk-rs
     cp LICENSE $out/share/doc/gitk-rs/
+  ''
+  + lib.optionalString stdenv.hostPlatform.isLinux ''
     install -Dm644 resources/icons/gitk-rs.svg $out/share/icons/hicolor/scalable/apps/gitk-rs.svg
     install -Dm644 resources/gitk-rs.desktop $out/share/applications/gitk-rs.desktop
     substituteInPlace $out/share/applications/gitk-rs.desktop \
@@ -72,14 +79,14 @@ rustPlatform.buildRustPackage rec {
 
   postFixup = ''
     wrapProgram $out/bin/gitk-rs \
-      --prefix LD_LIBRARY_PATH : ${lib.makeLibraryPath buildInputs} \
+      ${lib.optionalString stdenv.hostPlatform.isLinux "--prefix LD_LIBRARY_PATH : ${lib.makeLibraryPath buildInputs}"} \
       --prefix PATH : ${lib.makeBinPath [ git ]}
   '';
 
   meta = {
     description = "Git history explorer built with GPUI";
     license = lib.licenses.mit;
-    platforms = lib.platforms.linux;
+    platforms = lib.platforms.linux ++ lib.platforms.darwin;
     mainProgram = "gitk-rs";
   };
 }

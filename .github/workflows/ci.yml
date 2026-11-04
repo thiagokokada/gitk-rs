@@ -14,8 +14,12 @@ concurrency:
 
 jobs:
   cargo:
-    name: Ubuntu / Cargo
-    runs-on: ubuntu-24.04
+    name: ${{ matrix.os }} / Cargo
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     env:
       CARGO_BUILD_JOBS: 2
@@ -26,19 +30,23 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
-      - name: Install native dependencies
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential pkg-config cmake clang libclang-dev git \
             libfontconfig1-dev libfreetype6-dev libssl-dev zlib1g-dev libwayland-dev \
             libxcb1-dev libxkbcommon-x11-dev libx11-dev libxcursor-dev libxi-dev \
             libxrandr-dev libvulkan-dev fonts-dejavu-core
+      - name: Install macOS dependencies
+        if: runner.os == 'macOS'
+        run: brew install cmake pkg-config
       - name: Install stable Rust
         id: rust
         run: |
           rustup toolchain install stable --profile minimal
           rustup default stable
-          echo "version=$(rustc --version | sha256sum | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+          echo "version=$(rustc --version | shasum -a 256 | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
       - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: |
@@ -56,8 +64,12 @@ jobs:
         run: ./target/debug/gitk-rs --version
 
   nix:
-    name: Linux / Nix
-    runs-on: ubuntu-24.04
+    name: ${{ matrix.os }} / Nix
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     env:
       CARGO_BUILD_JOBS: 2

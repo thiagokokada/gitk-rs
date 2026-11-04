@@ -48,6 +48,12 @@ in
         touch $out
       '';
 
+  executable = runCommand "gitk-rs-executable" { } ''
+    test "$(env -u DISPLAY -u WAYLAND_DISPLAY ${gitk-rs}/bin/gitk-rs --version)" = "gitk-rs ${gitk-rs.version}"
+    touch $out
+  '';
+}
+// pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
   desktop =
     runCommand "gitk-rs-desktop"
       {
@@ -61,7 +67,6 @@ in
         rsvg-convert --width 32 --height 32 \
           ${gitk-rs}/share/icons/hicolor/scalable/apps/gitk-rs.svg > icon.png
         test -s icon.png
-        test "$(env -u DISPLAY -u WAYLAND_DISPLAY ${gitk-rs}/bin/gitk-rs --version)" = "gitk-rs ${gitk-rs.version}"
         touch $out
       '';
 }

@@ -6,8 +6,8 @@ milestone without waiting for confirmation. Stop only when user input is actuall
 
 ## Architecture
 
-- Use Rust and GPUI. Linux/NixOS is the first supported platform. Isolate OS
-  integration so Git, history, models, and most UI logic remain portable to macOS.
+- Use Rust and GPUI. Support Linux/NixOS and macOS. Keep OS integration
+  isolated so Git, history, models, and most UI logic remain portable.
 - Keep Git process management and history data independent of GPUI. Keep state
   transitions and display preparation pure where possible. Avoid abstraction-only
   wrappers and speculative backend/plugin systems.

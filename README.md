@@ -2,7 +2,7 @@
 
 ![Icon](resources/icons/gitk-rs.svg)
 
-A lightweight Git history explorer for Linux, written in Rust with
+A lightweight Git history explorer for Linux and macOS, written in Rust with
 [GPUI](https://gpui.rs/).
 
 ![Screenshot](screenshot.png)
@@ -19,7 +19,8 @@ A lightweight Git history explorer for Linux, written in Rust with
 
 ## Usage
 
-Requires Linux, Git and a Vulkan-capable graphics driver.
+Requires Git and either Linux with a Vulkan-capable graphics driver or macOS
+with Metal support.
 
 ```sh
 # Browse the current repository
@@ -64,7 +65,15 @@ sudo apt-get install -y build-essential pkg-config cmake clang libclang-dev git 
   libxrandr-dev libvulkan-dev fonts-dejavu-core
 ```
 
-Then build and run:
+On macOS, install the Xcode Command Line Tools and build tools with
+[Homebrew](https://brew.sh/):
+
+```sh
+xcode-select --install
+brew install cmake pkg-config
+```
+
+Then build and run on either platform:
 
 ```sh
 cargo build --release --locked
@@ -90,7 +99,7 @@ cargo clippy --all-targets --locked -- -D warnings
 cargo test --all-targets --locked
 ```
 
-Run `nix flake check` to check formatting and packaging.
+Run `nix flake check` to check formatting, packaging and the executable.
 
 ## License
 
