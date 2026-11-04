@@ -159,11 +159,11 @@ Acceptance: nix build and checks pass; installed binary launches outside the she
 
 ### 3. Streamed in-memory history
 
-- [ ] Cancellable Git stream and repository discovery.
-- [ ] Compact in-memory loaded rows, bounded batches and minimal duplicate data.
-- [ ] Virtualized columns, graph/ref badges and incremental batch publication.
-- [ ] On-demand loading, progressive filtering and compact match positions.
-- [ ] Selection/scroll preservation, partial/EOF/error status and text graph mode.
+- [x] Cancellable Git stream and repository discovery.
+- [x] In-memory loaded rows, bounded batches and no duplicated commit collections.
+- [x] Virtualized columns, graph/ref badges and incremental batch publication.
+- [x] On-demand loading, progressive filtering and compact match positions.
+- [x] Selection/scroll preservation, partial/EOF/error status and text graph mode.
 
 Acceptance: streamed history, graph, navigation and filtering work like Go without
 creating a history database/cache. Include a nixpkgs responsiveness smoke check;
@@ -398,3 +398,44 @@ prevent obviously costly designs, not block milestones or require elaborate earl
 optimization. Keep implementing and commit between completed milestones; stop only
 when user input is genuinely required. The in-progress Git backend remains work
 for milestone 3; no SQLite implementation was created.
+
+### 2026-11-03: streamed in-memory history implemented
+
+Foundation commit: 240c620. Plan revision commit: 525d116. Implemented the revised
+history design with one resumable Git log process, byte-bounded pending batches,
+single retained Commit objects shared by Arc, compact filtered positions, and a
+single-slot request/result mailbox so scrolling cannot queue unlimited work.
+Loaded rows grow in memory like Go; no persistent history cache or SQLite dependency
+exists. Filtering does not retain another full normalized message collection.
+
+The GUI now has a real filter, graph/commit/author/date columns, ref badges,
+scrollbar, keyboard selection/page navigation, reload, first/last-loaded navigation,
+and commit metadata. It uses the compatible GPUI Component 0.5.1 input widget and
+keeps rendering virtualized. Filtering preserves a selected visible commit using
+its original ordinal; stale request/generation results are discarded.
+
+Git cancellation kills the process group and reaps the process, including helpers
+holding stdout/stderr pipes. Tests found Git tformat's final LF after its final
+NUL; handling that separator fixes EOF without accepting truncated commit records.
+Errors preserve available rows and allow reload. Added graph merge/overflow tests,
+Git parser/cancellation/error fixtures, annotated-tag peeling and filter/selection
+tests. Fifteen tests, formatting and Clippy pass before final package validation.
+
+Manual own-window screenshot checks on nixpkgs and this repository verified graph,
+readable fonts, metadata and counts. Targeted X11 input tests exercised navigation,
+filtering to the initial commit, clearing and F5 reload, then graceful close.
+Temporary artifacts: /tmp/gitk-rs-history.png, /tmp/gitk-rs-filter.png and
+/tmp/gitk-rs-reload.png. The debug headless history_probe loaded 1064 nixpkgs entries
+in roughly 495 ms in one run; this is a smoke observation, not a performance gate.
+
+Diffs, changed-file navigation, broad syntax highlighting and the remaining dialogs
+are still pending.
+
+### 2026-11-04: history milestone validated
+
+The final clean flake check passes, including the package build and all fifteen
+tests. The first clean check exposed Git missing from the build-time test PATH;
+adding nativeCheckInputs = [ pkgs.git ] fixed it without weakening tests. Desktop
+startup checks passed on Wayland/X11, and targeted X11 screenshots/input verified
+filtering, clearing, selection and reload. Milestone 3 is complete. Continue with
+the diff viewer and broad bundled syntax coverage; performance tuning is deferred.

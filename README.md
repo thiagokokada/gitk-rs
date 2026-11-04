@@ -6,10 +6,9 @@ history database/cache is planned. V1 prioritizes functionality, with performanc
 aspirations guiding design rather than blocking delivery. See [PLAN.md](PLAN.md) for milestones and acceptance
 criteria and [AGENTS.md](AGENTS.md) for contributor instructions.
 
-**Status:** initial scaffold, not a working Git history viewer. The window shell
-and CLI build and pass lint/tests and Nix package checks. Development and installed
-executables passed short startup smoke tests on Wayland and X11.
-History, diffs, syntax highlighting and the remaining workflows are still pending.
+**Status:** streamed history viewing works, including graph/ref labels, filtering,
+keyboard navigation, reload and commit metadata. Diffs, broad syntax highlighting
+and the remaining dialogs/workflows are still being implemented. See PLAN.md.
 
 ## Development
 
@@ -35,21 +34,31 @@ nix flake check
 ./result/bin/gitk-rs /path/to/repository
 ```
 
-The scaffold accepts --mode dark|light, --timings, --help and --version. A path beginning
+The viewer accepts --mode dark|light, --timings, --limit N, --graph-cols N,
+--text-graph, --help and --version. A path beginning
 with a dash can follow --. Repository paths may contain spaces or non-UTF8 bytes.
 The GUI uses the published [GPUI 0.2.2 API](https://docs.rs/gpui/0.2.2/gpui/).
 Linux enables Wayland and X11; macOS dependency configuration is preparatory and
 has not been validated. A desktop session and a working GPU driver are required
 for GUI smoke tests. The package supplies loaders, not a machine-specific driver.
 
-The remaining CLI controls are tracked in the plan and are not accepted yet.
+Use arrows or j/k/n/p to select commits, Home/End for first/last loaded, Ctrl+Page
+Up/Down to scroll history, / to focus the filter, Escape to leave it and F5 to
+reload. The remaining CLI controls/workflows are tracked in the plan.
 The small [xattr compatibility patch](vendor/README.md) is required by GPUI's
 transitive archive dependency on current libc releases.
 
 --timings reports window creation and first CPU paint callback timestamps to stderr
 and a bounded recent-sample CPU render-to-paint p95 on graceful exit. Its writer
 runs off the UI thread. These measurements exclude process-loader time and do not
-measure compositor presentation, GPU execution, or history readiness yet.
+measure compositor presentation or GPU execution. HistoryPainted and
+SelectionPainted are first CPU paint callbacks with those views populated.
+
+For a small read-only backend smoke check without opening a window:
+
+```sh
+nix develop --command cargo run --locked --example history_probe -- /path/to/repo 1000
+```
 
 ## Environment limitations observed
 

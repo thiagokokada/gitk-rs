@@ -45,6 +45,7 @@
             src = source;
             cargoLock.lockFile = ./Cargo.lock;
             nativeBuildInputs = deps.native ++ [ pkgs.makeWrapper ];
+            nativeCheckInputs = [ pkgs.git ];
             buildInputs = deps.libraries;
             postFixup = ''
               wrapProgram $out/bin/gitk-rs \
