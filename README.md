@@ -17,7 +17,8 @@ A lightweight Git history explorer for Linux, written in Rust with
 
 ## Usage
 
-Requires Linux and Nix with flakes enabled. From this checkout:
+Requires Linux, Git and a Vulkan-capable graphics driver. With Nix and flakes
+enabled, run from this checkout:
 
 ```sh
 # Browse the current repository
@@ -50,16 +51,39 @@ nix run . -- --list-languages
 
 ## Development
 
+### Building without Nix
+
+Install a current stable Rust toolchain with [rustup](https://rustup.rs/).
+On Ubuntu 24.04, install the native dependencies:
+
 ```sh
-nix develop
-cargo run -- /path/to/repository
+sudo apt-get update
+sudo apt-get install -y build-essential pkg-config cmake clang libclang-dev git \
+  libfontconfig1-dev libfreetype6-dev libssl-dev zlib1g-dev libwayland-dev \
+  libxcb1-dev libxkbcommon-x11-dev libx11-dev libxcursor-dev libxi-dev \
+  libxrandr-dev libvulkan-dev fonts-dejavu-core
+```
+
+Then build and run:
+
+```sh
+cargo build --release --locked
+./target/release/gitk-rs /path/to/repository
+```
+
+### Checks
+
+With the dependencies above installed, or after entering `nix develop`:
+
+```sh
 cargo fmt --all -- --check
-cargo clippy --all-targets -- -D warnings
+cargo clippy --all-targets --locked -- -D warnings
 cargo test --all-targets --locked
 ```
 
 Tests include unit tests, Git integration tests and GPUI interaction tests that
-run without a display. Run `nix flake check` to check formatting and packaging.
+run without a display. GitHub Actions checks both the Ubuntu Cargo build and the
+pinned Nix environment. Run `nix flake check` to check formatting and packaging.
 See [AGENTS.md](AGENTS.md) for contributor guidelines.
 
 ## License
