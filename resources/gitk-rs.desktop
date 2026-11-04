@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=gitk-rs
+GenericName=Git History Viewer
+Comment=Browse Git history and highlighted diffs
+Exec=gitk-rs %f
+Icon=gitk-rs
+Terminal=false
+Categories=Development;RevisionControl;
+Keywords=Git;History;Diff;
+StartupWMClass=gitk-rs

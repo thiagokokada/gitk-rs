@@ -1,5 +1,7 @@
 # gitk-rs
 
+![Icon](resources/icons/gitk-rs.svg)
+
 A lightweight Git history explorer for Linux, written in Rust with
 [GPUI](https://gpui.rs/).
 

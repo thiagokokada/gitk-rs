@@ -1,0 +1,21 @@
+<svg width="256" height="256" viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="gitk-rs icon">
+  <!-- Adapted from gitk-go by Thiago Kenji Okada; distributed under the root MIT license. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0f172a"/>
+      <stop offset="100%" stop-color="#1f2937"/>
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="2" stdDeviation="2" flood-color="#0f172a" flood-opacity="0.5"/>
+    </filter>
+  </defs>
+  <rect width="256" height="256" rx="36" fill="url(#bg)"/>
+  <path d="M80 44v168" stroke="#ed7a41" stroke-width="24" stroke-linecap="round"/>
+  <path d="M176 44v96" stroke="#60a5fa" stroke-width="24" stroke-linecap="round"/>
+  <path d="M80 128h96" stroke="#60a5fa" stroke-width="24" stroke-linecap="round"/>
+  <circle cx="80" cy="44" r="24" fill="#f8b58c" filter="url(#shadow)"/>
+  <circle cx="80" cy="128" r="24" fill="#f8b58c" filter="url(#shadow)"/>
+  <circle cx="80" cy="212" r="24" fill="#f8b58c" filter="url(#shadow)"/>
+  <circle cx="176" cy="44" r="24" fill="#93c5fd" filter="url(#shadow)"/>
+  <circle cx="176" cy="128" r="24" fill="#93c5fd" filter="url(#shadow)"/>
+</svg>

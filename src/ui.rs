@@ -1510,6 +1510,7 @@ pub fn run(config: Config, launched: Instant) {
                 },
                 move |window, cx| {
                     window.set_window_title("gitk-rs");
+                    window.set_app_id("gitk-rs");
                     timing.mark(Phase::WindowCreated);
                     let view = cx.new(|cx| {
                         HistoryWindow::new(
