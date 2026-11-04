@@ -50,7 +50,7 @@
             postInstall = ''
               mkdir -p $out/share/doc/gitk-rs
               cp -r assets/licenses $out/share/doc/gitk-rs/
-              cp docs/LANGUAGES.md LICENSE $out/share/doc/gitk-rs/
+              cp LICENSE $out/share/doc/gitk-rs/
             '';
             postFixup = ''
               wrapProgram $out/bin/gitk-rs \
@@ -75,7 +75,7 @@
           package = self.packages.${system}.default;
           format = pkgs.runCommand "gitk-rs-format" { nativeBuildInputs = [ pkgs.rustfmt ]; } ''
             cd ${source}
-            find src examples tests -name '*.rs' -print0 | xargs -0 rustfmt --edition 2024 --check
+            find src tests -name '*.rs' -print0 | xargs -0 rustfmt --edition 2024 --check
             touch $out
           '';
         });

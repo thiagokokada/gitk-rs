@@ -2,7 +2,7 @@
 """Own-window X11 smoke test using disposable Git repositories and preferences.
 
 Requires Python 3, git, xdotool, xwininfo and ImageMagick's import. Run within
-nix develop so ctypes can load libX11. See docs/VALIDATION.md.
+nix develop so ctypes can load libX11.
 """
 import ctypes as C
 import os
@@ -17,7 +17,7 @@ import signal
 import tempfile
 for command in ["git", "xdotool", "xwininfo", "import"]:
     if shutil.which(command) is None:
-        raise SystemExit(f"Missing {command}; see docs/VALIDATION.md")
+        raise SystemExit(f"Missing required command: {command}")
 artifacts = Path(sys.argv[2] if len(sys.argv) > 2 else "/tmp/gitk-rs-gui-smoke")
 artifacts.mkdir(parents=True, exist_ok=True)
 fixture = tempfile.TemporaryDirectory(prefix="gitk-rs-ui-fixture-")

@@ -1,11 +1,8 @@
 # Contributor instructions
 
-Read PLAN.md before changing this repository. Implement milestones in order and
-update their checklist and progress log with evidence after each increment.
-Do not mark a milestone complete until its acceptance checks pass. Report blocked
-checks and unfinished behavior explicitly; never invent benchmark results.
-Commit each validated milestone, and continue with the next authorized milestone
-without waiting for confirmation. Stop only when user input is actually required.
+Report blocked checks and unfinished behavior explicitly; never invent benchmark
+results. Commit each validated milestone, and continue with the next authorized
+milestone without waiting for confirmation. Stop only when user input is actually required.
 
 ## Architecture
 
@@ -33,7 +30,7 @@ without waiting for confirmation. Stop only when user input is actually required
   need and an agreed plan change. Continue one Git stream, avoiding repeated --skip
   scans. Pause prefetch when browsing demand is satisfied.
 - Bundle broad offline language coverage, not a small allowlist. Preserve grammar
-  licenses, detect filenames/shebangs and document actual supported languages.
+  licenses, detect filenames/shebangs and keep --list-languages accurate.
 - Functionality and workflow parity take priority in v1. Timing/RSS numbers are
   aspirations, not release gates. Avoid obvious performance mistakes, record
   meaningful bottlenecks, and defer elaborate optimization until features work.
