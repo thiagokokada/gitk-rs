@@ -2,6 +2,7 @@
 
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -70,6 +71,24 @@ class NativeToolsTests(unittest.TestCase):
         ):
             self.assertEqual(memory(42), {"VmRSS": 1024, "VmHWM": 2048})
 
+    def test_child_sampling_walks_all_threads_and_descendants(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name, contents in {
+                "42/task/42/children": "44",
+                "42/task/43/children": "45",
+                "44/task/44/children": "46",
+            }.items():
+                path = root / name
+                path.parent.mkdir(parents=True)
+                path.write_text(contents)
+            with patch(
+                "release_probe.Path",
+                side_effect=lambda value: root / str(value).removeprefix("/proc/"),
+            ):
+                self.assertEqual(children(42), {44, 45, 46})
+
+    @unittest.skipUnless(sys.platform == "linux", "Live sampling requires Linux /proc")
     def test_child_sampling_includes_children_of_other_threads(self):
         with subprocess.Popen(["sleep", "30"]) as child:
             try:
