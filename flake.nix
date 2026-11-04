@@ -24,6 +24,18 @@
         }
       );
 
-      # TODO: restore devShell and checks
+      devShells = eachSystem (system: {
+        default = nixpkgs.legacyPackages.${system}.callPackage ./shell.nix {
+          gitk-rs = self.packages.${system}.gitk-rs;
+        };
+      });
+
+      checks = eachSystem (
+        system:
+        import ./checks.nix {
+          pkgs = nixpkgs.legacyPackages.${system};
+          gitk-rs = self.packages.${system}.gitk-rs;
+        }
+      );
     };
 }
