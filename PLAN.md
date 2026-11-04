@@ -171,12 +171,12 @@ performance measurements guide follow-up work and do not block the milestone.
 
 ### 4. Highlighted, selectable diffs
 
-- [ ] Metadata, root/first-parent diffs, file list and per-file jumps.
-- [ ] Virtualized line rendering, disk spool and bounded span/text caches.
-- [ ] Broad bundled grammars, filename/shebang detection, language inventory and
+- [x] Metadata, root/first-parent diffs, file list and per-file jumps.
+- [x] Virtualized line rendering, disk spool and bounded span/text caches.
+- [x] Broad bundled grammars, filename/shebang detection, language inventory and
   asynchronous highlighting, tested across representative language families.
-- [ ] Cross-line selection and copy with/without +/- markers.
-- [ ] Binary, rename, unusual-path, oversized-diff and long-line handling.
+- [x] Cross-line selection and copy with/without +/- markers.
+- [x] Binary, rename, unusual-path, oversized-diff and long-line handling.
 
 Acceptance: Nix/Rust/Go highlighting works, stale results cannot replace the current
 selection, and large diffs remain navigable without unbounded RAM.
@@ -439,3 +439,36 @@ adding nativeCheckInputs = [ pkgs.git ] fixed it without weakening tests. Deskto
 startup checks passed on Wayland/X11, and targeted X11 screenshots/input verified
 filtering, clearing, selection and reload. Milestone 3 is complete. Continue with
 the diff viewer and broad bundled syntax coverage; performance tuning is deferred.
+
+### 2026-11-04: highlighted, selectable diff viewer
+
+Implemented root and first-parent commit diffs, metadata, virtualized changed-file
+lists and line jumps. Selected diff text lives in an unlinked temporary file with
+line offsets; only nearby text/spans enter the UI. Limits are explicit: 256 MiB or
+one million lines per preview, 16 KiB displayed per line and 16 MiB per clipboard
+selection. Copy reads original text across unloaded lines and preserves tabs and
+Unicode. Marker-free copy removes code markers while keeping diff headers intact.
+
+Bundled two-face 0.5.2+bat-0.26.1 with syntect's Rust regex backend: 213 offline
+syntaxes, documented in docs/LANGUAGES.md and exposed by --list-languages. Bundled
+syntax/theme notices are included in assets/licenses and installed by Nix.
+Filename/extension/shebang detection and separate old/new multiline parsing run on
+the diff worker. Hunk gaps reset parsing state; unknown/oversized lines remain
+readable. --nosyntax disables highlighting. Typed selection IDs, request IDs and
+cancellation prevent obsolete diff/copy results from replacing current selection.
+
+Twenty-six tests pass, including root/merge diffs, binary and renamed files,
+unusual filenames, long Unicode lines, copying outside a loaded page, cancellation,
+and actual colored tokens across seventeen language families. Formatting and
+Clippy pass. Own-window X11 screenshots verify readable metadata, Go syntax colors,
+selection and scrolling across added/removed lines. A GUI check found and fixed
+GPUI's non-strict scrolling behavior for file jumps/pages. Native XTest keys work;
+XSendEvent keys were ignored. KWin/Xwayland pointer-warp requests did not move the
+pointer, so the automated file-list click check is inconclusive; file range parsing
+and strict navigation are checked in code. No successful pointer test is claimed.
+The installed package remains alive on Wayland/X11 for eight seconds each and
+X11 WM_DELETE_WINDOW exits cleanly. Clean nix flake check of the final scroll fix passes, including the packaged
+build and all twenty-six tests. nix build passed before that final positioning
+adjustment; its rebuilt package is also produced by the final flake check.
+Milestone 4 is complete. The next milestone covers local changes, dialogs,
+preferences, menus and automatic reload.

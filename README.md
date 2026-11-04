@@ -7,8 +7,9 @@ aspirations guiding design rather than blocking delivery. See [PLAN.md](PLAN.md)
 criteria and [AGENTS.md](AGENTS.md) for contributor instructions.
 
 **Status:** streamed history viewing works, including graph/ref labels, filtering,
-keyboard navigation, reload and commit metadata. Diffs, broad syntax highlighting
-and the remaining dialogs/workflows are still being implemented. See PLAN.md.
+keyboard navigation, reload, commit metadata and selectable, highlighted diffs
+with file jumps. Local changes and the remaining dialogs/workflows are still being
+implemented. See PLAN.md.
 
 ## Development
 
@@ -35,7 +36,7 @@ nix flake check
 ```
 
 The viewer accepts --mode dark|light, --timings, --limit N, --graph-cols N,
---text-graph, --help and --version. A path beginning
+--text-graph, --nosyntax, --list-languages, --licenses, --help and --version. A path beginning
 with a dash can follow --. Repository paths may contain spaces or non-UTF8 bytes.
 The GUI uses the published [GPUI 0.2.2 API](https://docs.rs/gpui/0.2.2/gpui/).
 Linux enables Wayland and X11; macOS dependency configuration is preparatory and
@@ -44,7 +45,19 @@ for GUI smoke tests. The package supplies loaders, not a machine-specific driver
 
 Use arrows or j/k/n/p to select commits, Home/End for first/last loaded, Ctrl+Page
 Up/Down to scroll history, / to focus the filter, Escape to leave it and F5 to
-reload. The remaining CLI controls/workflows are tracked in the plan.
+reload. Space/Backspace/b page the diff; u/d scroll 18 lines. Drag to select text,
+Shift-click to extend, double-click for a word, and use Ctrl+A in the diff for all
+lines. Ctrl+C copies; Ctrl+Shift+C removes diff markers from code lines. Copying
+reads the temporary document, including lines outside the current viewport.
+
+The [213 bundled syntaxes](docs/LANGUAGES.md) work offline, with filename and shebang
+detection. Themes keep syntax foregrounds over added/removed backgrounds. Large
+diffs use an unlinked temporary spool, capped at 256 MiB or one million lines;
+individual lines display up to 16 KiB and clipboard selections up to 16 MiB. Limits
+are reported in the viewer. Hunk gaps reset parsing state, so partial multiline
+constructs can be imperfectly colored. Grammar/theme acknowledgements ship in
+assets/licenses and the Nix package's share/doc/gitk-rs directory.
+The remaining CLI controls/workflows are tracked in the plan.
 The small [xattr compatibility patch](vendor/README.md) is required by GPUI's
 transitive archive dependency on current libc releases.
 

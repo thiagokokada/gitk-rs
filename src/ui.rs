@@ -1,5 +1,8 @@
+mod diff_view;
+
 use gitk_rs::{
     cli::{Config, Theme},
+    diff::{DiffEngine, DiffHandle, DiffSettings},
     graph::GraphRow,
     history::{Entry, Generation, HistoryEngine, HistoryHandle, RefKind, Request, Snapshot},
     timing::{Phase, Timing, TimingGuard},
@@ -48,6 +51,7 @@ struct HistoryWindow {
     pending_selection: Option<usize>,
     filter: Entity<InputState>,
     detail: SharedString,
+    diff: Entity<diff_view::DiffPane>,
     scroll: UniformListScrollHandle,
     _subscription: Subscription,
     _history_task: Task<()>,
@@ -61,6 +65,7 @@ impl HistoryWindow {
         config: Config,
         timing: Timing,
         history: HistoryHandle,
+        diff_handle: DiffHandle,
         request: Request,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -102,7 +107,18 @@ impl HistoryWindow {
                 }
             }
         });
+        let diff = cx.new(|cx| {
+            diff_view::DiffPane::new(
+                diff_handle,
+                DiffSettings {
+                    syntax: config.syntax,
+                    dark: config.theme == Theme::Dark,
+                },
+                cx,
+            )
+        });
         Self {
+            diff,
             config,
             focus,
             timing,
@@ -146,13 +162,19 @@ impl HistoryWindow {
             }
             .into();
         }
+        if snapshot.eof && snapshot.visible == 0
+            || snapshot.error.is_some() && self.selected.is_none()
+        {
+            self.diff
+                .update(cx, |diff, cx| diff.clear(&self.detail, cx));
+        }
         self.snapshot = Some(snapshot);
         if self.preserve_filter_selection {
             let snapshot = self.snapshot.as_ref().unwrap();
             if let Some(index) = snapshot.anchor_position
                 && let Some((_, entry)) = &self.selected
             {
-                self.set_selection(index, entry.clone());
+                self.set_selection(index, entry.clone(), cx);
                 self.scroll.scroll_to_item(index, ScrollStrategy::Center);
                 self.preserve_filter_selection = false;
             } else if !snapshot.filtering && snapshot.visible > 0 {
@@ -168,7 +190,7 @@ impl HistoryWindow {
             && let Some(entry) = self.cached(index)
         {
             self.pending_selection = None;
-            self.set_selection(index, entry);
+            self.set_selection(index, entry, cx);
         }
         cx.notify();
     }
@@ -201,18 +223,22 @@ impl HistoryWindow {
         }
     }
 
-    fn set_selection(&mut self, index: usize, entry: Arc<Entry>) {
-        let commit = &entry.commit;
-        self.detail = format!("commit {}\nAuthor: {} <{}>  {}\nCommitter: {} <{}>  {}\n\n{}\n\nDiff view is not available yet.",
-            commit.id.as_str(), commit.author.name, commit.author.email, commit.author.time,
-            commit.committer.name, commit.committer.email, commit.committer.time, commit.message).into();
+    fn set_selection(&mut self, index: usize, entry: Arc<Entry>, cx: &mut Context<Self>) {
+        self.diff.update(cx, |diff, cx| {
+            diff.load(
+                self.config.repository.clone(),
+                Arc::new(entry.commit.clone()),
+                self.request.generation.0,
+                cx,
+            )
+        });
         self.selected = Some((index, entry));
     }
 
     fn select(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         self.focus.focus(window);
         if let Some(entry) = self.cached(index) {
-            self.set_selection(index, entry);
+            self.set_selection(index, entry, cx);
         } else {
             self.pending_selection = Some(index);
             self.ensure_rows(index..index + 1);
@@ -243,6 +269,8 @@ impl HistoryWindow {
         self.pending_selection = Some(0);
         self.preserve_filter_selection = false;
         self.detail = "Loading commits…".into();
+        self.diff
+            .update(cx, |diff, cx| diff.clear("Loading commits…", cx));
         self.submit();
         self.scroll.scroll_to_item(0, ScrollStrategy::Top);
         cx.notify();
@@ -482,6 +510,18 @@ impl Render for HistoryWindow {
                     this.select(s.visible.saturating_sub(1), window, cx);
                 }
             }))
+            .on_action(cx.listener(|this, _: &diff_view::PageDown, _, cx| {
+                this.diff.update(cx, |diff, cx| diff.scroll_page(true, cx))
+            }))
+            .on_action(cx.listener(|this, _: &diff_view::PageUp, _, cx| {
+                this.diff.update(cx, |diff, cx| diff.scroll_page(false, cx))
+            }))
+            .on_action(cx.listener(|this, _: &diff_view::LinesDown, _, cx| {
+                this.diff.update(cx, |diff, cx| diff.scroll_lines(18, cx))
+            }))
+            .on_action(cx.listener(|this, _: &diff_view::LinesUp, _, cx| {
+                this.diff.update(cx, |diff, cx| diff.scroll_lines(-18, cx))
+            }))
             .on_action(cx.listener(|this, _: &Reload, _, cx| this.reload(cx)))
             .on_action(cx.listener(|this, _: &HistoryPageUp, _, cx| {
                 this.scroll.scroll_to_item(
@@ -584,24 +624,7 @@ impl Render for HistoryWindow {
                             .child(Scrollbar::vertical(&self.scroll).id("history-scrollbar")),
                     ),
             )
-            .child(
-                div()
-                    .flex()
-                    .flex_1()
-                    .min_h_0()
-                    .gap_2()
-                    .child(
-                        section()
-                            .id("commit-detail")
-                            .flex_1()
-                            .min_w_0()
-                            .overflow_y_scroll()
-                            .p_3()
-                            .font_family(fixed_font())
-                            .child(self.detail.clone()),
-                    )
-                    .child(section().w(px(280.)).p_2().child("Changed files")),
-            )
+            .child(div().flex_1().min_h_0().child(self.diff.clone()))
             .child(section().px_2().py_1().child(status))
             .when(timing.enabled(), |root| {
                 root.child(
@@ -642,8 +665,11 @@ pub fn run(config: Config, launched: Instant) {
     };
     let engine = HistoryEngine::spawn(request.clone());
     let history = engine.handle();
+    let diff_engine = DiffEngine::spawn();
+    let diff_handle = diff_engine.handle();
     Application::new().run(move |cx: &mut App| {
         gpui_component::init(cx);
+        diff_view::bind_keys(cx);
         gpui_component::Theme::change(
             match config.theme {
                 Theme::Dark => ThemeMode::Dark,
@@ -698,8 +724,9 @@ pub fn run(config: Config, launched: Instant) {
             move |window, cx| {
                 window.set_window_title("gitk-rs");
                 timing.mark(Phase::WindowCreated);
-                let view =
-                    cx.new(|cx| HistoryWindow::new(config, timing, history, request, window, cx));
+                let view = cx.new(|cx| {
+                    HistoryWindow::new(config, timing, history, diff_handle, request, window, cx)
+                });
                 cx.new(|cx| Root::new(view, window, cx))
             },
         ) {
@@ -709,4 +736,5 @@ pub fn run(config: Config, launched: Instant) {
         cx.activate(true);
     });
     drop(engine);
+    drop(diff_engine);
 }

@@ -7,6 +7,8 @@ fn main() {
     match cli::parse(std::env::args_os().skip(1)) {
         Ok(Command::Help) => println!("{}", cli::HELP),
         Ok(Command::Version) => println!("gitk-rs {}", env!("CARGO_PKG_VERSION")),
+        Ok(Command::Languages) => print!("{}", gitk_rs::syntax::inventory()),
+        Ok(Command::Licenses) => print!("{}", gitk_rs::syntax::licenses()),
         Ok(Command::Open(config)) => ui::run(config, launched),
         Err(error) => {
             eprintln!("gitk-rs: {error}\nUse --help for usage.");

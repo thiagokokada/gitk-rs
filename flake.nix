@@ -47,6 +47,11 @@
             nativeBuildInputs = deps.native ++ [ pkgs.makeWrapper ];
             nativeCheckInputs = [ pkgs.git ];
             buildInputs = deps.libraries;
+            postInstall = ''
+              mkdir -p $out/share/doc/gitk-rs
+              cp -r assets/licenses $out/share/doc/gitk-rs/
+              cp docs/LANGUAGES.md LICENSE $out/share/doc/gitk-rs/
+            '';
             postFixup = ''
               wrapProgram $out/bin/gitk-rs \
                 --prefix LD_LIBRARY_PATH : ${deps.runtimePath} \
@@ -70,7 +75,7 @@
           package = self.packages.${system}.default;
           format = pkgs.runCommand "gitk-rs-format" { nativeBuildInputs = [ pkgs.rustfmt ]; } ''
             cd ${source}
-            rustfmt --edition 2024 --check src/*.rs
+            find src examples -name '*.rs' -print0 | xargs -0 rustfmt --edition 2024 --check
             touch $out
           '';
         });

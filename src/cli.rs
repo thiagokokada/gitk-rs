@@ -7,7 +7,10 @@ pub const HELP: &str = "Usage: gitk-rs [--mode dark|light] [--timings] [--] [REP
     --timings       Report startup paint callbacks and bounded CPU frame samples\n\n\
     --limit N       Maximum commits per background batch (default 1000)\n\
     --graph-cols N  Visible graph lane cap, 1..200 (default 200)\n\
-    --text-graph    Use a text graph instead of canvas geometry";
+    --text-graph    Use a text graph instead of canvas geometry\n\
+    --nosyntax      Disable syntax highlighting\n\
+    --list-languages List bundled languages and extensions\n\
+    --licenses      Print bundled grammar/theme license notices";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Theme {
@@ -23,6 +26,7 @@ pub struct Config {
     pub batch: usize,
     pub graph_columns: usize,
     pub text_graph: bool,
+    pub syntax: bool,
 }
 
 impl Default for Config {
@@ -34,6 +38,7 @@ impl Default for Config {
             batch: 1000,
             graph_columns: 200,
             text_graph: false,
+            syntax: true,
         }
     }
 }
@@ -50,6 +55,8 @@ pub enum Command {
     Open(Config),
     Help,
     Version,
+    Languages,
+    Licenses,
 }
 
 /// Parse OS strings so repository paths need not be valid UTF-8.
@@ -62,11 +69,14 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
     let mut batch = 1000;
     let mut graph_columns = 200;
     let mut text_graph = false;
+    let mut syntax = true;
     while let Some(arg) = args.next() {
         if !positional_only {
             match arg.to_str() {
                 Some("--help" | "-h") => return Ok(Command::Help),
                 Some("--version" | "-V") => return Ok(Command::Version),
+                Some("--list-languages") => return Ok(Command::Languages),
+                Some("--licenses") => return Ok(Command::Licenses),
                 Some("--timings") => {
                     timings = true;
                     continue;
@@ -84,6 +94,10 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
                     if graph_columns > 200 {
                         return Err("--graph-cols must be between 1 and 200".into());
                     }
+                    continue;
+                }
+                Some("--nosyntax") => {
+                    syntax = false;
                     continue;
                 }
                 Some("--text-graph") => {
@@ -115,6 +129,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
         batch,
         graph_columns,
         text_graph,
+        syntax,
     }))
 }
 
@@ -146,6 +161,16 @@ mod tests {
                 ..Config::default()
             }))
         );
+    }
+
+    #[test]
+    fn syntax_controls_and_inventory_commands() {
+        assert_eq!(command(&["--list-languages"]), Ok(Command::Languages));
+        assert_eq!(command(&["--licenses"]), Ok(Command::Licenses));
+        let Command::Open(config) = command(&["--nosyntax"]).unwrap() else {
+            panic!("expected config");
+        };
+        assert!(!config.syntax);
     }
 
     #[test]
