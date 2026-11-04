@@ -107,5 +107,129 @@
         }
       }
     }
-  ]
+  ],
+  "increment_2": [
+    {
+      "app": "rust",
+      "trial": "m2",
+      "target": 100000,
+      "loaded": 100000,
+      "elapsed_to_loaded_log_s": 4.197,
+      "application": {
+        "VmHWM": 305212,
+        "VmRSS": 305212,
+        "VmSwap": 0,
+        "Threads": 36,
+        "cpu_seconds": 1.03,
+        "command": ".gitk-rs-wrappe",
+        "smaps_kib": {
+          "Rss": 305212,
+          "Pss": 288721,
+          "Private_Clean": 41500,
+          "Private_Dirty": 237440,
+          "Anonymous": 237424
+        }
+      },
+      "children": [
+        {
+          "VmHWM": 334760,
+          "VmRSS": 334760,
+          "VmSwap": 0,
+          "Threads": 1,
+          "cpu_seconds": 0.84,
+          "command": "git",
+          "smaps_kib": {
+            "Rss": 334760,
+            "Pss": 332627,
+            "Private_Clean": 316280,
+            "Private_Dirty": 16188,
+            "Anonymous": 16188
+          }
+        }
+      ],
+      "idle_app_cpu_percent": 0.4,
+      "sampled_app_peak_rss_kib": 305212,
+      "sampled_children_peak_total_rss_kib": 444780
+    },
+    {
+      "app": "rust",
+      "trial": "m2",
+      "target": 200000,
+      "loaded": 200000,
+      "elapsed_to_loaded_log_s": 14.61,
+      "application": {
+        "VmHWM": 498184,
+        "VmRSS": 498184,
+        "VmSwap": 0,
+        "Threads": 36,
+        "cpu_seconds": 1.92,
+        "command": ".gitk-rs-wrappe",
+        "smaps_kib": {
+          "Rss": 498184,
+          "Pss": 481673,
+          "Private_Clean": 41536,
+          "Private_Dirty": 430348,
+          "Anonymous": 430332
+        }
+      },
+      "children": [
+        {
+          "VmHWM": 448156,
+          "VmRSS": 448156,
+          "VmSwap": 0,
+          "Threads": 1,
+          "cpu_seconds": 1.71,
+          "command": "git",
+          "smaps_kib": {
+            "Rss": 448156,
+            "Pss": 446023,
+            "Private_Clean": 415600,
+            "Private_Dirty": 30264,
+            "Anonymous": 30264
+          }
+        }
+      ],
+      "idle_app_cpu_percent": 0.4,
+      "sampled_app_peak_rss_kib": 498184,
+      "sampled_children_peak_total_rss_kib": 448156
+    },
+    {
+      "app": "rust",
+      "trial": "m2",
+      "action": "filter-nix",
+      "observed_seconds": 5.224,
+      "application_cpu_seconds": 0.14,
+      "loaded": 200000,
+      "application": {
+        "VmHWM": 498736,
+        "VmRSS": 498736,
+        "VmSwap": 0,
+        "Threads": 36,
+        "cpu_seconds": 2.1,
+        "command": ".gitk-rs-wrappe",
+        "smaps_kib": {
+          "Rss": 498736,
+          "Pss": 482225,
+          "Private_Clean": 41664,
+          "Private_Dirty": 430772,
+          "Anonymous": 430756
+        }
+      }
+    }
+  ],
+  "focused_graph_profile": {
+    "method": "Same optimized current-source driver, first 200000 nixpkgs commits, 200 lanes. Elapsed intervals within graph preparation and stream reading; reading includes waiting for Git. Separate wall-time observations, not a sampled CPU attribution.",
+    "baseline": {
+      "read_ms": 164,
+      "graph_ms": 8777
+    },
+    "compact_storage": {
+      "read_ms": 158,
+      "graph_ms": 8906
+    },
+    "stable_lane_routing": {
+      "read_ms": 1355,
+      "graph_ms": 320
+    }
+  }
 }

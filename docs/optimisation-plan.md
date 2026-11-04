@@ -102,15 +102,15 @@ achieved RSS reduction before measuring it.
 
 ## Increment 2: reduce graph construction work
 
-- [ ] Profile the unchanged loading path on wide real history before changing it.
+- [x] Profile the unchanged loading path on wide real history before changing it.
   Separate Git reading/parsing, graph preparation, and UI application where useful.
-- [ ] Avoid cloning every lane's owned target string for every row.
-- [ ] Replace repeated frontier scans if profiling confirms their cost. Keep any
+- [x] Avoid cloning every lane's owned target string for every row.
+- [x] Replace repeated frontier scans if profiling confirms their cost. Keep any
   lookup storage bounded by the configured lane count and preserve stable lanes.
-- [ ] Test chains, branch/merge patterns, octopus merges, sparse lane holes,
+- [x] Test chains, branch/merge patterns, octopus merges, sparse lane holes,
   overflow at several caps, and color continuity. Compare complete logical rows
   against the previous implementation using deterministic fixtures.
-- [ ] Repeat the baseline and record CPU, elapsed workload time, and memory.
+- [x] Repeat the baseline and record CPU, elapsed workload time, and memory.
 
 Acceptance: equivalent graph output and navigation behavior, lower measured
 loading cost, no whole-history lookup index, and no new retained duplication.
@@ -207,3 +207,24 @@ Run the opt-in Rust accounting separately from normal CI:
 GITK_BENCH_REPOSITORY=/path/to/nixpkgs nix develop --command \
   cargo test --release --test optimisation -- --ignored --nocapture
 ```
+
+### Increment 2: stable-lane routing
+
+- Profiling the unchanged graph path attributed 8.78 s of 8.94 s in the
+  read/graph intervals to graph preparation (elapsed instrumentation, not a
+  sampled CPU profile). Compact storage alone remained at 8.91 s.
+- The frontier now copies bounded color metadata on the stack, moves the one
+  displaced target, and uses unchanged lane indices for continuation edges.
+  There is no whole-history lookup map and no per-row frontier-ID cloning.
+- Complete logical rows match the original oracle, including 256-parent octopus
+  merges, sparse roots and an evicted target reintroduced at the cap. All 70
+  Rust tests, formatting, strict Clippy, release package and flake checks pass.
+- Focused graph time is 0.32 s for 200,000 commits. Stream reading now takes
+  1.36 s because the faster consumer exposes Git producer latency; the combined
+  intervals fall from about 9.1 s after increment 1 to 1.7 s.
+- Matched GUI run: application CPU at 200,000 falls from baseline 10.81 s to
+  1.92 s; RSS is about 486 MiB, with no swap. The same 30,026 filter matches
+  and deep navigation remain functional. Git child memory is reported separately
+  in `optimisation-progress.json`; its mapped pages are not application heap.
+- Native Wayland and X11 startup/history-paint checks pass. macOS execution
+  remains a CI check, not a locally verified desktop test.
