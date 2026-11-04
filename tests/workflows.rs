@@ -164,14 +164,14 @@ fn demand_pauses_history_then_filter_streams_further_and_generation_switches() {
     let mut request = history_request(&fixture);
     let engine = HistoryEngine::spawn(request.clone());
     let handle = engine.handle();
-    let snapshot = wait(|| handle.take_snapshot().filter(|s| s.loaded >= 72));
-    assert_eq!(snapshot.loaded, 72);
+    let snapshot = wait(|| handle.take_snapshot().filter(|s| s.loaded >= 77));
+    assert_eq!(snapshot.loaded, 77);
     assert!(!snapshot.eof);
     assert_eq!(snapshot.rows.len(), 8);
     thread::sleep(Duration::from_millis(100));
     if let Some(paused) = handle.take_snapshot() {
         assert_eq!(
-            paused.loaded, 72,
+            paused.loaded, 77,
             "history kept prefetching after demand was satisfied"
         );
     }

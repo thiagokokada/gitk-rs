@@ -109,6 +109,93 @@ fn selected(view: &Entity<HistoryWindow>, cx: &mut VisualTestContext) -> Option<
 }
 
 #[gpui::test]
+fn history_pages_settle_after_scrolling_beyond_the_first_page(cx: &mut TestAppContext) {
+    use std::{
+        io::Write,
+        process::{Command, Stdio},
+    };
+    let fixture = Fixture::new();
+    let mut input = String::new();
+    for i in 1..=2500 {
+        let message = format!("commit {i}");
+        input.push_str(&format!("commit refs/heads/main\nmark :{i}\ncommitter Fixture <fixture@example.test> {} +0000\ndata {}\n{message}\n", 1700000000 + i, message.len()));
+        if i > 1 {
+            input.push_str(&format!("from :{}\n", i - 1));
+        }
+        input.push('\n');
+    }
+    let mut child = Command::new("git")
+        .arg("-C")
+        .arg(fixture.root())
+        .args(["fast-import", "--quiet"])
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(input.as_bytes())
+        .unwrap();
+    let result = child.wait_with_output().unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let (app, cx) = open(&fixture, cx);
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            app.view
+                .read(cx)
+                .snapshot
+                .as_ref()
+                .is_some_and(|s| s.loaded == 1000)
+        })
+    });
+    let scrollbar = cx.debug_bounds("history-scrollbar").unwrap();
+    assert!(scrollbar.size.height > px(50.));
+    cx.simulate_click(
+        point(scrollbar.right() - px(8.), scrollbar.bottom() - px(2.)),
+        gpui::Modifiers::default(),
+    );
+    until(cx, |cx| {
+        cx.update(|_, cx| app.view.read(cx).viewport.start > 500)
+    });
+    for index in [800, 1600, 100] {
+        app.view.update(cx, |view, cx| {
+            view.scroll
+                .scroll_to_item_strict(index, ScrollStrategy::Top);
+            cx.notify();
+        });
+        until(cx, |cx| {
+            cx.update(|_, cx| {
+                let view = app.view.read(cx);
+                view.viewport.contains(&index)
+                    && view.snapshot.as_ref().is_some_and(|s| {
+                        s.request_id == view.request.id
+                            && s.start <= view.viewport.start
+                            && s.start + s.rows.len() >= view.viewport.end
+                    })
+            })
+        });
+        let request = cx.update(|_, cx| app.view.read(cx).request.id);
+        for _ in 0..12 {
+            cx.background_executor
+                .advance_clock(Duration::from_millis(20));
+            cx.run_until_parked();
+            cx.refresh().unwrap();
+            cx.run_until_parked();
+            assert_eq!(cx.update(|_, cx| app.view.read(cx).request.id), request);
+        }
+    }
+}
+
+#[gpui::test]
 fn keyboard_navigation_and_filter_focus(cx: &mut TestAppContext) {
     let fixture = Fixture::new();
     let older = fixture.commit("older needle");

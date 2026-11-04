@@ -18,9 +18,9 @@ use gitk_rs::{
 };
 use gpui::{
     AnyElement, App, Application, Bounds, Context, Entity, FocusHandle, KeyBinding, PathBuilder,
-    ScrollStrategy, SharedString, Subscription, Task, UniformListScrollHandle, Window,
-    WindowBounds, WindowOptions, actions, canvas, div, fill, point, prelude::*, px, rgb, size,
-    uniform_list,
+    ScrollStrategy, SharedString, Subscription, Task, UniformListDecoration,
+    UniformListScrollHandle, Window, WindowBounds, WindowOptions, actions, canvas, div, fill,
+    point, prelude::*, px, rgb, size, uniform_list,
 };
 use gpui_component::{
     Root, ThemeMode,
@@ -28,7 +28,7 @@ use gpui_component::{
     input::{Input, InputEvent, InputState},
     menu::{ContextMenuExt, DropdownMenu, PopupMenuItem},
     resizable::{resizable_panel, v_resizable},
-    scroll::Scrollbar,
+    scroll::{Scrollbar, ScrollbarShow},
 };
 use std::{
     ops::Range,
@@ -70,6 +70,30 @@ struct WindowServices {
     history: HistoryHandle,
     workspace: WorkspaceHandle,
     diff: DiffHandle,
+}
+
+struct HistoryViewport(Entity<HistoryWindow>);
+
+impl UniformListDecoration for HistoryViewport {
+    fn compute(
+        &self,
+        range: Range<usize>,
+        _: Bounds<gpui::Pixels>,
+        _: gpui::Point<gpui::Pixels>,
+        _: gpui::Pixels,
+        _: usize,
+        _: &mut Window,
+        cx: &mut App,
+    ) -> AnyElement {
+        self.0.update(cx, |view, cx| {
+            let lanes = view.graph_lanes;
+            view.ensure_rows(range);
+            if view.graph_lanes != lanes {
+                cx.notify();
+            }
+        });
+        div().into_any_element()
+    }
 }
 
 enum DialogKind {
@@ -1159,19 +1183,29 @@ impl Render for HistoryWindow {
                                                     count,
                                                     cx.processor(
                                                         |this, range: Range<usize>, _, cx| {
-                                                            this.ensure_rows(range.clone());
                                                             range
                                                                 .map(|index| this.row(index, cx))
                                                                 .collect::<Vec<_>>()
                                                         },
                                                     ),
                                                 )
+                                                .with_width_from_item(Some(self.viewport.start))
+                                                .with_decoration(HistoryViewport(cx.entity()))
                                                 .track_scroll(self.scroll.clone())
                                                 .size_full(),
                                             )
                                             .child(
-                                                Scrollbar::vertical(&self.scroll)
-                                                    .id("history-scrollbar"),
+                                                div()
+                                                    .absolute()
+                                                    .top_0()
+                                                    .left_0()
+                                                    .size_full()
+                                                    .debug_selector(|| "history-scrollbar".into())
+                                                    .child(
+                                                        Scrollbar::vertical(&self.scroll)
+                                                            .scrollbar_show(ScrollbarShow::Always)
+                                                            .id("history-scrollbar"),
+                                                    ),
                                             ),
                                     ),
                             ),

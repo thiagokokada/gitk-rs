@@ -13,7 +13,7 @@ use gpui::{prelude::*, *};
 use gpui_component::{
     menu::{ContextMenuExt, PopupMenuItem},
     resizable::{h_resizable, resizable_panel},
-    scroll::Scrollbar,
+    scroll::{Scrollbar, ScrollbarShow},
 };
 use std::{
     cell::RefCell, collections::HashMap, ops::Range, path::PathBuf, rc::Rc, sync::Arc,
@@ -35,6 +35,27 @@ struct PaintedLine {
     display: DisplayText,
 }
 
+// UniformList renders sizing samples as well as visible rows. Observe its actual
+// viewport separately so measurement never changes the active file or page.
+struct DiffViewport(Entity<DiffPane>);
+
+impl UniformListDecoration for DiffViewport {
+    fn compute(
+        &self,
+        range: Range<usize>,
+        _: Bounds<Pixels>,
+        _: Point<Pixels>,
+        _: Pixels,
+        _: usize,
+        _: &mut Window,
+        cx: &mut App,
+    ) -> AnyElement {
+        self.0
+            .update(cx, |pane, cx| pane.observe_viewport(range, cx));
+        div().into_any_element()
+    }
+}
+
 pub(super) struct DiffPane {
     handle: DiffHandle,
     focus: FocusHandle,
@@ -47,6 +68,8 @@ pub(super) struct DiffPane {
     message: String,
     scroll: UniformListScrollHandle,
     files_scroll: UniformListScrollHandle,
+    selected_file: Option<usize>,
+    file_jump_pending: bool,
     selection: Option<TextSelection>,
     dragging: bool,
     viewport: Range<usize>,
@@ -110,6 +133,8 @@ impl DiffPane {
             message: "Select a commit".into(),
             scroll: UniformListScrollHandle::new(),
             files_scroll: UniformListScrollHandle::new(),
+            selected_file: None,
+            file_jump_pending: false,
             selection: None,
             dragging: false,
             viewport: 0..1,
@@ -192,6 +217,9 @@ impl DiffPane {
         self.handle.clear(self.page.selection);
         self.identity = None;
         self.snapshot = None;
+        self.selected_file = None;
+        self.file_jump_pending = false;
+        self.viewport = 0..1;
         self.message = message.into();
         self.selection = None;
         self.dragging = false;
@@ -201,7 +229,6 @@ impl DiffPane {
     }
 
     fn ensure(&mut self, range: Range<usize>) {
-        self.viewport = range.clone();
         let covered = self
             .snapshot
             .as_ref()
@@ -216,6 +243,32 @@ impl DiffPane {
             self.page.id += 1;
             self.handle.page(self.page.clone());
         }
+    }
+
+    fn select_file(&mut self, index: usize, cx: &mut Context<Self>) {
+        if self.selected_file != Some(index) {
+            self.selected_file = Some(index);
+            self.files_scroll.scroll_to_item(index, ScrollStrategy::Top);
+            cx.notify();
+        }
+    }
+
+    fn observe_viewport(&mut self, range: Range<usize>, cx: &mut Context<Self>) {
+        let moved = range.start != self.viewport.start;
+        self.viewport = range.clone();
+        if self.file_jump_pending {
+            // A final short file may not fit at the top. Keep the clicked file
+            // highlighted until the user moves the viewport again.
+            self.file_jump_pending = false;
+        } else if (moved || self.selected_file.is_none())
+            && let Some(snapshot) = &self.snapshot
+        {
+            let index = snapshot
+                .files
+                .partition_point(|file| file.start_line.is_some_and(|line| line <= range.start));
+            self.select_file(index, cx);
+        }
+        self.ensure(range);
     }
 
     fn copy(&self, strip_markers: bool) {
@@ -505,24 +558,26 @@ impl Render for DiffPane {
                                                 "diff-lines",
                                                 count,
                                                 cx.processor(|this, range: Range<usize>, _, cx| {
-                                                    this.ensure(range.clone());
                                                     range
                                                         .map(|i| this.row(i, cx))
                                                         .collect::<Vec<_>>()
                                                 }),
                                             )
-                                            // GPUI also renders this item for measurement.
-                                            // Keep it near the viewport so sizing cannot
-                                            // alternate requests between row zero and a
-                                            // distant page forever.
                                             .with_width_from_item(Some(self.viewport.start))
+                                            .with_decoration(DiffViewport(cx.entity()))
                                             .track_scroll(self.scroll.clone())
                                             .with_horizontal_sizing_behavior(
                                                 ListHorizontalSizingBehavior::Unconstrained,
                                             )
                                             .size_full(),
                                         )
-                                        .child(Scrollbar::new(&self.scroll).id("diff-scrollbar")),
+                                        .child(
+                                            div().absolute().top_0().left_0().size_full().child(
+                                                Scrollbar::new(&self.scroll)
+                                                    .scrollbar_show(ScrollbarShow::Always)
+                                                    .id("diff-scrollbar"),
+                                            ),
+                                        ),
                                 )
                                 .when(!self.message.is_empty(), |pane| {
                                     pane.child(div().px_2().py_1().child(self.message.clone()))
@@ -581,10 +636,22 @@ impl Render for DiffPane {
                                                         .px_2()
                                                         .truncate()
                                                         .cursor_pointer()
+                                                        .when(
+                                                            this.selected_file == Some(i),
+                                                            |row| {
+                                                                row.bg(rgb(if this.settings.dark {
+                                                                    0x285b8e
+                                                                } else {
+                                                                    0xcfe7ff
+                                                                }))
+                                                            },
+                                                        )
                                                         .child(label)
                                                         .on_click(cx.listener(
                                                             move |this, _, _, cx| {
                                                                 if let Some(line) = line {
+                                                                    this.select_file(i, cx);
+                                                                    this.file_jump_pending = true;
                                                                     this.jump(line, cx);
                                                                 }
                                                             },
@@ -615,7 +682,17 @@ impl Render for DiffPane {
                                     .size_full(),
                                 )
                                 .child(
-                                    Scrollbar::vertical(&self.files_scroll).id("files-scrollbar"),
+                                    div()
+                                        .absolute()
+                                        .top_0()
+                                        .left_0()
+                                        .size_full()
+                                        .debug_selector(|| "files-scrollbar".into())
+                                        .child(
+                                            Scrollbar::vertical(&self.files_scroll)
+                                                .scrollbar_show(ScrollbarShow::Always)
+                                                .id("files-scrollbar"),
+                                        ),
                                 ),
                         ),
                     ),

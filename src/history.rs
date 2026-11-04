@@ -330,10 +330,16 @@ impl Session {
             self.refs_revision = request.refs_revision;
             return Ok(true);
         }
-        let needed = request.range.end.saturating_add(64);
+        let batch = request.batch.clamp(1, 10000);
+        let needed = request
+            .range
+            .end
+            .saturating_add(64)
+            .div_ceil(batch)
+            .saturating_mul(batch);
         let visible = self.visible_count();
         if !self.eof && visible < needed {
-            self.load(request.batch.clamp(1, 10000), needed)?;
+            self.load(batch, needed)?;
             return Ok(true);
         }
         Ok(false)
