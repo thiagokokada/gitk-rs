@@ -203,6 +203,42 @@ fn history_pages_settle_after_scrolling_beyond_the_first_page(cx: &mut TestAppCo
 }
 
 #[gpui::test]
+fn consecutive_reload_before_layout_preserves_the_restored_top_commit(cx: &mut TestAppContext) {
+    let fixture = history_fixture(100);
+    let (app, cx) = open(&fixture, cx);
+    until(cx, |cx| {
+        cx.update(|_, cx| app.view.read(cx).cached(50).is_some())
+    });
+    app.view.update(cx, |view, cx| {
+        view.scroll.scroll_to_item_strict(50, ScrollStrategy::Top);
+        cx.notify();
+    });
+    until(cx, |cx| {
+        cx.update(|_, cx| app.view.read(cx).viewport.start == 50)
+    });
+    let top = cx.update(|_, cx| app.view.read(cx).cached(50).unwrap().commit.id.clone());
+    fixture.commit("new tip");
+    app.view.update(cx, |view, cx| view.reload(cx));
+    // Receive the restored rows without running layout or workspace polling.
+    // This reproduces a second HEAD update arriving before the next frame.
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        if app.view.update(cx, |view, cx| {
+            view.consume_snapshot(cx);
+            view.request.restore.is_none()
+        }) {
+            break;
+        }
+        assert!(Instant::now() < deadline, "restore did not complete");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    app.view.update(cx, |view, cx| {
+        view.reload(cx);
+        assert_eq!(view.request.restore.as_ref().unwrap().top, Some(top));
+    });
+}
+
+#[gpui::test]
 fn deep_reload_keeps_selected_commit_and_top_visible_commit(cx: &mut TestAppContext) {
     let fixture = history_fixture(2500);
     let (app, cx) = open(&fixture, cx);

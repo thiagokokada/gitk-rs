@@ -375,8 +375,11 @@ impl HistoryWindow {
                         .map(|s| s.0.saturating_sub(self.local_rows.len()))
                 })
                 .unwrap_or(0);
-            self.scroll
-                .scroll_to_item_strict(top + self.local_rows.len(), ScrollStrategy::Top);
+            let top = top + self.local_rows.len();
+            // A second reload can arrive before layout applies the deferred scroll.
+            // Bookmark indices must already address the restored snapshot's rows.
+            self.viewport = top..top.saturating_add(self.viewport.len());
+            self.scroll.scroll_to_item_strict(top, ScrollStrategy::Top);
             let start = self.snapshot.as_ref().unwrap().start;
             self.request.range = start..start + 512;
             self.submit();
