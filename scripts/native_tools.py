@@ -53,18 +53,6 @@ def application(
                 process.wait()
 
 
-class ClientSpec(ctypes.Structure):
-    _fields_ = [("client", ctypes.c_ulong), ("mask", ctypes.c_uint)]
-
-
-class ClientValue(ctypes.Structure):
-    _fields_ = [
-        ("spec", ClientSpec),
-        ("length", ctypes.c_long),
-        ("value", ctypes.c_void_p),
-    ]
-
-
 class ClientMessage(ctypes.Structure):
     _fields_ = [
         ("type", ctypes.c_int),
@@ -107,51 +95,12 @@ class X11:
         self.display = self.library.XOpenDisplay(None)
         if not self.display:
             raise RuntimeError("An X11 display is required")
-        self.resources = None
 
     def __enter__(self) -> "X11":
         return self
 
     def __exit__(self, *_: object) -> None:
         self.library.XCloseDisplay(self.display)
-
-    def owns_window(self, window: str, pid: int) -> bool:
-        # XRes also handles toolkits that do not expose _NET_WM_PID.
-        if self.resources is None:
-            self.resources = ctypes.CDLL(
-                os.environ.get("GITK_RS_XRES_LIBRARY", "libXRes.so.1")
-            )
-            self.resources.XResQueryClientIds.argtypes = [
-                ctypes.c_void_p,
-                ctypes.c_long,
-                ctypes.POINTER(ClientSpec),
-                ctypes.POINTER(ctypes.c_long),
-                ctypes.POINTER(ctypes.POINTER(ClientValue)),
-            ]
-            self.resources.XResGetClientPid.argtypes = [ctypes.POINTER(ClientValue)]
-            self.resources.XResGetClientPid.restype = ctypes.c_int
-            self.resources.XResClientIdsDestroy.argtypes = [
-                ctypes.c_long,
-                ctypes.POINTER(ClientValue),
-            ]
-        spec = ClientSpec(int(window, 0), 2)
-        count = ctypes.c_long()
-        values = ctypes.POINTER(ClientValue)()
-        self.resources.XResQueryClientIds(
-            self.display,
-            1,
-            ctypes.byref(spec),
-            ctypes.byref(count),
-            ctypes.byref(values),
-        )
-        try:
-            return any(
-                self.resources.XResGetClientPid(ctypes.byref(values[index])) == pid
-                for index in range(count.value)
-            )
-        finally:
-            if values:
-                self.resources.XResClientIdsDestroy(count, values)
 
     def close_window(self, window: str) -> None:
         """Request normal application shutdown through WM_DELETE_WINDOW."""

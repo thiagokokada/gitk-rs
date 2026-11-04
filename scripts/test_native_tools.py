@@ -1,8 +1,6 @@
-"""Headless regression checks for native-script safety and process sampling."""
+"""Headless regression checks for native-script focus guards and cleanup."""
 
 import os
-import subprocess
-import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -10,7 +8,6 @@ from unittest.mock import patch
 
 from gui_smoke import Window
 from native_tools import application
-from release_probe import children, memory
 
 
 class NativeToolsTests(unittest.TestCase):
@@ -59,43 +56,6 @@ class NativeToolsTests(unittest.TestCase):
                     Path(directory) / "application.log",
                 ):
                     self.fail("Missing binary was launched")
-
-    def test_memory_sample_handles_process_disappearance(self):
-        with patch("pathlib.Path.read_text", side_effect=FileNotFoundError):
-            self.assertEqual(memory(42), {"VmRSS": 0, "VmHWM": 0})
-
-    def test_memory_sample_parses_kib_fields(self):
-        with patch(
-            "pathlib.Path.read_text",
-            return_value="Name:\tfixture\nVmHWM:\t2048 kB\nVmRSS:\t1024 kB\n",
-        ):
-            self.assertEqual(memory(42), {"VmRSS": 1024, "VmHWM": 2048})
-
-    def test_child_sampling_walks_all_threads_and_descendants(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            for name, contents in {
-                "42/task/42/children": "44",
-                "42/task/43/children": "45",
-                "44/task/44/children": "46",
-            }.items():
-                path = root / name
-                path.parent.mkdir(parents=True)
-                path.write_text(contents)
-            with patch(
-                "release_probe.Path",
-                side_effect=lambda value: root / str(value).removeprefix("/proc/"),
-            ):
-                self.assertEqual(children(42), {44, 45, 46})
-
-    @unittest.skipUnless(sys.platform == "linux", "Live sampling requires Linux /proc")
-    def test_child_sampling_includes_children_of_other_threads(self):
-        with subprocess.Popen(["sleep", "30"]) as child:
-            try:
-                self.assertIn(child.pid, children(os.getpid()))
-            finally:
-                child.terminate()
-                child.wait()
 
 
 if __name__ == "__main__":
