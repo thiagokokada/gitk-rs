@@ -433,6 +433,36 @@ fn graph_column_can_be_resized_without_changing_selection(cx: &mut TestAppContex
 }
 
 #[gpui::test]
+fn reload_control_toggles_watching_and_refreshes_history(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let head = fixture.commit("base");
+    let (app, cx) = open(&fixture, cx);
+    until(cx, |cx| {
+        selected(&app.view, cx).as_deref() == Some(head.as_str())
+    });
+    assert!(!cx.update(|_, cx| app.view.read(cx).config.watch));
+    let button = cx.debug_bounds("reload-control").unwrap();
+    cx.simulate_click(button.center(), gpui::Modifiers::default());
+    assert!(cx.update(|_, cx| app.view.read(cx).config.watch));
+    until(cx, |cx| {
+        cx.update(|_, cx| app.view.read(cx).reload_selection.is_none())
+    });
+    std::fs::write(fixture.root().join("file.txt"), "changed").unwrap();
+    until(cx, |cx| {
+        cx.update(|_, cx| !app.view.read(cx).local_rows.is_empty())
+    });
+    let button = cx.debug_bounds("reload-control").unwrap();
+    cx.simulate_click(button.center(), gpui::Modifiers::default());
+    assert!(!cx.update(|_, cx| app.view.read(cx).config.watch));
+    until(cx, |cx| {
+        cx.update(|_, cx| app.view.read(cx).reload_selection.is_none())
+    });
+    assert_eq!(selected(&app.view, cx).as_deref(), Some(head.as_str()));
+    cx.simulate_keystrokes("alt-r");
+    assert!(cx.update(|_, cx| app.view.read(cx).config.watch));
+}
+
+#[gpui::test]
 fn keyboard_navigation_and_filter_focus(cx: &mut TestAppContext) {
     let fixture = Fixture::new();
     let older = fixture.commit("older needle");

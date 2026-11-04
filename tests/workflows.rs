@@ -130,6 +130,7 @@ fn history_selection_highlighting_and_copy_across_unloaded_lines() {
     assert!(snapshot.error.is_none());
     assert_eq!(snapshot.files[0].path, std::path::Path::new("main.rs"));
     assert_eq!(snapshot.files[0].added, Some(400));
+    assert_eq!((snapshot.added, snapshot.removed), (400, 0));
     assert!(snapshot.count > 400);
     assert!(snapshot.lines.len() < snapshot.count);
     let first = snapshot

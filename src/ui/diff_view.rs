@@ -35,6 +35,32 @@ struct PaintedLine {
     display: DisplayText,
 }
 
+fn file_label(path: String, counts: Option<(u64, u64)>, dark: bool) -> StyledText {
+    let Some((added, removed)) = counts else {
+        return StyledText::new(format!("{path} (binary)"));
+    };
+    let add = format!("+{added}");
+    let remove = format!("-{removed}");
+    let add_start = path.len() + 2;
+    let remove_start = add_start + add.len() + 1;
+    StyledText::new(format!("{path} ({add} {remove})")).with_highlights([
+        (
+            add_start..add_start + add.len(),
+            HighlightStyle {
+                color: Some(rgb(if dark { 0x6ddf6d } else { 0x1f7a1f }).into()),
+                ..Default::default()
+            },
+        ),
+        (
+            remove_start..remove_start + remove.len(),
+            HighlightStyle {
+                color: Some(rgb(if dark { 0xff7b72 } else { 0xb42318 }).into()),
+                ..Default::default()
+            },
+        ),
+    ])
+}
+
 // UniformList renders sizing samples as well as visible rows. Observe its actual
 // viewport separately so measurement never changes the active file or page.
 struct DiffViewport(Entity<DiffPane>);
@@ -603,23 +629,34 @@ impl Render for DiffPane {
                                             range
                                                 .map(|i| {
                                                     let (label, line) = if i == 0 {
-                                                        ("Commit".into(), Some(0))
+                                                        let counts = Some(
+                                                            this.snapshot
+                                                                .as_ref()
+                                                                .map_or((0, 0), |s| {
+                                                                    (s.added, s.removed)
+                                                                }),
+                                                        );
+                                                        (
+                                                            file_label(
+                                                                "Commit".into(),
+                                                                counts,
+                                                                this.settings.dark,
+                                                            ),
+                                                            Some(0),
+                                                        )
                                                     } else {
                                                         let file = &files[i - 1];
-                                                        let stats = match (file.added, file.removed)
-                                                        {
-                                                            (Some(a), Some(r)) => {
-                                                                format!("+{a} -{r}")
-                                                            }
-                                                            _ => "binary".into(),
-                                                        };
                                                         let path = file
                                                             .path
                                                             .to_string_lossy()
                                                             .escape_debug()
                                                             .to_string();
                                                         (
-                                                            format!("{path}  {stats}"),
+                                                            file_label(
+                                                                path,
+                                                                file.added.zip(file.removed),
+                                                                this.settings.dark,
+                                                            ),
                                                             file.start_line,
                                                         )
                                                     };

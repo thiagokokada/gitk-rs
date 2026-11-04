@@ -689,6 +689,11 @@ impl HistoryWindow {
         cx.notify();
     }
 
+    fn toggle_auto_reload(&mut self, cx: &mut Context<Self>) {
+        self.config.watch = !self.config.watch;
+        self.reload(cx);
+    }
+
     fn row(&mut self, index: usize, cx: &mut Context<Self>) -> AnyElement {
         if let Some(staged) = self.local_rows.get(index).copied() {
             let selected = self.local_selection == Some(staged);
@@ -698,7 +703,10 @@ impl HistoryWindow {
                 .is_some_and(|s| s.status.unmerged);
             return div()
                 .id(("local", index))
+                .w_full()
                 .h(px((self.preferences.font_size * 2.).max(26.)))
+                .flex()
+                .items_center()
                 .px_2()
                 .bg(rgb(match (self.config.theme, selected, staged) {
                     (Theme::Dark, true, _) => 0x285b8e,
@@ -817,11 +825,29 @@ impl HistoryWindow {
                     .child(graph)
                     .child(badges),
             )
-            .child(div().flex_1().min_w_0().truncate().px_2().child(format!(
-                "{}  {}",
-                &entry.commit.id.as_str()[..7],
-                entry.commit.summary()
-            )))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .px_2()
+                    .child(
+                        div()
+                            .w(px(self.preferences.font_size * 5.))
+                            .flex_shrink_0()
+                            .font_family(SharedString::from(self.preferences.fixed_font.clone()))
+                            .child(entry.commit.id.as_str()[..7].to_owned()),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .child(entry.commit.summary().to_owned()),
+                    ),
+            )
             .child(
                 div()
                     .w(px(280.))
@@ -1078,9 +1104,7 @@ impl Render for HistoryWindow {
                 }
             }))
             .on_action(cx.listener(|this, _: &ToggleWatch, _, cx| {
-                this.config.watch = !this.config.watch;
-                this.refresh_workspace();
-                cx.notify();
+                this.toggle_auto_reload(cx);
             }))
             .on_action(cx.listener(|this, _: &OpenRepository, _, cx| this.open_repository(cx)))
             .on_action(cx.listener(|this, _: &OpenRepositoryPath, window, cx| {
@@ -1213,6 +1237,7 @@ impl Render for HistoryWindow {
                     .child(
                         div()
                             .id("reload")
+                            .debug_selector(|| "reload-control".into())
                             .px_3()
                             .py_2()
                             .bg(rgb(panel))
@@ -1222,7 +1247,7 @@ impl Render for HistoryWindow {
                             } else {
                                 "Reload (Auto Off)"
                             })
-                            .on_click(cx.listener(|this, _, _, cx| this.reload(cx))),
+                            .on_click(cx.listener(|this, _, _, cx| this.toggle_auto_reload(cx))),
                     ),
             )
             .child(

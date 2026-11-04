@@ -98,6 +98,8 @@ pub struct DiffSnapshot {
     pub last_line_len: usize,
     pub max_width: usize,
     pub files: Arc<Vec<FileSection>>,
+    pub added: u64,
+    pub removed: u64,
     pub notice: Option<String>,
     pub error: Option<String>,
     pub highlighting: bool,
@@ -130,6 +132,8 @@ pub struct DiffDocument {
     files: Arc<Vec<FileSection>>,
     notice: Option<String>,
     max_width: usize,
+    added: u64,
+    removed: u64,
 }
 
 impl DiffDocument {
@@ -146,6 +150,12 @@ impl DiffDocument {
         let selection = &rooted;
         let commands = DiffCommands::new(selection, cancellation)?;
         let mut files = load_files(selection, &commands, cancellation)?;
+        let (added, removed) = files.iter().fold((0_u64, 0_u64), |(added, removed), file| {
+            (
+                added.saturating_add(file.added.unwrap_or(0)),
+                removed.saturating_add(file.removed.unwrap_or(0)),
+            )
+        });
         let mut output =
             BufWriter::new(tempfile::tempfile().context("create temporary diff document")?);
         let mut index = Vec::new();
@@ -267,6 +277,8 @@ impl DiffDocument {
             files: Arc::new(files),
             notice,
             max_width,
+            added,
+            removed,
         })
     }
 
@@ -314,6 +326,8 @@ impl DiffDocument {
             last_line_len: self.index.last().map_or(0, |line| line.len as usize),
             max_width: self.max_width,
             files: self.files.clone(),
+            added: self.added,
+            removed: self.removed,
             notice,
             error: None,
             highlighting: request.settings.syntax,
@@ -797,6 +811,8 @@ fn diff_error(page: &DiffPage, error: String) -> DiffSnapshot {
         last_line_len: 0,
         max_width: 0,
         files: Arc::new(Vec::new()),
+        added: 0,
+        removed: 0,
         notice: None,
         error: Some(error),
         highlighting: false,
