@@ -6,7 +6,9 @@ this old xattr release through its default features.
 
 The only source change is in src/sys/mod.rs: use libc::ENODATA on Linux/Android
 instead of libc::ENOATTR, an obsolete alias removed from newer libc versions.
-Other platforms retain their original constant. No runtime behavior changes:
+The platform condition also applies to the non-Linux constant, so macOS
+does not define it twice through the platform macro. Other platforms retain
+their original constant. No runtime behavior changes:
 Linux reports ENODATA when an attribute is absent.
 
 Remove this patch when the GPUI dependency chain accepts a current xattr release.

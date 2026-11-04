@@ -78,6 +78,7 @@ pub(super) fn open<'a>(
 
 // Git workers use real OS threads; GPUI tasks and debounce timers use its test clock.
 // Bound the external wait and advance the clock rather than sleeping for UI timers.
+#[track_caller]
 pub(super) fn until(
     cx: &mut VisualTestContext,
     mut ready: impl FnMut(&mut VisualTestContext) -> bool,
@@ -249,6 +250,7 @@ fn deep_reload_keeps_selected_commit_and_top_visible_commit(cx: &mut TestAppCont
     let top = cx.update(|_, cx| app.view.read(cx).cached(1800).unwrap().commit.id.clone());
     fixture.commit("new tip");
     cx.simulate_keystrokes("f5");
+    // Restoring the snapshot schedules a scroll; wait for layout to apply it.
     until(cx, |cx| {
         cx.update(|_, cx| {
             let view = app.view.read(cx);
@@ -257,6 +259,9 @@ fn deep_reload_keeps_selected_commit_and_top_visible_commit(cx: &mut TestAppCont
                     .snapshot
                     .as_ref()
                     .is_some_and(|s| s.generation == view.request.generation)
+                && view
+                    .cached(view.viewport.start)
+                    .is_some_and(|entry| entry.commit.id == top)
         })
     });
     assert_eq!(selected(&app.view, cx).as_deref(), Some(chosen.as_str()));
@@ -283,6 +288,9 @@ fn deep_reload_keeps_selected_commit_and_top_visible_commit(cx: &mut TestAppCont
             let view = app.view.read(cx);
             view.reload_selection.is_none()
                 && view.snapshot.as_ref().is_some_and(|s| s.branch == "side")
+                && view
+                    .cached(view.viewport.start)
+                    .is_some_and(|entry| entry.commit.id == top)
         })
     });
     assert_eq!(selected(&app.view, cx).as_deref(), Some(chosen.as_str()));
@@ -325,7 +333,11 @@ fn deep_reload_keeps_selected_commit_and_top_visible_commit(cx: &mut TestAppCont
     until(cx, |cx| {
         cx.update(|_, cx| {
             let view = app.view.read(cx);
-            view.request.generation != generation && view.reload_selection.is_none()
+            view.request.generation != generation
+                && view.reload_selection.is_none()
+                && view
+                    .cached(view.viewport.start)
+                    .is_some_and(|entry| entry.commit.id == top)
         })
     });
     assert_eq!(selected(&app.view, cx).as_deref(), Some(chosen.as_str()));

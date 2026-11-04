@@ -232,8 +232,10 @@ impl HistoryWindow {
                     .await;
                 if this
                     .update(cx, |this, cx| {
-                        this.consume_snapshot(cx);
+                        // Apply HEAD changes before accepting history so a second
+                        // reload cannot bookmark new rows with the old viewport.
                         this.consume_workspace(cx);
+                        this.consume_snapshot(cx);
                     })
                     .is_err()
                 {

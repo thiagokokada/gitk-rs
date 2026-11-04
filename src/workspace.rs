@@ -82,6 +82,16 @@ fn probe_status(root: &Path, cancel: &Cancellation) -> Result<(LocalStatus, u64,
     Ok((status, fingerprint.finish(), parents))
 }
 
+// HEAD and refs are read by separate Git commands. Include both observations so
+// a commit between those reads cannot suppress the next HEAD reconciliation.
+fn refs_fingerprint(repository: &Repository, refs: &[u8]) -> u64 {
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    refs.hash(&mut hash);
+    repository.branch.hash(&mut hash);
+    repository.head.hash(&mut hash);
+    hash.finish()
+}
+
 pub fn branches(root: &Path, cancel: &Cancellation) -> Result<Vec<String>> {
     let mut stream = GitStream::spawn(
         root,
@@ -138,6 +148,21 @@ mod tests {
         fixture.git(&["mv", "file.txt", "renamed\tλ"]);
         let status = local_status(fixture.root(), &cancel()).unwrap();
         assert!(status.staged && !status.unstaged);
+    }
+
+    #[test]
+    fn refs_fingerprint_reconciles_head_when_a_commit_races_the_probe() {
+        let fixture = Fixture::new();
+        fixture.commit("base");
+        let before = Repository::open(fixture.root(), &cancel()).unwrap();
+        fixture.commit("new tip");
+        let after = Repository::open(fixture.root(), &cancel()).unwrap();
+        let refs = run_bytes(fixture.root(), &["show-ref", "--head"], &cancel(), &[0]).unwrap();
+        // The first probe opened the old HEAD but read refs after the commit.
+        assert_ne!(
+            refs_fingerprint(&before, &refs),
+            refs_fingerprint(&after, &refs)
+        );
     }
 
     #[test]
@@ -258,7 +283,11 @@ mod tests {
             watch: false,
         });
         let switched = wait_snapshot(&handle, generation, refreshed.revision);
-        assert_eq!(switched.repository.unwrap().root, other.root());
+        // Git resolves symlinks, including macOS /tmp -> /private/tmp.
+        assert_eq!(
+            switched.repository.unwrap().root,
+            other.root().canonicalize().unwrap()
+        );
     }
 
     #[test]
@@ -530,9 +559,8 @@ fn workspace_worker(shared: Arc<WorkShared>) {
                 &[0, 1],
             )?;
             let mut hash = std::collections::hash_map::DefaultHasher::new();
-            refs.hash(&mut hash);
-            repository.branch.hash(&mut hash);
-            let refs_fingerprint = hash.finish();
+            let refs_fingerprint = refs_fingerprint(&repository, &refs);
+            refs_fingerprint.hash(&mut hash);
             fingerprint.hash(&mut hash);
             if let Some(watcher) = &mut watcher {
                 let base = [
