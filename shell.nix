@@ -6,6 +6,8 @@
   rustfmt,
   clippy,
   git,
+  python3,
+  ruff,
   gitk-rs,
 }:
 
@@ -18,6 +20,8 @@ mkShell {
     rustfmt
     clippy
     git
+    python3
+    ruff
   ];
   LD_LIBRARY_PATH = lib.makeLibraryPath gitk-rs.buildInputs;
 }
