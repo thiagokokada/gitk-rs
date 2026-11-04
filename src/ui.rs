@@ -7,7 +7,7 @@ mod diff_view;
 use gitk_rs::{
     cli::{Config, Theme},
     diff::{DiffEngine, DiffHandle, DiffSettings},
-    graph::{GraphRow, lane_spacing, text_graph},
+    graph::{GraphLayout, GraphRow, text_graph},
     history::{Entry, Generation, HistoryEngine, HistoryHandle, RefKind, Request, Snapshot},
     preferences::Preferences,
     timing::{Phase, Timing, TimingGuard},
@@ -86,9 +86,9 @@ impl UniformListDecoration for HistoryViewport {
         cx: &mut App,
     ) -> AnyElement {
         self.0.update(cx, |view, cx| {
-            let lanes = view.graph_lanes;
+            let layout = view.graph_layout.clone();
             view.ensure_rows(range);
-            if view.graph_lanes != lanes {
+            if view.graph_layout != layout {
                 cx.notify();
             }
         });
@@ -148,7 +148,9 @@ struct HistoryWindow {
     filter_task: Option<Task<()>>,
     preserve_filter_selection: bool,
     viewport: Range<usize>,
-    graph_lanes: u16,
+    graph_layout: GraphLayout,
+    graph_width: f32,
+    graph_resize: Option<(gpui::Pixels, f32)>,
 }
 
 impl HistoryWindow {
@@ -294,7 +296,9 @@ impl HistoryWindow {
             filter_task: None,
             preserve_filter_selection: false,
             viewport: 0..10,
-            graph_lanes: 1,
+            graph_layout: GraphLayout::default(),
+            graph_width: 280.,
+            graph_resize: None,
         }
     }
 
@@ -506,12 +510,12 @@ impl HistoryWindow {
     }
 
     fn ensure_rows(&mut self, range: Range<usize>) {
-        self.graph_lanes = range
+        let entries: Vec<_> = range
             .clone()
             .filter_map(|index| self.cached(index))
-            .map(|entry| entry.graph.width)
-            .max()
-            .unwrap_or(1);
+            .collect();
+        self.graph_layout =
+            GraphLayout::new(entries.iter().map(|entry| &entry.graph), self.graph_width);
         self.viewport = range.clone();
         let range = range.start.saturating_sub(self.local_rows.len())
             ..range.end.saturating_sub(self.local_rows.len());
@@ -679,9 +683,8 @@ impl HistoryWindow {
             .and_then(|s| s.refs.get(&entry.commit.id))
             .cloned()
             .unwrap_or_default();
-        let lane_step = lane_spacing(280., self.graph_lanes);
-        let text_limit = (((280. / (self.preferences.font_size * 0.65) - 4.) / 2.).floor()
-            as usize)
+        let text_limit = (((self.graph_width / (self.preferences.font_size * 0.65) - 4.) / 2.)
+            .floor() as usize)
             .clamp(1, 12);
         let graph_text = self
             .config
@@ -689,7 +692,7 @@ impl HistoryWindow {
             .then(|| text_graph(&entry.graph, text_limit));
         let width = graph_text
             .as_ref()
-            .map_or(entry.graph.width as f32 * lane_step + 16., |text| {
+            .map_or(self.graph_layout.width(), |text| {
                 text.chars().count() as f32 * self.preferences.font_size * 0.65 + 12.
             });
         let graph: AnyElement = if let Some(text) = graph_text {
@@ -699,12 +702,11 @@ impl HistoryWindow {
                 .into_any_element()
         } else {
             let graph = entry.graph.clone();
+            let layout = self.graph_layout.clone();
             let filtered = !self.request.query.trim().is_empty();
             canvas(
                 |_, _, _| (),
-                move |bounds, (), window, _| {
-                    paint_graph(&graph, filtered, lane_step, bounds, window)
-                },
+                move |bounds, (), window, _| paint_graph(&graph, filtered, &layout, bounds, window),
             )
             .size_full()
             .into_any_element()
@@ -742,7 +744,7 @@ impl HistoryWindow {
             .child(
                 div()
                     .relative()
-                    .w(px(280.))
+                    .w(px(self.graph_width))
                     .flex_shrink_0()
                     .h_full()
                     .overflow_hidden()
@@ -813,17 +815,35 @@ pub(crate) fn fixed_font() -> &'static str {
 fn paint_graph(
     graph: &GraphRow,
     filtered: bool,
-    lane_step: f32,
+    layout: &GraphLayout,
     bounds: Bounds<gpui::Pixels>,
     window: &mut Window,
 ) {
     let colors = [0x80bfff, 0x83d49b, 0xe5b978, 0xd49fe8, 0x73d5d1, 0xef9090];
-    let x = |lane: u16| bounds.left() + px(9. + lane as f32 * lane_step);
-    let radius = (lane_step * 0.4).clamp(0.7, 3.5);
-    let stroke = (lane_step * 0.6).clamp(0.5, 1.5);
+    let x = |lane: u16| bounds.left() + px(layout.x(lane));
+    let radius = (layout.spacing * 0.4).clamp(2., 3.5);
+    let stroke = 1.5;
     let middle = bounds.top() + bounds.size.height / 2.;
     if !filtered {
+        let mut folded = [false; 200];
         for edge in &graph.edges {
+            if layout.is_collapsed(edge.from) && layout.is_collapsed(edge.to) {
+                let column = layout.column(edge.from);
+                if !folded[column] {
+                    folded[column] = true;
+                    for part in 0..3 {
+                        let top = bounds.top() + bounds.size.height * (part as f32 / 3.);
+                        window.paint_quad(fill(
+                            Bounds::new(
+                                point(x(edge.from), top),
+                                size(px(1.), bounds.size.height / 6.),
+                            ),
+                            rgb(0x9298a3),
+                        ));
+                    }
+                }
+                continue;
+            }
             let mut path = PathBuilder::stroke(px(stroke));
             path.move_to(point(
                 x(edge.from),
@@ -831,7 +851,7 @@ fn paint_graph(
             ));
             path.line_to(point(x(edge.to), bounds.bottom()));
             if let Ok(path) = path.build() {
-                window.paint_path(path, rgb(colors[edge.from as usize % colors.len()]));
+                window.paint_path(path, rgb(colors[edge.color as usize % colors.len()]));
             }
         }
         if graph.incoming
@@ -841,7 +861,7 @@ fn paint_graph(
             path.move_to(point(x(node), bounds.top()));
             path.line_to(point(x(node), middle));
             if let Ok(path) = path.build() {
-                window.paint_path(path, rgb(colors[node as usize % colors.len()]));
+                window.paint_path(path, rgb(colors[graph.color as usize % colors.len()]));
             }
         }
     }
@@ -851,7 +871,7 @@ fn paint_graph(
                 point(x(node) - px(radius), middle - px(radius)),
                 size(px(radius * 2.), px(radius * 2.)),
             ),
-            rgb(colors[node as usize % colors.len()]),
+            rgb(colors[graph.color as usize % colors.len()]),
         );
         quad.corner_radii = px(radius).into();
         window.paint_quad(quad);
@@ -912,6 +932,16 @@ impl Render for HistoryWindow {
         });
         div()
             .relative()
+            .on_mouse_move(cx.listener(|this, event: &gpui::MouseMoveEvent, window, cx| {
+                if event.pressed_button == Some(gpui::MouseButton::Left)
+                    && let Some((start, width)) = this.graph_resize {
+                    let maximum = (f32::from(window.viewport_size().width) - 540.).clamp(160., 720.);
+                    this.graph_width = (width + f32::from(event.position.x - start)).clamp(160., maximum);
+                    this.ensure_rows(this.viewport.clone());
+                    cx.notify();
+                }
+            }))
+            .on_mouse_up(gpui::MouseButton::Left, cx.listener(|this, _, _, _| this.graph_resize = None))
             .track_focus(&self.focus)
             .key_context("GitHistory")
             .on_action(|_: &Quit, _, cx| cx.quit())
@@ -1151,10 +1181,18 @@ impl Render for HistoryWindow {
                                             .bg(rgb(border))
                                             .child(
                                                 div()
-                                                    .w(px(280.))
+                                                    .relative()
+                                                    .w(px(self.graph_width))
                                                     .flex_shrink_0()
                                                     .px_2()
-                                                    .child("Graph"),
+                                                    .child(if self.graph_layout.has_collapsed() { "Graph · … idle lanes" } else { "Graph" })
+                                                    .child(div().id("graph-divider").debug_selector(|| "graph-divider".into())
+                                                        .absolute().right_0().top_0().bottom_0().w(px(7.))
+                                                        .cursor_col_resize()
+                                                        .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, event: &gpui::MouseDownEvent, _, cx| {
+                                                            this.graph_resize = Some((event.position.x, this.graph_width));
+                                                            cx.stop_propagation();
+                                                        }))),
                                             )
                                             .child(div().flex_1().px_2().child("Commit"))
                                             .child(

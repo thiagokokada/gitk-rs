@@ -196,6 +196,30 @@ fn history_pages_settle_after_scrolling_beyond_the_first_page(cx: &mut TestAppCo
 }
 
 #[gpui::test]
+fn graph_column_can_be_resized_without_changing_selection(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let tip = fixture.commit("tip");
+    let (app, cx) = open(&fixture, cx);
+    until(cx, |cx| selected(&app.view, cx).as_deref() == Some(&tip));
+    let divider = cx.debug_bounds("graph-divider").unwrap();
+    let origin = divider.center();
+    cx.simulate_mouse_down(origin, gpui::MouseButton::Left, gpui::Modifiers::default());
+    cx.simulate_mouse_move(
+        origin + point(px(140.), px(0.)),
+        Some(gpui::MouseButton::Left),
+        gpui::Modifiers::default(),
+    );
+    cx.simulate_mouse_up(
+        origin + point(px(140.), px(0.)),
+        gpui::MouseButton::Left,
+        gpui::Modifiers::default(),
+    );
+    assert_eq!(cx.update(|_, cx| app.view.read(cx).graph_width), 420.);
+    assert_eq!(selected(&app.view, cx).as_deref(), Some(tip.as_str()));
+    assert!(cx.debug_bounds("graph-divider").unwrap().center().x > origin.x);
+}
+
+#[gpui::test]
 fn keyboard_navigation_and_filter_focus(cx: &mut TestAppContext) {
     let fixture = Fixture::new();
     let older = fixture.commit("older needle");
