@@ -672,8 +672,10 @@ impl Render for DiffPane {
                                                             format!("diff-file-{i}")
                                                         })
                                                         .h(px((this.font_size * 1.9).max(24.)))
+                                                        .w_full()
                                                         .px_2()
-                                                        .truncate()
+                                                        .flex()
+                                                        .items_center()
                                                         .cursor_pointer()
                                                         .when(
                                                             this.selected_file == Some(i),
@@ -685,7 +687,13 @@ impl Render for DiffPane {
                                                                 }))
                                                             },
                                                         )
-                                                        .child(label)
+                                                        .child(
+                                                            div()
+                                                                .flex_1()
+                                                                .min_w_0()
+                                                                .truncate()
+                                                                .child(label),
+                                                        )
                                                         .on_click(cx.listener(
                                                             move |this, _, _, cx| {
                                                                 if let Some(line) = line {
