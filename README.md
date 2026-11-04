@@ -17,25 +17,23 @@ A lightweight Git history explorer for Linux, written in Rust with
 
 ## Usage
 
-Requires Linux, Git and a Vulkan-capable graphics driver. With Nix and flakes
-enabled, run from this checkout:
+Requires Linux, Git and a Vulkan-capable graphics driver.
 
 ```sh
 # Browse the current repository
-nix run .
+./gitk-rs
 
 # Browse another repository
-nix run . -- ~/Projects/nixpkgs
+./gitk-rs ~/Projects/nixpkgs
 
 # Use the light theme
-nix run . -- --mode light ~/Projects/nixpkgs
+./gitk-rs --mode light ~/Projects/nixpkgs
 ```
 
 You can also build and run the executable directly:
 
 ```sh
-nix build
-./result/bin/gitk-rs /path/to/repository
+./gitk-rs /path/to/repository
 ```
 
 Use the arrow keys or j/k to select commits, / to filter, and Space/Backspace
@@ -45,13 +43,13 @@ and F5 reloads. Press F1 for all shortcuts.
 For command-line options or the supported language list:
 
 ```sh
-nix run . -- --help
-nix run . -- --list-languages
+./gitk-rs --help
+./gitk-rs --list-languages
 ```
 
 ## Development
 
-### Building without Nix
+### Building
 
 Install a current stable Rust toolchain with [rustup](https://rustup.rs/).
 On Ubuntu 24.04, install the native dependencies:
@@ -71,6 +69,15 @@ cargo build --release --locked
 ./target/release/gitk-rs /path/to/repository
 ```
 
+#### Nix
+
+Assuming that you have [Flakes](https://wiki.nixos.org/wiki/Flakes) enabled:
+
+```sh
+nix build
+./result/bin/gitk-rs /path/to/repository
+```
+
 ### Checks
 
 With the dependencies above installed, or after entering `nix develop`:
@@ -81,10 +88,7 @@ cargo clippy --all-targets --locked -- -D warnings
 cargo test --all-targets --locked
 ```
 
-Tests include unit tests, Git integration tests and GPUI interaction tests that
-run without a display. GitHub Actions checks both the Ubuntu Cargo build and the
-pinned Nix environment. Run `nix flake check` to check formatting and packaging.
-See [AGENTS.md](AGENTS.md) for contributor guidelines.
+Run `nix flake check` to check formatting and packaging.
 
 ## License
 
