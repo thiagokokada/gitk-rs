@@ -88,6 +88,4 @@ See [AGENTS.md](AGENTS.md) for contributor guidelines.
 
 ## License
 
-[MIT](LICENSE). Bundled grammar, theme and icon notices are in
-[assets/licenses](assets/licenses/README.md); `gitk-rs --licenses` prints the
-embedded grammar and theme acknowledgements.
+[MIT](LICENSE).

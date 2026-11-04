@@ -49,7 +49,6 @@
             buildInputs = deps.libraries;
             postInstall = ''
               mkdir -p $out/share/doc/gitk-rs
-              cp -r assets/licenses $out/share/doc/gitk-rs/
               cp LICENSE $out/share/doc/gitk-rs/
             '';
             postFixup = ''

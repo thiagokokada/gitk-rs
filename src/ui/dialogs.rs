@@ -186,7 +186,7 @@ impl HistoryWindow {
                 .child(self.operation_message.clone())
                 .child(Button::new("apply-preferences").label("Apply and save").on_click(cx.listener(|this, _, window, cx| this.apply_preferences(window, cx)))),
             Some(DialogKind::Help) => body = body.child("Arrows / j,k / n,p: select commit\nHome / End: first / last loaded\nCtrl+PageUp / PageDown: scroll history\nSpace: page diff down; Backspace / Delete / b: up\nu / d: scroll diff 18 lines\nDrag: select; Shift-click: extend; double-click: word\nCtrl+A in diff: select all; Ctrl+C: copy\nCtrl+Shift+C: copy without diff markers\n/: filter; Escape: leave filter / close dialog\nCtrl+O: open repository; Ctrl+B: local branches\nF5: reload; F1: help; Ctrl+Q: quit\nCtrl+,: fonts; Ctrl+Enter: apply preferences\nAlt+T: theme; Alt+R: automatic reload\nFilter Ctrl+A/E: start/end; B/F: character\nFilter Ctrl+W/U/K/D: delete word/start/end/forward"),
-            _ => body = body.child(format!("gitk-rs {}\nRust/GPUI port of gitk-go.\nMIT licensed. 213 offline syntaxes (syntect/two-face).\nUse --licenses for bundled grammar and theme notices.", env!("CARGO_PKG_VERSION"))),
+            _ => body = body.child(format!("gitk-rs {}\nRust/GPUI port of gitk-go.\nMIT licensed. 213 offline syntaxes (syntect/two-face).", env!("CARGO_PKG_VERSION"))),
         }
         body = body.child(
             div()

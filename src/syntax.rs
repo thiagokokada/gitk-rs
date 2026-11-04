@@ -93,18 +93,6 @@ pub fn inventory() -> String {
     output
 }
 
-pub fn licenses() -> String {
-    let listing = two_face::acknowledgement::listing();
-    let mut output = format!(
-        "# Bundled syntax/theme acknowledgements\n\nSource: {}\n\n",
-        two_face::acknowledgement::url()
-    );
-    for license in listing.for_syntaxes().iter().chain(listing.for_themes()) {
-        license.write_md(&mut output);
-    }
-    output
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

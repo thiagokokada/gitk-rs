@@ -1,20 +1,7 @@
-use std::{ffi::OsString, path::PathBuf};
+use clap::{Parser, ValueEnum};
+use std::{ffi::OsString, num::NonZeroUsize, path::PathBuf};
 
-pub const HELP: &str = "Usage: gitk-rs [--mode dark|light] [--timings] [--] [REPOSITORY]\n\
-    --help, -h       Show help\n\
-    --version, -V    Show version\n\
-    --mode MODE     Choose dark (default) or light appearance\n\n\
-    --timings       Report startup paint callbacks and bounded CPU frame samples\n\n\
-    --limit N       Maximum commits per background batch (default 1000)\n\
-    --graph-cols N  Visible graph lane cap, 1..200 (default 200)\n\
-    --text-graph    Use a text graph instead of canvas geometry\n\
-    --nosyntax      Disable syntax highlighting\n\
-    --list-languages List bundled languages and extensions\n\
-    --licenses      Print bundled grammar/theme license notices\n\
-    --nowatch       Disable automatic repository refresh\n\
-    --verbose       Report repository refreshes and operations";
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 pub enum Theme {
     Dark,
     Light,
@@ -49,105 +36,73 @@ impl Default for Config {
     }
 }
 
-fn positive(args: &mut impl Iterator<Item = OsString>, flag: &str) -> Result<usize, String> {
-    args.next()
-        .and_then(|arg| arg.to_str().and_then(|s| s.parse::<usize>().ok()))
-        .filter(|value| *value > 0)
-        .ok_or_else(|| format!("{flag} requires a positive integer"))
+#[derive(Debug, Parser)]
+#[command(name = "gitk-rs", version, about)]
+struct Args {
+    /// Git repository to browse
+    #[arg(default_value = ".")]
+    repository: PathBuf,
+
+    /// Choose dark or light appearance
+    #[arg(long, value_enum, default_value = "dark")]
+    mode: Theme,
+
+    /// Report startup paint callbacks and bounded CPU frame samples
+    #[arg(long)]
+    timings: bool,
+
+    /// Maximum commits per background batch
+    #[arg(long, value_name = "N", default_value = "1000")]
+    limit: NonZeroUsize,
+
+    /// Visible graph lane cap (1..200)
+    #[arg(long, value_name = "N", default_value = "200", value_parser = clap::value_parser!(u16).range(1..=200))]
+    graph_cols: u16,
+
+    /// Use a text graph instead of canvas geometry
+    #[arg(long)]
+    text_graph: bool,
+
+    /// Disable syntax highlighting
+    #[arg(long)]
+    nosyntax: bool,
+
+    /// List bundled languages and extensions
+    #[arg(long)]
+    list_languages: bool,
+
+    /// Disable automatic repository refresh
+    #[arg(long)]
+    nowatch: bool,
+
+    /// Report repository refreshes and operations
+    #[arg(long)]
+    verbose: bool,
 }
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Command {
     Open(Config),
-    Help,
-    Version,
     Languages,
-    Licenses,
 }
 
-/// Parse OS strings so repository paths need not be valid UTF-8.
-pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String> {
-    let mut args = args.into_iter();
-    let mut repository = None;
-    let mut theme = Theme::Dark;
-    let mut positional_only = false;
-    let mut timings = false;
-    let mut batch = 1000;
-    let mut graph_columns = 200;
-    let mut text_graph = false;
-    let mut syntax = true;
-    let mut watch = true;
-    let mut verbose = false;
-    while let Some(arg) = args.next() {
-        if !positional_only {
-            match arg.to_str() {
-                Some("--help" | "-h") => return Ok(Command::Help),
-                Some("--version" | "-V") => return Ok(Command::Version),
-                Some("--list-languages") => return Ok(Command::Languages),
-                Some("--licenses") => return Ok(Command::Licenses),
-                Some("--timings") => {
-                    timings = true;
-                    continue;
-                }
-                Some("--") => {
-                    positional_only = true;
-                    continue;
-                }
-                Some("--limit") => {
-                    batch = positive(&mut args, "--limit")?;
-                    continue;
-                }
-                Some("--graph-cols") => {
-                    graph_columns = positive(&mut args, "--graph-cols")?;
-                    if graph_columns > 200 {
-                        return Err("--graph-cols must be between 1 and 200".into());
-                    }
-                    continue;
-                }
-                Some("--nowatch") => {
-                    watch = false;
-                    continue;
-                }
-                Some("--verbose") => {
-                    verbose = true;
-                    continue;
-                }
-                Some("--nosyntax") => {
-                    syntax = false;
-                    continue;
-                }
-                Some("--text-graph") => {
-                    text_graph = true;
-                    continue;
-                }
-                Some("--mode") => {
-                    theme = match args.next().as_deref().and_then(|s| s.to_str()) {
-                        Some("dark") => Theme::Dark,
-                        Some("light") => Theme::Light,
-                        _ => return Err("--mode requires dark or light".into()),
-                    };
-                    continue;
-                }
-                Some(value) if value.starts_with('-') => {
-                    return Err(format!("unknown option: {value}"));
-                }
-                _ => {}
-            }
-        }
-        if repository.replace(PathBuf::from(arg)).is_some() {
-            return Err("expected at most one repository path".into());
-        }
+/// Parse arguments without argv[0], preserving non-UTF8 repository paths.
+/// Clap returns help and version output as successful-exit errors.
+pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, clap::Error> {
+    let args = Args::try_parse_from(std::iter::once(OsString::from("gitk-rs")).chain(args))?;
+    if args.list_languages {
+        return Ok(Command::Languages);
     }
     Ok(Command::Open(Config {
-        repository: repository.unwrap_or_else(|| PathBuf::from(".")),
-        theme,
-        timings,
-        batch,
-        graph_columns,
-        text_graph,
-        syntax,
-        watch,
-        verbose,
+        repository: args.repository,
+        theme: args.mode,
+        timings: args.timings,
+        batch: args.limit.get(),
+        graph_columns: usize::from(args.graph_cols),
+        text_graph: args.text_graph,
+        syntax: !args.nosyntax,
+        watch: !args.nowatch,
+        verbose: args.verbose,
     }))
 }
 
@@ -155,8 +110,14 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
 mod tests {
     use super::*;
 
+    #[test]
+    fn clap_definition_is_consistent() {
+        use clap::CommandFactory;
+        Args::command().debug_assert();
+    }
+
     fn command(args: &[&str]) -> Result<Command, String> {
-        parse(args.iter().map(OsString::from))
+        parse(args.iter().map(OsString::from)).map_err(|error| error.to_string())
     }
 
     #[test]
@@ -184,11 +145,59 @@ mod tests {
     #[test]
     fn syntax_controls_and_inventory_commands() {
         assert_eq!(command(&["--list-languages"]), Ok(Command::Languages));
-        assert_eq!(command(&["--licenses"]), Ok(Command::Licenses));
         let Command::Open(config) = command(&["--nosyntax"]).unwrap() else {
             panic!("expected config");
         };
         assert!(!config.syntax);
+    }
+
+    #[test]
+    fn parses_all_viewer_options_and_equals_syntax() {
+        assert_eq!(
+            command(&[
+                "repo with spaces",
+                "--mode=light",
+                "--limit=42",
+                "--graph-cols=1",
+                "--text-graph",
+                "--nosyntax",
+                "--nowatch",
+                "--timings",
+                "--verbose",
+            ]),
+            Ok(Command::Open(Config {
+                repository: "repo with spaces".into(),
+                theme: Theme::Light,
+                timings: true,
+                batch: 42,
+                graph_columns: 1,
+                text_graph: true,
+                syntax: false,
+                watch: false,
+                verbose: true,
+            }))
+        );
+    }
+
+    #[test]
+    fn validates_numeric_limits() {
+        for args in [
+            &["--limit"][..],
+            &["--limit", "0"],
+            &["--limit", "-1"],
+            &["--limit", "not-a-number"],
+            &["--limit", "999999999999999999999999999999"],
+            &["--graph-cols"],
+            &["--graph-cols", "0"],
+            &["--graph-cols", "201"],
+            &["--graph-cols", "65536"],
+        ] {
+            assert!(
+                command(args).is_err(),
+                "accepted invalid arguments: {args:?}"
+            );
+        }
+        assert!(command(&["--limit", "1", "--graph-cols", "200"]).is_ok());
     }
 
     #[test]
@@ -201,8 +210,14 @@ mod tests {
         ] {
             assert!(command(args).is_err());
         }
-        assert_eq!(command(&["--help"]), Ok(Command::Help));
-        assert_eq!(command(&["--version"]), Ok(Command::Version));
+        assert_eq!(
+            parse(["--help".into()]).unwrap_err().kind(),
+            clap::error::ErrorKind::DisplayHelp
+        );
+        assert_eq!(
+            parse(["--version".into()]).unwrap_err().kind(),
+            clap::error::ErrorKind::DisplayVersion
+        );
     }
 
     #[test]
@@ -224,13 +239,13 @@ mod tests {
         use std::os::unix::ffi::OsStringExt;
         let path = OsString::from_vec(b"repo-\xff".to_vec());
         assert_eq!(
-            parse([path.clone()]),
-            Ok(Command::Open(Config {
+            parse([path.clone()]).unwrap(),
+            Command::Open(Config {
                 repository: path.into(),
                 theme: Theme::Dark,
                 timings: false,
                 ..Config::default()
-            }))
+            })
         );
     }
 }
