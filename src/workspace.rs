@@ -179,6 +179,45 @@ mod tests {
     }
 
     #[test]
+    fn deleted_directories_watch_existing_ancestors_and_recover() {
+        let fixture = Fixture::new();
+        let directory = fixture.root().join("nested/deep");
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(directory.join("tracked.rs"), "base").unwrap();
+        fixture.git(&["add", "."]);
+        fixture.git(&["commit", "-qm", "nested file"]);
+        fs::remove_dir_all(fixture.root().join("nested")).unwrap();
+        let request = WorkspaceRequest {
+            generation: WorkspaceGeneration(1),
+            repository: fixture.root().into(),
+            watch: true,
+        };
+        let engine = WorkspaceEngine::spawn(request.clone());
+        let handle = engine.handle();
+        let deleted = wait_snapshot(&handle, request.generation, 0);
+        assert!(deleted.status.unstaged);
+        assert!(deleted.error.is_none());
+        assert!(
+            deleted.watcher_error.is_none(),
+            "{:?}",
+            deleted.watcher_error
+        );
+
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(directory.join("tracked.rs"), "edited").unwrap();
+        handle.configure(request.clone());
+        let recreated = wait_snapshot(&handle, request.generation, deleted.revision);
+        assert!(recreated.status.unstaged);
+        assert!(recreated.watcher_error.is_none());
+
+        fs::remove_dir_all(fixture.root().join("nested")).unwrap();
+        handle.configure(request.clone());
+        let deleted_again = wait_snapshot(&handle, request.generation, recreated.revision);
+        assert!(deleted_again.status.unstaged);
+        assert!(deleted_again.watcher_error.is_none());
+    }
+
+    #[test]
     fn watcher_coalesces_edits_and_manual_refresh_works_when_disabled() {
         let fixture = Fixture::new();
         fixture.commit("base");
@@ -502,7 +541,26 @@ fn workspace_worker(shared: Arc<WorkShared>) {
                     repository.common_dir.join("refs"),
                     repository.common_dir.join("refs/heads"),
                 ];
+                let mut desired = Vec::new();
                 for path in base.into_iter().chain(parents) {
+                    // Deleted tracked paths still appear in status. Watch their
+                    // nearest surviving directory so recreation is observable.
+                    if let Some(path) = path.ancestors().find(|path| path.is_dir())
+                        && !desired.iter().any(|existing| existing == path)
+                    {
+                        desired.push(path.to_owned());
+                    }
+                }
+                watched.retain(|path| {
+                    if desired.contains(path) {
+                        true
+                    } else {
+                        let _ = watcher.unwatch(path);
+                        false
+                    }
+                });
+                watcher_error = None;
+                for path in desired {
                     if watched.len() >= 136 || watched.contains(&path) {
                         continue;
                     }
@@ -517,6 +575,7 @@ fn workspace_worker(shared: Arc<WorkShared>) {
                     }
                 }
             }
+            watcher_error.hash(&mut hash);
             Ok((repository, status, hash.finish(), refs_fingerprint))
         })();
         if cancel.load(Ordering::Acquire) {

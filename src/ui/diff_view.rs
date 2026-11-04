@@ -511,6 +511,11 @@ impl Render for DiffPane {
                                                         .collect::<Vec<_>>()
                                                 }),
                                             )
+                                            // GPUI also renders this item for measurement.
+                                            // Keep it near the viewport so sizing cannot
+                                            // alternate requests between row zero and a
+                                            // distant page forever.
+                                            .with_width_from_item(Some(self.viewport.start))
                                             .track_scroll(self.scroll.clone())
                                             .with_horizontal_sizing_behavior(
                                                 ListHorizontalSizingBehavior::Unconstrained,

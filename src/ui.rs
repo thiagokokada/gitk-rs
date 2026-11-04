@@ -606,15 +606,26 @@ impl HistoryWindow {
                 .id(("local", index))
                 .h(px((self.preferences.font_size * 2.).max(26.)))
                 .px_2()
-                .bg(rgb(if selected { 0x285b8e } else { 0x344236 }))
-                .text_color(rgb(0xffffff))
+                .bg(rgb(match (self.config.theme, selected, staged) {
+                    (Theme::Dark, true, _) => 0x285b8e,
+                    (Theme::Light, true, _) => 0xcfe7ff,
+                    (Theme::Dark, false, false) => 0x4a1f23,
+                    (Theme::Light, false, false) => 0xfde2e1,
+                    (Theme::Dark, false, true) => 0x1f3b2a,
+                    (Theme::Light, false, true) => 0xe2f7e1,
+                }))
+                .text_color(rgb(if self.config.theme == Theme::Dark {
+                    0xffffff
+                } else {
+                    0x202329
+                }))
                 .cursor_pointer()
                 .child(if staged {
-                    "●  Staged changes"
+                    "●  Local changes checked into index but not committed"
                 } else if unmerged {
                     "●  Unstaged changes (merge conflicts)"
                 } else {
-                    "●  Unstaged and untracked changes"
+                    "●  Local uncommitted changes, not checked in to index"
                 })
                 .on_click(cx.listener(move |this, _, window, cx| this.select(index, window, cx)))
                 .into_any_element();
