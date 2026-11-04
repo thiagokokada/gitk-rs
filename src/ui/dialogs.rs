@@ -53,6 +53,8 @@ impl HistoryWindow {
         self.selected = None;
         self.local_selection = None;
         self.reload_selection = None;
+        self.request.restore = None;
+        self.snapshot = None;
         self.dialog = None;
         self.restore_focus = true;
         self.reload(cx);
@@ -170,8 +172,7 @@ impl HistoryWindow {
         body = body.child(div().text_size(px(18.)).child(title));
         match self.dialog {
             Some(DialogKind::Branches) => {
-                body = body.child("Git preserves ordinary checkout protections. Unsaved changes are never stashed or discarded automatically.")
-                    .child(Input::new(&self.branch_filter)).child(uniform_list("branches", self.filtered_branches.len(), cx.processor(|this, range: Range<usize>, _, cx| {
+                body = body.child(Input::new(&self.branch_filter)).child(uniform_list("branches", self.filtered_branches.len(), cx.processor(|this, range: Range<usize>, _, cx| {
                         range.map(|i| div().id(("branch", i)).h(px((this.preferences.font_size * 2.).max(26.))).px_2().bg(rgb(if i == this.branch_index { 0x285b8e } else if this.config.theme == Theme::Dark { 0x292d35 } else { 0xffffff }))
                             .when(i == this.branch_index, |row| row.text_color(rgb(0xffffff))).child(this.branches[this.filtered_branches[i]].clone()).cursor_pointer()
                             .on_click(cx.listener(move |this, _, _, cx| this.switch_branch(i, cx)))).collect::<Vec<_>>()

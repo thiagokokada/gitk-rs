@@ -2,6 +2,90 @@ use crate::ui::tests::{Fixture, open, until};
 use gpui::{Modifiers, TestAppContext, point, px};
 
 #[gpui::test]
+fn ref_refresh_preserves_local_diff_page_and_text_selection(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    fixture.commit("base");
+    let source: String = (0..600)
+        .map(|i| format!("let value_{i} = {i};\n"))
+        .collect();
+    std::fs::write(fixture.root().join("untracked.rs"), source).unwrap();
+    let (app, cx) = open(&fixture, cx);
+    let pane = cx.update(|_, cx| app.view.read(cx).diff.clone());
+    until(cx, |cx| {
+        cx.update(|_, cx| !app.view.read(cx).local_rows.is_empty())
+    });
+    cx.simulate_keystrokes("home");
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            pane.read(cx)
+                .snapshot
+                .as_ref()
+                .is_some_and(|s| s.count > 600)
+        })
+    });
+    pane.update(cx, |pane, cx| pane.jump(400, cx));
+    until(cx, |cx| {
+        cx.update(|_, cx| pane.read(cx).viewport.start >= 400)
+    });
+    cx.update(|window, cx| pane.read(cx).focus.focus(window));
+    cx.simulate_keystrokes("ctrl-a");
+    let selection = cx.update(|_, cx| pane.read(cx).selection.unwrap().ordered());
+    let identity = cx.update(|_, cx| pane.read(cx).page.selection);
+    let revision = cx.update(|_, cx| {
+        app.view
+            .read(cx)
+            .workspace_snapshot
+            .as_ref()
+            .unwrap()
+            .revision
+    });
+    fixture.git(&["branch", "new-label"]);
+    app.view.update(cx, |view, _| view.refresh_workspace());
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            app.view
+                .read(cx)
+                .workspace_snapshot
+                .as_ref()
+                .unwrap()
+                .revision
+                > revision
+        })
+    });
+    assert_eq!(cx.update(|_, cx| pane.read(cx).page.selection), identity);
+    assert!(cx.update(|_, cx| pane.read(cx).viewport.start >= 400));
+    assert_eq!(
+        cx.update(|_, cx| pane.read(cx).selection.unwrap().ordered()),
+        selection
+    );
+}
+
+#[gpui::test]
+fn removing_the_selected_local_row_returns_to_a_commit(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let head = fixture.commit("base");
+    std::fs::write(fixture.root().join("file.txt"), "edited").unwrap();
+    let (app, cx) = open(&fixture, cx);
+    until(cx, |cx| {
+        cx.update(|_, cx| !app.view.read(cx).local_rows.is_empty())
+    });
+    cx.simulate_keystrokes("home");
+    assert!(cx.update(|_, cx| app.view.read(cx).local_selection == Some(false)));
+    std::fs::write(fixture.root().join("file.txt"), "base").unwrap();
+    app.view.update(cx, |view, _| view.refresh_workspace());
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            let view = app.view.read(cx);
+            view.local_rows.is_empty()
+                && view
+                    .selected
+                    .as_ref()
+                    .is_some_and(|s| s.1.commit.id.as_str() == head)
+        })
+    });
+}
+
+#[gpui::test]
 fn file_scrollbar_reaches_and_selects_offscreen_files(cx: &mut TestAppContext) {
     let fixture = Fixture::new();
     for i in 0..80 {
@@ -123,11 +207,36 @@ fn file_click_and_copy_use_the_full_diff_not_just_visible_rows(cx: &mut TestAppC
         cx.update(|_, cx| pane.read(cx).selected_file == Some(1))
     });
     cx.update(|window, cx| app.view.read(cx).focus.focus(window));
+    let identity = cx.update(|_, cx| pane.read(cx).page.selection);
+    let generation = cx.update(|_, cx| app.view.read(cx).request.generation);
     cx.simulate_keystrokes("f5");
     until(cx, |cx| {
         cx.update(|_, cx| {
+            let view = app.view.read(cx);
+            view.request.generation != generation && view.reload_selection.is_none()
+        })
+    });
+    assert_eq!(cx.update(|_, cx| pane.read(cx).selected_file), Some(1));
+    assert_eq!(cx.update(|_, cx| pane.read(cx).page.selection), identity);
+    let next = fixture.commit("new commit");
+    cx.simulate_keystrokes("f5");
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            app.view
+                .read(cx)
+                .snapshot
+                .as_ref()
+                .is_some_and(|s| s.rows.first().is_some_and(|e| e.commit.id.as_str() == next))
+        })
+    });
+    cx.simulate_keystrokes("home");
+    until(cx, |cx| {
+        cx.update(|_, cx| {
             let pane = pane.read(cx);
-            pane.selected_file == Some(0) && pane.snapshot.is_some()
+            pane.selected_file == Some(0)
+                && pane.snapshot.as_ref().is_some_and(|s| {
+                    s.files.len() == 1 && s.files[0].path == std::path::Path::new("file.txt")
+                })
         })
     });
 }

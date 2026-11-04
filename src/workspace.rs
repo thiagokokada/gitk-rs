@@ -307,6 +307,7 @@ pub struct WorkspaceSnapshot {
     pub generation: WorkspaceGeneration,
     pub revision: u64,
     pub refs_fingerprint: u64,
+    pub status_fingerprint: u64,
     pub repository: Option<Repository>,
     pub status: LocalStatus,
     pub error: Option<String>,
@@ -576,13 +577,19 @@ fn workspace_worker(shared: Arc<WorkShared>) {
                 }
             }
             watcher_error.hash(&mut hash);
-            Ok((repository, status, hash.finish(), refs_fingerprint))
+            Ok((
+                repository,
+                status,
+                hash.finish(),
+                refs_fingerprint,
+                fingerprint,
+            ))
         })();
         if cancel.load(Ordering::Acquire) {
             continue;
         }
         let snapshot = match result {
-            Ok((repository, status, fingerprint, refs_fingerprint)) => {
+            Ok((repository, status, fingerprint, refs_fingerprint, status_fingerprint)) => {
                 if previous == Some(fingerprint) && !force {
                     continue;
                 }
@@ -592,6 +599,7 @@ fn workspace_worker(shared: Arc<WorkShared>) {
                     generation: request.generation,
                     revision,
                     refs_fingerprint,
+                    status_fingerprint,
                     repository: Some(repository),
                     status,
                     error: None,
@@ -602,6 +610,7 @@ fn workspace_worker(shared: Arc<WorkShared>) {
                 generation: request.generation,
                 revision,
                 refs_fingerprint: 0,
+                status_fingerprint: 0,
                 repository: None,
                 status: LocalStatus::default(),
                 error: Some(format!("{error:#}")),

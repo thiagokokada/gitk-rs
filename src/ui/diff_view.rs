@@ -56,13 +56,19 @@ impl UniformListDecoration for DiffViewport {
     }
 }
 
+#[derive(PartialEq, Eq)]
+enum DiffIdentity {
+    Commit(PathBuf, gitk_rs::git::CommitId),
+    Local(PathBuf, bool, u64),
+}
+
 pub(super) struct DiffPane {
     handle: DiffHandle,
     focus: FocusHandle,
     settings: DiffSettings,
     font: SharedString,
     font_size: f32,
-    identity: Option<(String, u64)>,
+    identity: Option<DiffIdentity>,
     page: DiffPage,
     snapshot: Option<DiffSnapshot>,
     message: String,
@@ -165,10 +171,9 @@ impl DiffPane {
         &mut self,
         repository: PathBuf,
         commit: Arc<Commit>,
-        generation: u64,
         cx: &mut Context<Self>,
     ) {
-        let identity = (commit.id.as_str().to_owned(), generation);
+        let identity = DiffIdentity::Commit(repository.clone(), commit.id.clone());
         if self.identity.as_ref() == Some(&identity) {
             return;
         }
@@ -191,10 +196,7 @@ impl DiffPane {
         revision: u64,
         cx: &mut Context<Self>,
     ) {
-        let identity = (
-            if staged { "staged" } else { "unstaged" }.to_owned(),
-            revision,
-        );
+        let identity = DiffIdentity::Local(repository.clone(), staged, revision);
         if self.identity.as_ref() == Some(&identity) {
             return;
         }

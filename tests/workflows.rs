@@ -8,7 +8,7 @@ use gitk_rs::{
         CopyRequest, DiffEngine, DiffPage, DiffSelection, DiffSettings, DiffSource, LineKind,
         SelectionId, TextPoint, TextSelection,
     },
-    history::{Generation, HistoryEngine, Request},
+    history::{Generation, HistoryEngine, Request, Restore},
     workspace::{Operation, WorkspaceEngine, WorkspaceGeneration, WorkspaceRequest},
 };
 use std::{
@@ -20,6 +20,46 @@ use std::{
     time::{Duration, Instant},
 };
 use test_support::Fixture;
+
+#[test]
+fn restoration_uses_commit_ids_and_handles_unreachable_branch_commits() {
+    let fixture = Fixture::new();
+    let root = fixture.commit("root");
+    let tip = fixture.commit("main tip");
+    fixture.git(&["checkout", "-qb", "side", &root]);
+    let side = fixture.commit("side only");
+    fixture.git(&["checkout", "-q", "main"]);
+    let mut request = history_request(&fixture);
+    request.restore = Some(Restore {
+        selected: Some(gitk_rs::git::CommitId::parse(&root).unwrap()),
+        top: Some(gitk_rs::git::CommitId::parse(&tip).unwrap()),
+    });
+    let engine = HistoryEngine::spawn(request.clone());
+    let handle = engine.handle();
+    let restored = wait(|| {
+        handle
+            .take_snapshot()
+            .and_then(|s| s.restored)
+            .filter(|r| !r.pending)
+    });
+    let (position, entry) = restored.selected.unwrap();
+    assert_eq!(position, 1);
+    assert_eq!(entry.commit.id.as_str(), root);
+    assert_eq!(restored.top, Some(0));
+    request.id += 1;
+    request.restore.as_mut().unwrap().selected =
+        Some(gitk_rs::git::CommitId::parse(&side).unwrap());
+    handle.request(request.clone());
+    let restored = wait(|| {
+        handle
+            .take_snapshot()
+            .filter(|s| s.request_id == request.id)
+            .and_then(|s| s.restored)
+            .filter(|r| !r.pending)
+    });
+    assert!(restored.selected.is_none());
+    assert_eq!(restored.top, Some(0));
+}
 
 fn wait<T>(mut poll: impl FnMut() -> Option<T>) -> T {
     let deadline = Instant::now() + Duration::from_secs(10);
@@ -46,6 +86,7 @@ fn history_request(fixture: &Fixture) -> Request {
         batch: 7,
         graph_columns: 200,
         anchor: None,
+        restore: None,
     }
 }
 fn diff_page(id: u64) -> DiffPage {

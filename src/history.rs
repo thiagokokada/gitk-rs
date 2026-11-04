@@ -1,7 +1,7 @@
 //! Go-style streamed history. Loaded entries live once in memory. The GUI receives
 //! only nearby Arc references; neither history nor filter results persist on disk.
 use crate::{
-    git::{Cancellation, Commit, CommitId, GitStream, Repository},
+    git::{Cancellation, Commit, CommitId, GitStream, Repository, run_bytes},
     graph::{GraphBuilder, GraphRow},
 };
 use anyhow::{Result, ensure};
@@ -33,6 +33,20 @@ pub struct Request {
     pub batch: usize,
     pub graph_columns: usize,
     pub anchor: Option<usize>,
+    pub restore: Option<Restore>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Restore {
+    pub selected: Option<CommitId>,
+    pub top: Option<CommitId>,
+}
+
+#[derive(Clone, Debug)]
+pub struct Restored {
+    pub selected: Option<(usize, Arc<Entry>)>,
+    pub top: Option<usize>,
+    pub pending: bool,
 }
 
 #[derive(Debug)]
@@ -71,6 +85,7 @@ pub struct Snapshot {
     pub refs: Arc<Refs>,
     pub error: Option<String>,
     pub anchor_position: Option<usize>,
+    pub restored: Option<Restored>,
 }
 
 struct SharedState {
@@ -255,6 +270,7 @@ fn empty_snapshot(request: &Request, error: Option<String>) -> Snapshot {
         refs: Arc::new(Refs::new()),
         error,
         anchor_position: None,
+        restored: None,
     }
 }
 
@@ -271,6 +287,9 @@ struct Session {
     query: String,
     matches: Vec<usize>,
     scanned: usize,
+    restore: Option<Restore>,
+    restore_ordinals: [Option<usize>; 2],
+    restore_reachable: [bool; 2],
 }
 
 impl Session {
@@ -295,10 +314,40 @@ impl Session {
             query: String::new(),
             matches: Vec::new(),
             scanned: 0,
+            restore: None,
+            restore_ordinals: [None; 2],
+            restore_reachable: [false; 2],
         })
     }
 
     fn step(&mut self, request: &Request) -> Result<bool> {
+        if self.restore != request.restore {
+            self.restore = request.restore.clone();
+            self.restore_ordinals = [None; 2];
+            self.restore_reachable = [false; 2];
+            if let Some(restore) = &self.restore {
+                for (index, target) in [&restore.selected, &restore.top].into_iter().enumerate() {
+                    if let Some(target) = target {
+                        self.restore_ordinals[index] =
+                            self.entries.iter().position(|e| &e.commit.id == target);
+                        // Avoid streaming an unrelated branch to EOF just to find
+                        // a bookmark which is no longer reachable from HEAD.
+                        self.restore_reachable[index] = self.restore_ordinals[index].is_some()
+                            || run_bytes(
+                                &self.repository.root,
+                                &["merge-base", "--all", target.as_str(), "HEAD"],
+                                &self.cancellation,
+                                &[0, 1, 128],
+                            )
+                            .is_ok_and(|bytes| {
+                                bytes
+                                    .split(|b| *b == b'\n')
+                                    .any(|id| id == target.as_str().as_bytes())
+                            });
+                    }
+                }
+            }
+        }
         let query = request.query.trim().to_lowercase();
         if self.query != query {
             self.query = query;
@@ -338,6 +387,10 @@ impl Session {
             .div_ceil(batch)
             .saturating_mul(batch);
         let visible = self.visible_count();
+        if self.restore_pending() {
+            self.load(batch, usize::MAX)?;
+            return Ok(true);
+        }
         if !self.eof && visible < needed {
             self.load(batch, needed)?;
             return Ok(true);
@@ -367,6 +420,13 @@ impl Session {
             bytes += commit.memory_bytes();
             let graph = self.graph.push(&commit);
             let ordinal = self.entries.len();
+            if let Some(restore) = &self.restore {
+                for (index, target) in [&restore.selected, &restore.top].into_iter().enumerate() {
+                    if target.as_ref() == Some(&commit.id) {
+                        self.restore_ordinals[index] = Some(ordinal);
+                    }
+                }
+            }
             if !self.query.is_empty() && commit.searchable_text().contains(&self.query) {
                 self.matches.push(ordinal);
             }
@@ -383,10 +443,41 @@ impl Session {
         Ok(())
     }
 
+    fn restore_pending(&self) -> bool {
+        !self.eof && (0..2).any(|i| self.restore_reachable[i] && self.restore_ordinals[i].is_none())
+    }
+
+    fn visible_position(&self, ordinal: usize) -> Option<usize> {
+        if self.query.is_empty() {
+            Some(ordinal)
+        } else {
+            self.matches.binary_search(&ordinal).ok()
+        }
+    }
+
     fn snapshot(&self, request: &Request) -> Snapshot {
         let visible = self.visible_count();
-        let start = request.range.start.min(visible);
-        let end = request.range.end.min(start + PAGE_ROWS).min(visible);
+        let restored = self.restore.as_ref().map(|_| Restored {
+            selected: self.restore_ordinals[0].and_then(|ordinal| {
+                self.visible_position(ordinal)
+                    .map(|position| (position, self.entries[ordinal].clone()))
+            }),
+            top: self.restore_ordinals[1].and_then(|ordinal| self.visible_position(ordinal)),
+            pending: self.restore_pending()
+                || !self.query.is_empty() && self.scanned < self.entries.len(),
+        });
+        let range = if let Some(restored) = restored.as_ref().filter(|r| !r.pending) {
+            let top = restored
+                .top
+                .or_else(|| restored.selected.as_ref().map(|s| s.0))
+                .unwrap_or(0);
+            let start = (top / 128).saturating_sub(1) * 128;
+            start..start + PAGE_ROWS
+        } else {
+            request.range.clone()
+        };
+        let start = range.start.min(visible);
+        let end = range.end.min(start + PAGE_ROWS).min(visible);
         let rows = (start..end)
             .map(|i| {
                 let ordinal = if self.query.is_empty() {
@@ -416,6 +507,7 @@ impl Session {
                     self.matches.binary_search(&ordinal).ok()
                 }
             }),
+            restored,
         }
     }
 }
@@ -485,6 +577,7 @@ mod tests {
             batch: 1000,
             graph_columns: 200,
             anchor: None,
+            restore: None,
         }
     }
 

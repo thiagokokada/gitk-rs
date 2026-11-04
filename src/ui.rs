@@ -8,7 +8,10 @@ use gitk_rs::{
     cli::{Config, Theme},
     diff::{DiffEngine, DiffHandle, DiffSettings},
     graph::{GraphLayout, GraphRow, text_graph},
-    history::{Entry, Generation, HistoryEngine, HistoryHandle, RefKind, Request, Snapshot},
+    history::{
+        Entry, Generation, HistoryEngine, HistoryHandle, RefKind, Request,
+        Restore as HistoryRestore, Snapshot,
+    },
     preferences::Preferences,
     timing::{Phase, Timing, TimingGuard},
     workspace::{
@@ -210,7 +213,10 @@ impl HistoryWindow {
                         this.request.query = query;
                         this.request.range = 0..128;
                         this.pending_selection = None;
-                        this.preserve_filter_selection = true;
+                        this.preserve_filter_selection = this.local_selection.is_none();
+                        if let Some(restore) = &mut this.request.restore {
+                            restore.top = None;
+                        }
                         this.detail = "Filtering commits…".into();
                         this.submit();
                         this.scroll.scroll_to_item(0, ScrollStrategy::Top);
@@ -316,6 +322,11 @@ impl HistoryWindow {
         {
             return;
         }
+        if snapshot.error.is_none() && snapshot.restored.as_ref().is_some_and(|r| r.pending) {
+            // Keep the current viewport until its commit IDs have been located.
+            // Publishing the partial row count here would clamp a deep scroll.
+            return;
+        }
         if self.config.verbose {
             eprintln!(
                 "gitk-rs: history generation={} branch={} loaded={} visible={}",
@@ -339,26 +350,43 @@ impl HistoryWindow {
             self.diff
                 .update(cx, |diff, cx| diff.clear(&self.detail, cx));
         }
-        if let Some(id) = &self.reload_selection {
-            if let Some(offset) = snapshot
-                .rows
-                .iter()
-                .position(|entry| &entry.commit.id == id)
-            {
-                self.pending_selection = Some(snapshot.start + offset + self.local_rows.len());
-                self.reload_selection = None;
-            } else if snapshot.eof {
-                self.reload_selection = None;
-            }
-        }
+        let restoring = self.request.restore.is_some();
+        let restored = snapshot.restored.clone();
         self.snapshot = Some(snapshot);
+        if restoring {
+            self.request.restore = None;
+            self.reload_selection = None;
+            self.preserve_filter_selection = false;
+            self.pending_selection = None;
+            if let Some((index, entry)) = restored.as_ref().and_then(|r| r.selected.clone()) {
+                self.set_selection(index + self.local_rows.len(), entry, cx);
+            } else {
+                self.selected = None;
+                self.pending_selection = Some(self.local_rows.len());
+            }
+            let top = restored
+                .as_ref()
+                .and_then(|r| r.top)
+                .or_else(|| {
+                    self.selected
+                        .as_ref()
+                        .map(|s| s.0.saturating_sub(self.local_rows.len()))
+                })
+                .unwrap_or(0);
+            self.scroll
+                .scroll_to_item_strict(top + self.local_rows.len(), ScrollStrategy::Top);
+            let start = self.snapshot.as_ref().unwrap().start;
+            self.request.range = start..start + 512;
+            self.submit();
+        }
         if self.preserve_filter_selection {
             let snapshot = self.snapshot.as_ref().unwrap();
             if let Some(index) = snapshot.anchor_position
                 && let Some((_, entry)) = &self.selected
             {
                 self.set_selection(index + self.local_rows.len(), entry.clone(), cx);
-                self.scroll.scroll_to_item(index, ScrollStrategy::Center);
+                self.scroll
+                    .scroll_to_item(index + self.local_rows.len(), ScrollStrategy::Center);
                 self.preserve_filter_selection = false;
             } else if !snapshot.filtering && snapshot.visible > 0 {
                 self.selected = None;
@@ -439,6 +467,7 @@ impl HistoryWindow {
             .zip(snapshot.repository.as_ref())
             .is_some_and(|(old, new)| old.head != new.head || old.branch != new.branch);
         let old_count = self.local_rows.len();
+        let old_top = self.viewport.start;
         self.local_rows.clear();
         if snapshot.status.unstaged {
             self.local_rows.push(false);
@@ -452,19 +481,30 @@ impl HistoryWindow {
         if let Some(index) = &mut self.pending_selection {
             *index = index.saturating_sub(old_count) + self.local_rows.len();
         }
+        if old_count != self.local_rows.len() && old_top > old_count {
+            self.scroll.scroll_to_item_strict(
+                old_top - old_count + self.local_rows.len(),
+                ScrollStrategy::Top,
+            );
+        }
         if let Some(staged) = self.local_selection {
             if self.local_rows.contains(&staged) {
                 self.diff.update(cx, |diff, cx| {
                     diff.load_local(
                         self.config.repository.clone(),
                         staged,
-                        snapshot.revision,
+                        snapshot.status_fingerprint,
                         cx,
                     )
                 });
             } else {
                 self.local_selection = None;
-                self.pending_selection = Some(0);
+                let index = self.local_rows.len();
+                if let Some(entry) = self.cached(index) {
+                    self.set_selection(index, entry, cx);
+                } else {
+                    self.pending_selection = Some(index);
+                }
             }
         }
         if let Some(error) = &snapshot.error {
@@ -491,7 +531,10 @@ impl HistoryWindow {
         self.selected = None;
         self.local_selection = Some(staged);
         self.pending_selection = None;
-        let revision = self.workspace_snapshot.as_ref().map_or(0, |s| s.revision);
+        let revision = self
+            .workspace_snapshot
+            .as_ref()
+            .map_or(0, |s| s.status_fingerprint);
         self.diff.update(cx, |diff, cx| {
             diff.load_local(self.config.repository.clone(), staged, revision, cx)
         });
@@ -517,6 +560,9 @@ impl HistoryWindow {
         self.graph_layout =
             GraphLayout::new(entries.iter().map(|entry| &entry.graph), self.graph_width);
         self.viewport = range.clone();
+        if self.request.restore.is_some() {
+            return;
+        }
         let range = range.start.saturating_sub(self.local_rows.len())
             ..range.end.saturating_sub(self.local_rows.len());
         if range.is_empty() {
@@ -549,7 +595,6 @@ impl HistoryWindow {
             diff.load(
                 self.config.repository.clone(),
                 Arc::new(entry.commit.clone()),
-                self.request.generation.0,
                 cx,
             )
         });
@@ -563,7 +608,10 @@ impl HistoryWindow {
             self.selected = None;
             self.local_selection = Some(staged);
             self.pending_selection = None;
-            let revision = self.workspace_snapshot.as_ref().map_or(0, |s| s.revision);
+            let revision = self
+                .workspace_snapshot
+                .as_ref()
+                .map_or(0, |s| s.status_fingerprint);
             self.diff.update(cx, |diff, cx| {
                 diff.load_local(self.config.repository.clone(), staged, revision, cx)
             });
@@ -572,6 +620,18 @@ impl HistoryWindow {
         } else {
             self.pending_selection = Some(index);
             self.ensure_rows(index..index + 1);
+        }
+        if self.request.restore.is_some() {
+            if let Some((_, entry)) = &self.selected {
+                self.request.restore.as_mut().unwrap().selected = Some(entry.commit.id.clone());
+                self.reload_selection = Some(entry.commit.id.clone());
+            } else {
+                self.request.restore = None;
+                self.reload_selection = None;
+            }
+            self.submit();
+        } else if self.preserve_filter_selection {
+            self.submit();
         }
         self.scroll.scroll_to_item(index, ScrollStrategy::Center);
         cx.notify();
@@ -598,28 +658,34 @@ impl HistoryWindow {
 
     fn reload(&mut self, cx: &mut Context<Self>) {
         self.request.repository = self.config.repository.clone();
-        let index = self
-            .selected
+        let index = self.viewport.start.saturating_sub(self.local_rows.len());
+        let selected = self.selected.as_ref().map(|s| s.1.commit.id.clone());
+        let top = self
+            .cached(self.viewport.start)
+            .map(|e| e.commit.id.clone());
+        self.reload_selection = selected.clone().or(top.clone());
+        self.request.restore = self
+            .reload_selection
             .as_ref()
-            .map_or(0, |s| s.0.saturating_sub(self.local_rows.len()));
-        self.reload_selection = self.selected.as_ref().map(|s| s.1.commit.id.clone());
+            .map(|_| HistoryRestore { selected, top });
         self.request.generation.0 += 1;
         let start = (index / 128).saturating_sub(1) * 128;
         self.request.range = start..start + 512;
-        self.snapshot = None;
-        self.selected = None;
-        self.pending_selection = self
-            .local_selection
-            .is_none()
-            .then_some(index + self.local_rows.len());
+        self.pending_selection = None;
+        if self.request.restore.is_none() {
+            self.snapshot = None;
+            self.selected = None;
+            self.pending_selection = self
+                .local_selection
+                .is_none()
+                .then_some(self.local_rows.len());
+            self.diff
+                .update(cx, |diff, cx| diff.clear("Loading commits…", cx));
+        }
         self.preserve_filter_selection = false;
         self.detail = "Loading commits…".into();
-        self.diff
-            .update(cx, |diff, cx| diff.clear("Loading commits…", cx));
         self.submit();
         self.refresh_workspace();
-        self.scroll
-            .scroll_to_item(index + self.local_rows.len(), ScrollStrategy::Center);
         cx.notify();
     }
 
@@ -1105,10 +1171,6 @@ impl Render for HistoryWindow {
                                 move |menu, _, _| {
                                     menu.action_context(focus.clone())
                                         .menu("Open repository…", Box::new(OpenRepository))
-                                        .menu(
-                                            "Open repository by path…",
-                                            Box::new(OpenRepositoryPath),
-                                        )
                                         .menu("Switch local branch…", Box::new(OpenBranches))
                                         .menu("Reload", Box::new(Reload))
                                         .menu_with_check(
@@ -1398,6 +1460,7 @@ pub fn run(config: Config, launched: Instant) {
         batch: config.batch,
         graph_columns: config.graph_columns,
         anchor: None,
+        restore: None,
     };
     let engine = HistoryEngine::spawn(request.clone());
     let history = engine.handle();

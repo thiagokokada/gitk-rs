@@ -30,6 +30,7 @@ pub(super) fn open<'a>(
         batch: config.batch,
         graph_columns: config.graph_columns,
         anchor: None,
+        restore: None,
     };
     let history = HistoryEngine::spawn(request.clone());
     let workspace = WorkspaceEngine::spawn(WorkspaceRequest {
@@ -108,15 +109,14 @@ fn selected(view: &Entity<HistoryWindow>, cx: &mut VisualTestContext) -> Option<
     })
 }
 
-#[gpui::test]
-fn history_pages_settle_after_scrolling_beyond_the_first_page(cx: &mut TestAppContext) {
+fn history_fixture(count: usize) -> Fixture {
     use std::{
         io::Write,
         process::{Command, Stdio},
     };
     let fixture = Fixture::new();
     let mut input = String::new();
-    for i in 1..=2500 {
+    for i in 1..=count {
         let message = format!("commit {i}");
         input.push_str(&format!("commit refs/heads/main\nmark :{i}\ncommitter Fixture <fixture@example.test> {} +0000\ndata {}\n{message}\n", 1700000000 + i, message.len()));
         if i > 1 {
@@ -147,6 +147,12 @@ fn history_pages_settle_after_scrolling_beyond_the_first_page(cx: &mut TestAppCo
         "{}",
         String::from_utf8_lossy(&result.stderr)
     );
+    fixture
+}
+
+#[gpui::test]
+fn history_pages_settle_after_scrolling_beyond_the_first_page(cx: &mut TestAppContext) {
+    let fixture = history_fixture(2500);
     let (app, cx) = open(&fixture, cx);
     until(cx, |cx| {
         cx.update(|_, cx| {
@@ -193,6 +199,213 @@ fn history_pages_settle_after_scrolling_beyond_the_first_page(cx: &mut TestAppCo
             assert_eq!(cx.update(|_, cx| app.view.read(cx).request.id), request);
         }
     }
+}
+
+#[gpui::test]
+fn deep_reload_keeps_selected_commit_and_top_visible_commit(cx: &mut TestAppContext) {
+    let fixture = history_fixture(2500);
+    let (app, cx) = open(&fixture, cx);
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            app.view
+                .read(cx)
+                .snapshot
+                .as_ref()
+                .is_some_and(|s| s.loaded >= 1000)
+        })
+    });
+    app.view.update(cx, |view, cx| {
+        view.scroll.scroll_to_item_strict(800, ScrollStrategy::Top);
+        cx.notify();
+    });
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            app.view
+                .read(cx)
+                .snapshot
+                .as_ref()
+                .is_some_and(|s| s.loaded >= 2000)
+        })
+    });
+    app.view.update(cx, |view, cx| {
+        view.scroll.scroll_to_item_strict(1600, ScrollStrategy::Top);
+        cx.notify();
+    });
+    until(cx, |cx| {
+        cx.update(|_, cx| app.view.read(cx).cached(1600).is_some())
+    });
+    app.view
+        .update_in(cx, |view, window, cx| view.select(1620, window, cx));
+    let chosen = selected(&app.view, cx).unwrap();
+    app.view.update(cx, |view, cx| {
+        view.scroll.scroll_to_item_strict(1800, ScrollStrategy::Top);
+        cx.notify();
+    });
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            app.view.read(cx).viewport.start == 1800 && app.view.read(cx).cached(1800).is_some()
+        })
+    });
+    let top = cx.update(|_, cx| app.view.read(cx).cached(1800).unwrap().commit.id.clone());
+    fixture.commit("new tip");
+    cx.simulate_keystrokes("f5");
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            let view = app.view.read(cx);
+            view.reload_selection.is_none()
+                && view
+                    .snapshot
+                    .as_ref()
+                    .is_some_and(|s| s.generation == view.request.generation)
+        })
+    });
+    assert_eq!(selected(&app.view, cx).as_deref(), Some(chosen.as_str()));
+    assert_eq!(
+        cx.update(|_, cx| {
+            let view = app.view.read(cx);
+            view.cached(view.viewport.start)
+                .map(|e| e.commit.id.clone())
+        }),
+        Some(top.clone())
+    );
+    // Branch switching and watcher-driven HEAD changes use the same bookmarks.
+    fixture.git(&["checkout", "-qb", "side"]);
+    fixture.commit("side tip");
+    fixture.git(&["checkout", "-q", "main"]);
+    cx.simulate_keystrokes("ctrl-b");
+    until(cx, |cx| {
+        cx.update(|_, cx| !app.view.read(cx).branches.is_empty())
+    });
+    cx.simulate_input("side");
+    cx.simulate_keystrokes("enter");
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            let view = app.view.read(cx);
+            view.reload_selection.is_none()
+                && view.snapshot.as_ref().is_some_and(|s| s.branch == "side")
+        })
+    });
+    assert_eq!(selected(&app.view, cx).as_deref(), Some(chosen.as_str()));
+    assert_eq!(
+        cx.update(|_, cx| {
+            let view = app.view.read(cx);
+            view.cached(view.viewport.start).unwrap().commit.id.clone()
+        }),
+        top
+    );
+    let top = cx.update(|_, cx| {
+        let view = app.view.read(cx);
+        view.cached(view.viewport.start).unwrap().commit.id.clone()
+    });
+    let generation = cx.update(|_, cx| app.view.read(cx).request.generation);
+    let revision = cx.update(|_, cx| {
+        app.view
+            .read(cx)
+            .workspace_snapshot
+            .as_ref()
+            .unwrap()
+            .revision
+    });
+    app.view.update(cx, |view, _| {
+        view.config.watch = true;
+        view.refresh_workspace();
+    });
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            app.view
+                .read(cx)
+                .workspace_snapshot
+                .as_ref()
+                .unwrap()
+                .revision
+                > revision
+        })
+    });
+    fixture.commit("automatic tip");
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            let view = app.view.read(cx);
+            view.request.generation != generation && view.reload_selection.is_none()
+        })
+    });
+    assert_eq!(selected(&app.view, cx).as_deref(), Some(chosen.as_str()));
+    assert_eq!(
+        cx.update(|_, cx| {
+            let view = app.view.read(cx);
+            view.cached(view.viewport.start).unwrap().commit.id.clone()
+        }),
+        top
+    );
+}
+
+#[gpui::test]
+fn filtering_and_new_local_rows_preserve_commit_identity(cx: &mut TestAppContext) {
+    let fixture = history_fixture(2500);
+    let (app, cx) = open(&fixture, cx);
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            app.view
+                .read(cx)
+                .snapshot
+                .as_ref()
+                .is_some_and(|s| s.loaded >= 1000)
+        })
+    });
+    app.view.update(cx, |view, cx| {
+        view.scroll.scroll_to_item_strict(800, ScrollStrategy::Top);
+        cx.notify();
+    });
+    until(cx, |cx| {
+        cx.update(|_, cx| app.view.read(cx).cached(850).is_some())
+    });
+    app.view
+        .update_in(cx, |view, window, cx| view.select(850, window, cx));
+    let chosen = selected(&app.view, cx).unwrap();
+    cx.simulate_keystrokes("/");
+    cx.simulate_input("commit 16");
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            let view = app.view.read(cx);
+            !view.preserve_filter_selection
+                && view.snapshot.as_ref().is_some_and(|s| s.visible < 200)
+        })
+    });
+    assert_eq!(selected(&app.view, cx).as_deref(), Some(chosen.as_str()));
+    cx.simulate_keystrokes("escape");
+    let top = cx.update(|_, cx| {
+        let view = app.view.read(cx);
+        view.cached(view.viewport.start).unwrap().commit.id.clone()
+    });
+    std::fs::write(fixture.root().join("untracked"), "local").unwrap();
+    app.view.update(cx, |view, _| view.refresh_workspace());
+    until(cx, |cx| {
+        cx.update(|_, cx| app.view.read(cx).local_rows.len() == 1)
+    });
+    assert_eq!(
+        cx.update(|_, cx| {
+            let view = app.view.read(cx);
+            view.cached(view.viewport.start).unwrap().commit.id.clone()
+        }),
+        top
+    );
+    cx.simulate_keystrokes("/ ctrl-a ctrl-k escape");
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            let view = app.view.read(cx);
+            view.request.query.is_empty()
+                && !view.preserve_filter_selection
+                && view
+                    .selected
+                    .as_ref()
+                    .is_some_and(|s| view.cached(s.0).is_some())
+        })
+    });
+    assert_eq!(selected(&app.view, cx).as_deref(), Some(chosen.as_str()));
+    cx.update(|_, cx| {
+        let view = app.view.read(cx);
+        let selected = view.selected.as_ref().unwrap();
+        assert_eq!(selected.0, selected.1.ordinal + 1);
+    });
 }
 
 #[gpui::test]
