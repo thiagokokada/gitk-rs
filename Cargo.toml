@@ -28,6 +28,9 @@ gpui = { version = "=0.2.2", default-features = false, features = ["font-kit"] }
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.29", features = ["signal", "process"] }
 
+[dev-dependencies]
+gpui = { version = "=0.2.2", default-features = false, features = ["test-support"] }
+
 [profile.release]
 debug = "line-tables-only"
 

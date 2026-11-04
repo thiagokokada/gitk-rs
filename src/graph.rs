@@ -18,6 +18,40 @@ pub struct GraphRow {
     pub overflow: bool,
 }
 
+/// Fit the visible frontier inside its column. One shared spacing must be used
+/// for every visible row so edges meet across row boundaries.
+pub fn lane_spacing(available_width: f32, lanes: u16) -> f32 {
+    ((available_width - 18.).max(0.) / lanes.max(1) as f32).min(12.)
+}
+
+/// A bounded text fallback centered on the current node, with explicit markers
+/// for lanes outside the column or beyond the graph frontier cap.
+pub fn text_graph(row: &GraphRow, limit: usize) -> String {
+    let count = row.width as usize;
+    let limit = limit.clamp(1, 32);
+    let node = row.node.map_or(0, usize::from);
+    let start = node
+        .saturating_sub(limit / 2)
+        .min(count.saturating_sub(limit));
+    let end = (start + limit).min(count);
+    let mut text = if start > 0 {
+        "… ".to_owned()
+    } else {
+        String::new()
+    };
+    for lane in start..end {
+        text.push_str(if row.node == Some(lane as u16) {
+            "● "
+        } else {
+            "│ "
+        });
+    }
+    if end < count || row.overflow {
+        text.push('…');
+    }
+    text
+}
+
 pub struct GraphBuilder {
     lanes: Vec<CommitId>,
     limit: usize,
@@ -132,5 +166,29 @@ mod tests {
         assert!(row.overflow);
         assert!(builder.lanes.len() <= 2);
         assert!(row.edges.iter().all(|e| e.from < 2 && e.to < 2));
+    }
+    #[test]
+    fn wide_frontiers_fit_and_small_frontiers_keep_normal_spacing() {
+        assert_eq!(lane_spacing(280., 3), 12.);
+        for lanes in [24, 100, 200] {
+            let spacing = lane_spacing(280., lanes);
+            assert!(9. + (lanes - 1) as f32 * spacing + 3.5 < 280.);
+        }
+    }
+    #[test]
+    fn text_fallback_keeps_wide_nodes_and_continuations_visible() {
+        let mut row = GraphRow {
+            node: Some(150),
+            width: 200,
+            ..GraphRow::default()
+        };
+        let text = text_graph(&row, 12);
+        assert!(text.contains('●'));
+        assert!(text.starts_with('…') && text.ends_with('…'));
+        assert!(text.chars().count() <= 28);
+        row.width = 2;
+        row.node = Some(1);
+        row.overflow = true;
+        assert_eq!(text_graph(&row, 12), "│ ● …");
     }
 }

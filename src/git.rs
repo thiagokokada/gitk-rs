@@ -164,7 +164,7 @@ fn trim_newline(bytes: &[u8]) -> &[u8] {
     bytes.strip_suffix(b"\n").unwrap_or(bytes)
 }
 
-fn command_path(root: &Path, args: &[&str], cancel: &Cancellation) -> Result<PathBuf> {
+pub(crate) fn command_path(root: &Path, args: &[&str], cancel: &Cancellation) -> Result<PathBuf> {
     let bytes = run_bytes(root, args, cancel, &[0])?;
     #[cfg(unix)]
     {
@@ -553,5 +553,62 @@ mod tests {
         cancel.store(true, Ordering::Release);
         assert!(receiver.recv_timeout(Duration::from_secs(3)).unwrap());
         worker.join().unwrap();
+    }
+    #[test]
+    fn linked_worktree_resolves_its_common_directory_and_history() {
+        let fixture = Fixture::new();
+        fixture.commit("first");
+        fixture.commit("second");
+        let linked = tempfile::tempdir().unwrap();
+        fixture.git(&[
+            "worktree",
+            "add",
+            "--quiet",
+            "-b",
+            "linked",
+            linked.path().to_str().unwrap(),
+        ]);
+        let cancel = Arc::new(AtomicBool::new(false));
+        let repository = Repository::open(linked.path(), &cancel).unwrap();
+        assert_eq!(
+            repository.common_dir,
+            fixture.root().join(".git").canonicalize().unwrap()
+        );
+        assert_ne!(repository.git_dir, repository.common_dir);
+        assert_eq!(repository.branch, "linked");
+        assert_eq!(
+            repository
+                .log(cancel)
+                .unwrap()
+                .next_commit()
+                .unwrap()
+                .unwrap()
+                .summary(),
+            "second"
+        );
+    }
+
+    #[test]
+    fn shallow_clone_streams_a_complete_boundary_commit() {
+        let fixture = Fixture::new();
+        fixture.commit("first");
+        fixture.commit("second");
+        let clone = tempfile::tempdir().unwrap();
+        fixture.git(&[
+            "clone",
+            "--quiet",
+            "--no-local",
+            "--depth",
+            "1",
+            fixture.root().to_str().unwrap(),
+            clone.path().to_str().unwrap(),
+        ]);
+        let cancel = Arc::new(AtomicBool::new(false));
+        let repository = Repository::open(clone.path(), &cancel).unwrap();
+        let mut stream = repository.log(cancel).unwrap();
+        let commit = stream.next_commit().unwrap().unwrap();
+        assert_eq!(commit.summary(), "second");
+        assert!(commit.parents.is_empty());
+        assert!(stream.next_commit().unwrap().is_none());
     }
 }

@@ -204,19 +204,22 @@ switch failures preserve worktree contents and an actionable current view.
 
 ### 6. Release acceptance
 
-- [ ] Screenshot/layout comparison at matching dimensions and scale.
-- [ ] Routine checks and real Wayland/X11 smoke tests pass.
-- [ ] nixpkgs responsiveness smoke check; record readily available startup and
+- [x] Screenshot/layout comparison at matching dimensions and scale.
+- [x] Routine checks and real Wayland/X11 smoke tests pass.
+- [x] nixpkgs responsiveness smoke check; record readily available startup and
   memory observations, and track measured bottlenecks for later optimization.
-- [ ] Compare with Go on identical hardware/revision/workload and record results.
-- [ ] Document remaining functional limitations and optimization opportunities;
+- [x] Compare with Go on identical hardware/revision/workload and record results.
+- [x] Document remaining functional limitations and optimization opportunities;
   missing functional parity blocks v1, aspirational timing/RSS misses do not.
 
 ## Validation protocol
 
-Prioritize functional tests, GUI correctness and completing the workflows. Run
-formatting, Clippy, relevant tests, Nix checks and Wayland/X11 smoke checks at
-milestones. Use small deterministic repositories for routine coverage and a local
+Prioritize functional tests, GUI correctness and completing the workflows. Protect
+fixes with a mix of pure unit tests, public-service integration workflows under
+tests/ using real temporary Git repositories, and headless GPUI view/input tests
+for focus/controller behavior. Standard cargo test --all-targets runs all Rust
+targets without a display; native desktop smoke checks stay explicitly opt-in. Run formatting, Clippy, relevant tests, Nix checks and Wayland/X11 smoke
+checks at milestones. Use small deterministic repositories for routine coverage and a local
 nixpkgs smoke check to catch obvious responsiveness or memory mistakes.
 
 The earlier numbers (roughly 500 ms first usable history, 16.7 ms steady frame
@@ -525,3 +528,87 @@ missing libvulkan.so.1, as expected for an unwrapped development binary. Repeati
 inside the pinned shell passes; the installed wrapper passes outside it. No host
 library or permission settings were changed. Milestone 5 is complete. Continue to
 release acceptance, same-machine reference observations and remaining limitations.
+
+### 2026-11-04: release acceptance in progress
+
+Workflow milestone commit: dccd6ac. Added checked-in own-window GUI and release
+observation scripts, comparison screenshots and docs/VALIDATION.md. The scripts
+use isolated temporary repositories/config/cache locations; native input is guarded
+by window focus, and the comparison probe verifies XRes client ownership before
+resizing/capturing windows. This matters because the Go window lacks _NET_WM_PID.
+
+Release inspection added fixtures for linked worktrees, shallow clones and
+conflicted diff navigation, and isolated test hooks/fsmonitor. It also found a
+wide-frontier display issue: canvas lanes now fit using shared visible-row spacing;
+the bounded text fallback keeps its current node and continuation indicators in
+view, respecting the chosen fixed font. Concurrent native picker requests are
+bounded to one. Thirty-seven tests, formatting, Clippy and the development build
+pass; final clean Nix and installed-runtime checks are in progress.
+
+Two short, matched-size X11 observations on the same nixpkgs HEAD and 192 loaded
+commits recorded roughly 76-82 MiB Rust application RSS versus 50-54 MiB Go RSS.
+Sampled child-process memory was recorded separately. These are first-view smoke
+observations, not full-history memory retention or presentation benchmarks; timing
+events differ between applications. See docs/VALIDATION.md and raw records for
+methodology, source/store revisions, cache conditions and limits. Performance
+numbers remain aspirations, not release gates.
+
+Release regression follow-up: the GUI script now asserts that a selected ancestor
+stays selected after switching branches. Removed a duplicate HEAD-change reload
+that could replace the pending selection. Horizontal diff extent now accounts for
+expanded tabs so tab-heavy line endings remain reachable; its regression brings
+the suite to thirty-eight tests. All tests, formatting, Clippy and the executable
+build pass. A clean package recheck of these final fixes is running.
+
+
+Testing follow-up requested by the user: added tests/workflows.rs as a separate
+Cargo integration target. Its four public-service workflows cover history demand
+and progressive filtering/repository generations, history-to-highlighted-diff and
+copy across unloaded lines, protected branch/status operations through the worker,
+and repository opening from a subdirectory. The subdirectory test first failed
+with "root-level untracked file is missing"; anchoring diff commands at Git's
+discovered root fixes it. All 38 library tests and all 4 integration workflows
+now pass with DISPLAY and WAYLAND_DISPLAY removed (42 total). The optional GUI
+script additionally asserts selected-ancestor preservation after branch switching.
+AGENTS.md now requires this layered regression approach for future behavior fixes.
+
+
+### 2026-11-04: code-driven GPUI regression coverage
+
+Verified the pinned GPUI 0.2.2 test-support API and enabled it only as a development
+dependency. Four #[gpui::test] tests now construct the actual Root/HistoryWindow
+and DiffPane on TestAppContext/VisualTestContext, sharing production key bindings.
+They drive navigation and filter editing, rejected/successful branch switching
+with selected-ancestor preservation, repository path input with restored focus,
+and a file-list mouse click followed by full-diff clipboard copies across unloaded
+lines (including expanded tabs). No Python, xdotool, display server or GPU is
+required. Git work runs through real workers against isolated temporary fixtures;
+UI timers use GPUI's virtual clock with bounded waits for external worker results.
+
+Formatting, strict Clippy and cargo test --all-targets --locked pass with DISPLAY
+and WAYLAND_DISPLAY unset: 38 library, 4 public-service and 4 GPUI tests (46 total).
+Python tools remain optional native-backend smoke/measurement tools. AGENTS.md and
+validation documentation now require headless GPUI coverage for controller/focus
+regressions. Clean Nix package verification is in progress.
+
+### 2026-11-04: release acceptance complete
+
+All milestone 6 acceptance checks pass. Clean nix flake check validates formatting
+and the package, with all 46 Rust tests passing inside the Nix build as well as
+in the display-free development run. Package build log:
+/tmp/gitk-rs-gpui-package.log. The tested installed output is
+/nix/store/zfpwsazjbljw8n87h69xq0nx34ps8y40-gitk-rs-0.1.0; nix build of the checked
+derivation links it as result. Subsequent source edits only finalize these docs.
+
+The installed wrapper stays alive for eight seconds each on real Wayland and X11,
+with no startup failure. The separate native X11 fixture workflow passes and exits
+cleanly; its screenshots/log are in /tmp/gitk-rs-gpui-release-native. Version and
+213-language inventory commands pass. No native picker automation, native Wayland
+input coverage, macOS/aarch64 execution, pixel-level headless rendering assertion
+or million-commit retention benchmark is claimed. These verification boundaries
+and functional resource caps are documented in docs/VALIDATION.md.
+
+Matched-size Go/Rust screenshots, source/store revisions, same-machine nixpkgs
+observations and remaining optimization opportunities are documented. Performance
+observations are not release gates. The first Linux release is ready to run with
+nix run -- /path/to/repository; all planned milestones are complete.

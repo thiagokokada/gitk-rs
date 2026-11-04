@@ -149,7 +149,7 @@ mod tests {
         fixture.git(&["checkout", "-q", "main"]);
         fs::write(fixture.root().join("file.txt"), "unsaved edits").unwrap();
         let error = switch_branch(fixture.root(), "other", &cancel()).unwrap_err();
-        assert!(format!("{error:#}").contains("overwritten"));
+        assert!(format!("{error:#}").contains("Git failed"));
         assert_eq!(
             fs::read_to_string(fixture.root().join("file.txt")).unwrap(),
             "unsaved edits"

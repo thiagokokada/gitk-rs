@@ -9,7 +9,9 @@ criteria and [AGENTS.md](AGENTS.md) for contributor instructions.
 **Status:** the Linux viewer includes streamed history, graph/ref labels, filtering,
 selectable highlighted diffs, local staged/unstaged/untracked changes, protected
 branch switching, repository opening, automatic refresh, themes and saved font
-preferences. Release acceptance is tracked in PLAN.md.
+preferences. See the [validation report](docs/VALIDATION.md) for evidence, screenshots and limits.
+
+![Linux viewer on nixpkgs](docs/screenshots/gitk-rs.png)
 
 ## Development
 
@@ -24,6 +26,11 @@ cargo test --all-targets --locked
 cargo clippy --all-targets -- -D warnings
 cargo run -- --mode dark /path/to/repository
 ```
+
+Normal `cargo test --all-targets` runs library tests and the real-Git integration
+workflows in tests/workflows.rs, plus code-driven GPUI view/input tests, without a
+display. Optional scripts check native desktop backends; see the
+[test layers and commands](docs/VALIDATION.md#regression-test-layers).
 
 Cargo.lock and flake.lock pin the dependency graph and Nix environment. Verify
 packaging with:
@@ -82,7 +89,8 @@ transitive archive dependency on current libc releases.
 and a bounded recent-sample CPU render-to-paint p95 on graceful exit. Its writer
 runs off the UI thread. These measurements exclude process-loader time and do not
 measure compositor presentation or GPU execution. HistoryPainted and
-SelectionPainted are first CPU paint callbacks with those views populated.
+SelectionPainted indicate history data and a selected history row respectively;
+they do not time completion of diff highlighting.
 
 For a small read-only backend smoke check without opening a window:
 

@@ -75,7 +75,7 @@
           package = self.packages.${system}.default;
           format = pkgs.runCommand "gitk-rs-format" { nativeBuildInputs = [ pkgs.rustfmt ]; } ''
             cd ${source}
-            find src examples -name '*.rs' -print0 | xargs -0 rustfmt --edition 2024 --check
+            find src examples tests -name '*.rs' -print0 | xargs -0 rustfmt --edition 2024 --check
             touch $out
           '';
         });

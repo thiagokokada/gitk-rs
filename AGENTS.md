@@ -54,9 +54,12 @@ without waiting for confirmation. Stop only when user input is actually required
   - nix develop --command cargo test --all-targets --locked
   - nix build
   - nix flake check
-- Add meaningful tests for parsing, batching, state transitions, cancellation, and
-  failure handling. Use small deterministic Git fixtures in normal checks; keep
-  million-commit benchmarks opt-in. Smoke-test real Wayland and X11 separately.
+- Protect behavior fixes with regression tests at the useful boundaries: pure
+  unit tests for algorithms/parsing, tests/ workflows for real Git and worker
+  integration, and headless GPUI tests for view, input and focus interactions.
+- cargo test --all-targets must run all Rust tests, including GPUI, headlessly.
+  Use deterministic temporary Git fixtures; keep native desktop smoke and million-
+  commit benchmarks opt-in. Smoke-test real Wayland and X11 separately.
 - Run checks relevant to the increment. Documentation-only changes need link,
   checklist, consistency, and ASCII checks, not application tests.
 - Keep AGENTS.md ASCII-only and concise. Document observed sandbox, network, build,

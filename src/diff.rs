@@ -1,7 +1,7 @@
 //! Temporary, line-addressable diffs. Git/IO/highlighting live on a worker; no
 //! commit-history database or persistent parsing cache is created.
 use crate::{
-    git::{Cancellation, Commit, GitStream},
+    git::{Cancellation, Commit, GitStream, command_path},
     syntax::{CodeHighlighter, Span},
 };
 use anyhow::{Context, Result, bail, ensure};
@@ -134,6 +134,16 @@ pub struct DiffDocument {
 
 impl DiffDocument {
     pub fn load(selection: &DiffSelection, cancellation: &Cancellation) -> Result<Self> {
+        // Git's untracked enumeration is relative to its working directory.
+        // Resolve once so a repository opened through a subdirectory still shows
+        // all files and uses repository-relative paths throughout this document.
+        let mut rooted = selection.clone();
+        rooted.repository = command_path(
+            &selection.repository,
+            &["rev-parse", "--show-toplevel"],
+            cancellation,
+        )?;
+        let selection = &rooted;
         let commands = DiffCommands::new(selection, cancellation)?;
         let mut files = load_files(selection, &commands, cancellation)?;
         let mut output =
@@ -153,7 +163,7 @@ impl DiffDocument {
             ),
         };
         for line in header.split_terminator('\n') {
-            max_width = max_width.max(line.len().min(MAX_DISPLAY_BYTES));
+            max_width = max_width.max(display_width_bound(line));
             write_line(
                 &mut output,
                 &mut index,
@@ -216,7 +226,7 @@ impl DiffDocument {
                         Some("Diff preview is limited to 256 MiB or one million lines.".into());
                     break;
                 }
-                max_width = max_width.max(line.len().min(MAX_DISPLAY_BYTES));
+                max_width = max_width.max(display_width_bound(&line));
                 write_line(
                     &mut output,
                     &mut index,
@@ -418,6 +428,13 @@ impl DiffDocument {
         }
         Ok(result)
     }
+}
+
+fn display_width_bound(line: &str) -> usize {
+    let prefix = &line[..line.floor_char_boundary(MAX_DISPLAY_BYTES)];
+    // Tabs expand to at most four cells. Counting UTF-8 bytes for other text
+    // deliberately overestimates width rather than hiding the end of a line.
+    prefix.len() + 3 * prefix.bytes().filter(|byte| *byte == b'\t').count()
 }
 
 fn write_line(
@@ -1101,6 +1118,56 @@ mod tests {
         let document = DiffDocument::load(&selection, &cancel()).unwrap();
         assert_eq!(document.files.len(), 1);
         assert_eq!(document.files[0].added, Some(1));
+    }
+
+    #[test]
+    fn conflicted_worktree_has_one_file_entry_and_marker_lines() {
+        let fixture = Fixture::new();
+        fixture.commit("base");
+        fixture.git(&["checkout", "-qb", "side"]);
+        fixture.commit("side");
+        fixture.git(&["checkout", "-q", "main"]);
+        fixture.commit("main");
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(fixture.root())
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .args([
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=fixture@example.test",
+                "merge",
+                "--no-commit",
+                "side",
+            ])
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        let selection = DiffSelection {
+            id: SelectionId(1),
+            repository: fixture.root().into(),
+            source: DiffSource::Local { staged: false },
+        };
+        let mut document = DiffDocument::load(&selection, &cancel()).unwrap();
+        assert_eq!(document.files.len(), 1);
+        assert!(document.files[0].start_line.is_some());
+        let snapshot = document.page(&page(1)).unwrap();
+        assert!(
+            snapshot
+                .lines
+                .iter()
+                .any(|line| line.kind == LineKind::Added && line.text.contains("<<<<<<<"))
+        );
+    }
+
+    #[test]
+    fn horizontal_extent_includes_expanded_tabs_without_retaining_full_long_lines() {
+        let line = format!("{}let λ = 42;", "\t".repeat(128));
+        assert!(display_width_bound(&line) >= selection::DisplayText::new(&line).text.len());
+        let long = "\t".repeat(MAX_DISPLAY_BYTES * 2);
+        assert_eq!(display_width_bound(&long), MAX_DISPLAY_BYTES * 4);
     }
 
     #[test]

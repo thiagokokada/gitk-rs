@@ -1,10 +1,13 @@
+#[cfg(test)]
+mod tests;
+
 mod dialogs;
 mod diff_view;
 
 use gitk_rs::{
     cli::{Config, Theme},
     diff::{DiffEngine, DiffHandle, DiffSettings},
-    graph::GraphRow,
+    graph::{GraphRow, lane_spacing, text_graph},
     history::{Entry, Generation, HistoryEngine, HistoryHandle, RefKind, Request, Snapshot},
     preferences::Preferences,
     timing::{Phase, Timing, TimingGuard},
@@ -96,6 +99,7 @@ struct HistoryWindow {
     dialog_focus: FocusHandle,
     restore_focus: bool,
     restore_repository_focus: bool,
+    repository_prompt_pending: bool,
     branches: Vec<String>,
     filtered_branches: Vec<usize>,
     branch_filter: Entity<InputState>,
@@ -120,6 +124,7 @@ struct HistoryWindow {
     filter_task: Option<Task<()>>,
     preserve_filter_selection: bool,
     viewport: Range<usize>,
+    graph_lanes: u16,
 }
 
 impl HistoryWindow {
@@ -237,6 +242,7 @@ impl HistoryWindow {
             dialog_focus: cx.focus_handle(),
             restore_focus: false,
             restore_repository_focus: false,
+            repository_prompt_pending: false,
             branches: Vec::new(),
             filtered_branches: Vec::new(),
             branch_filter,
@@ -264,6 +270,7 @@ impl HistoryWindow {
             filter_task: None,
             preserve_filter_selection: false,
             viewport: 0..10,
+            graph_lanes: 1,
         }
     }
 
@@ -375,6 +382,9 @@ impl HistoryWindow {
                     self.dialog = None;
                     self.restore_focus = true;
                     self.operation_message = "Branch switched.".into();
+                    // The forced worker probe will supply fresh state. Avoid a
+                    // second HEAD-change reload losing the pending selection.
+                    self.workspace_snapshot = None;
                     self.reload(cx);
                 }
                 Err(error) => self.operation_message = error,
@@ -472,6 +482,12 @@ impl HistoryWindow {
     }
 
     fn ensure_rows(&mut self, range: Range<usize>) {
+        self.graph_lanes = range
+            .clone()
+            .filter_map(|index| self.cached(index))
+            .map(|entry| entry.graph.width)
+            .max()
+            .unwrap_or(1);
         self.viewport = range.clone();
         let range = range.start.saturating_sub(self.local_rows.len())
             ..range.end.saturating_sub(self.local_rows.len());
@@ -494,6 +510,13 @@ impl HistoryWindow {
     }
 
     fn set_selection(&mut self, index: usize, entry: Arc<Entry>, cx: &mut Context<Self>) {
+        if self.config.verbose {
+            eprintln!(
+                "gitk-rs: selection generation={} commit={}",
+                self.request.generation.0,
+                entry.commit.id.as_str()
+            );
+        }
         self.diff.update(cx, |diff, cx| {
             diff.load(
                 self.config.repository.clone(),
@@ -621,19 +644,22 @@ impl HistoryWindow {
             .and_then(|s| s.refs.get(&entry.commit.id))
             .cloned()
             .unwrap_or_default();
-        let width = entry.graph.width as f32 * 12. + 16.;
-        let graph: AnyElement = if self.config.text_graph {
-            let text: String = (0..entry.graph.width)
-                .map(|lane| {
-                    if Some(lane) == entry.graph.node {
-                        "● "
-                    } else {
-                        "│ "
-                    }
-                })
-                .collect();
+        let lane_step = lane_spacing(280., self.graph_lanes);
+        let text_limit = (((280. / (self.preferences.font_size * 0.65) - 4.) / 2.).floor()
+            as usize)
+            .clamp(1, 12);
+        let graph_text = self
+            .config
+            .text_graph
+            .then(|| text_graph(&entry.graph, text_limit));
+        let width = graph_text
+            .as_ref()
+            .map_or(entry.graph.width as f32 * lane_step + 16., |text| {
+                text.chars().count() as f32 * self.preferences.font_size * 0.65 + 12.
+            });
+        let graph: AnyElement = if let Some(text) = graph_text {
             div()
-                .font_family(fixed_font())
+                .font_family(SharedString::from(self.preferences.fixed_font.clone()))
                 .child(text)
                 .into_any_element()
         } else {
@@ -641,7 +667,9 @@ impl HistoryWindow {
             let filtered = !self.request.query.trim().is_empty();
             canvas(
                 |_, _, _| (),
-                move |bounds, (), window, _| paint_graph(&graph, filtered, bounds, window),
+                move |bounds, (), window, _| {
+                    paint_graph(&graph, filtered, lane_step, bounds, window)
+                },
             )
             .size_full()
             .into_any_element()
@@ -750,15 +778,18 @@ pub(crate) fn fixed_font() -> &'static str {
 fn paint_graph(
     graph: &GraphRow,
     filtered: bool,
+    lane_step: f32,
     bounds: Bounds<gpui::Pixels>,
     window: &mut Window,
 ) {
     let colors = [0x80bfff, 0x83d49b, 0xe5b978, 0xd49fe8, 0x73d5d1, 0xef9090];
-    let x = |lane: u16| bounds.left() + px(9. + lane as f32 * 12.);
+    let x = |lane: u16| bounds.left() + px(9. + lane as f32 * lane_step);
+    let radius = (lane_step * 0.4).clamp(0.7, 3.5);
+    let stroke = (lane_step * 0.6).clamp(0.5, 1.5);
     let middle = bounds.top() + bounds.size.height / 2.;
     if !filtered {
         for edge in &graph.edges {
-            let mut path = PathBuilder::stroke(px(1.5));
+            let mut path = PathBuilder::stroke(px(stroke));
             path.move_to(point(
                 x(edge.from),
                 if edge.parent { middle } else { bounds.top() },
@@ -771,7 +802,7 @@ fn paint_graph(
         if graph.incoming
             && let Some(node) = graph.node
         {
-            let mut path = PathBuilder::stroke(px(1.5));
+            let mut path = PathBuilder::stroke(px(stroke));
             path.move_to(point(x(node), bounds.top()));
             path.line_to(point(x(node), middle));
             if let Ok(path) = path.build() {
@@ -782,12 +813,12 @@ fn paint_graph(
     if let Some(node) = graph.node {
         let mut quad = fill(
             Bounds::new(
-                point(x(node) - px(3.5), middle - px(3.5)),
-                size(px(7.), px(7.)),
+                point(x(node) - px(radius), middle - px(radius)),
+                size(px(radius * 2.), px(radius * 2.)),
             ),
             rgb(colors[node as usize % colors.len()]),
         );
-        quad.corner_radii = px(3.5).into();
+        quad.corner_radii = px(radius).into();
         window.paint_quad(quad);
     }
     if graph.overflow {
@@ -1180,6 +1211,93 @@ impl Render for HistoryWindow {
     }
 }
 
+fn bind_keys(cx: &mut App) {
+    diff_view::bind_keys(cx);
+    cx.bind_keys([
+        KeyBinding::new(
+            "ctrl-c",
+            CopyCommit,
+            Some("GitHistory && !Input && !Diff && !Dialog"),
+        ),
+        KeyBinding::new("ctrl-q", Quit, None),
+        KeyBinding::new("ctrl-,", FontPreferences, Some("GitHistory && !Dialog")),
+        KeyBinding::new("ctrl-enter", ApplyPreferences, Some("Dialog")),
+        KeyBinding::new(
+            "alt-t",
+            ToggleTheme,
+            Some("GitHistory && !Input && !Dialog"),
+        ),
+        KeyBinding::new(
+            "alt-r",
+            ToggleWatch,
+            Some("GitHistory && !Input && !Dialog"),
+        ),
+        KeyBinding::new("ctrl-a", gpui_component::input::MoveHome, Some("Input")),
+        KeyBinding::new("ctrl-e", gpui_component::input::MoveEnd, Some("Input")),
+        KeyBinding::new("ctrl-b", gpui_component::input::MoveLeft, Some("Input")),
+        KeyBinding::new("ctrl-f", gpui_component::input::MoveRight, Some("Input")),
+        KeyBinding::new(
+            "ctrl-w",
+            gpui_component::input::DeleteToPreviousWordStart,
+            Some("Input"),
+        ),
+        KeyBinding::new(
+            "ctrl-u",
+            gpui_component::input::DeleteToBeginningOfLine,
+            Some("Input"),
+        ),
+        KeyBinding::new(
+            "ctrl-k",
+            gpui_component::input::DeleteToEndOfLine,
+            Some("Input"),
+        ),
+        KeyBinding::new("ctrl-d", gpui_component::input::Delete, Some("Input")),
+        KeyBinding::new("ctrl-o", OpenRepository, Some("GitHistory && !Dialog")),
+        KeyBinding::new(
+            "ctrl-shift-o",
+            OpenRepositoryPath,
+            Some("GitHistory && !Dialog"),
+        ),
+        KeyBinding::new(
+            "ctrl-b",
+            OpenBranches,
+            Some("GitHistory && !Input && !Dialog"),
+        ),
+        KeyBinding::new("f1", Help, Some("GitHistory && !Dialog")),
+        KeyBinding::new("escape", CloseDialog, Some("Dialog")),
+        KeyBinding::new("escape", CloseDialog, Some("Dialog > Input")),
+        KeyBinding::new("escape", BlurFilter, Some("Input && !Dialog")),
+        KeyBinding::new("up", BranchUp, Some("Dialog")),
+        KeyBinding::new("down", BranchDown, Some("Dialog")),
+        KeyBinding::new("down", BranchDown, Some("BranchDialog > Input")),
+        KeyBinding::new("up", BranchUp, Some("BranchDialog > Input")),
+        KeyBinding::new("ctrl-n", BranchDown, Some("BranchDialog > Input")),
+        KeyBinding::new("ctrl-p", BranchUp, Some("BranchDialog > Input")),
+        KeyBinding::new("enter", BranchAccept, Some("Dialog")),
+        KeyBinding::new("f5", Reload, None),
+        KeyBinding::new(
+            "ctrl-pageup",
+            HistoryPageUp,
+            Some("GitHistory && !Input && !Dialog"),
+        ),
+        KeyBinding::new(
+            "ctrl-pagedown",
+            HistoryPageDown,
+            Some("GitHistory && !Input && !Dialog"),
+        ),
+        KeyBinding::new("/", FocusFilter, Some("GitHistory && !Input && !Dialog")),
+        KeyBinding::new("escape", BlurFilter, Some("GitHistory && !Dialog")),
+        KeyBinding::new("down", Next, Some("GitHistory && !Input && !Dialog")),
+        KeyBinding::new("j", Next, Some("GitHistory && !Input && !Dialog")),
+        KeyBinding::new("n", Next, Some("GitHistory && !Input && !Dialog")),
+        KeyBinding::new("up", Previous, Some("GitHistory && !Input && !Dialog")),
+        KeyBinding::new("k", Previous, Some("GitHistory && !Input && !Dialog")),
+        KeyBinding::new("p", Previous, Some("GitHistory && !Input && !Dialog")),
+        KeyBinding::new("home", First, Some("GitHistory && !Input && !Dialog")),
+        KeyBinding::new("end", Last, Some("GitHistory && !Input && !Dialog")),
+    ]);
+}
+
 pub fn run(config: Config, launched: Instant) {
     let preferences = Preferences::load().unwrap_or_else(|error| {
         eprintln!("gitk-rs: preferences: {error:#}");
@@ -1212,7 +1330,6 @@ pub fn run(config: Config, launched: Instant) {
         .with_assets(gpui_component_assets::Assets)
         .run(move |cx: &mut App| {
             gpui_component::init(cx);
-            diff_view::bind_keys(cx);
             gpui_component::Theme::change(
                 match config.theme {
                     Theme::Dark => ThemeMode::Dark,
@@ -1221,89 +1338,7 @@ pub fn run(config: Config, launched: Instant) {
                 None,
                 cx,
             );
-            cx.bind_keys([
-                KeyBinding::new(
-                    "ctrl-c",
-                    CopyCommit,
-                    Some("GitHistory && !Input && !Diff && !Dialog"),
-                ),
-                KeyBinding::new("ctrl-q", Quit, None),
-                KeyBinding::new("ctrl-,", FontPreferences, Some("GitHistory && !Dialog")),
-                KeyBinding::new("ctrl-enter", ApplyPreferences, Some("Dialog")),
-                KeyBinding::new(
-                    "alt-t",
-                    ToggleTheme,
-                    Some("GitHistory && !Input && !Dialog"),
-                ),
-                KeyBinding::new(
-                    "alt-r",
-                    ToggleWatch,
-                    Some("GitHistory && !Input && !Dialog"),
-                ),
-                KeyBinding::new("ctrl-a", gpui_component::input::MoveHome, Some("Input")),
-                KeyBinding::new("ctrl-e", gpui_component::input::MoveEnd, Some("Input")),
-                KeyBinding::new("ctrl-b", gpui_component::input::MoveLeft, Some("Input")),
-                KeyBinding::new("ctrl-f", gpui_component::input::MoveRight, Some("Input")),
-                KeyBinding::new(
-                    "ctrl-w",
-                    gpui_component::input::DeleteToPreviousWordStart,
-                    Some("Input"),
-                ),
-                KeyBinding::new(
-                    "ctrl-u",
-                    gpui_component::input::DeleteToBeginningOfLine,
-                    Some("Input"),
-                ),
-                KeyBinding::new(
-                    "ctrl-k",
-                    gpui_component::input::DeleteToEndOfLine,
-                    Some("Input"),
-                ),
-                KeyBinding::new("ctrl-d", gpui_component::input::Delete, Some("Input")),
-                KeyBinding::new("ctrl-o", OpenRepository, Some("GitHistory && !Dialog")),
-                KeyBinding::new(
-                    "ctrl-shift-o",
-                    OpenRepositoryPath,
-                    Some("GitHistory && !Dialog"),
-                ),
-                KeyBinding::new(
-                    "ctrl-b",
-                    OpenBranches,
-                    Some("GitHistory && !Input && !Dialog"),
-                ),
-                KeyBinding::new("f1", Help, Some("GitHistory && !Dialog")),
-                KeyBinding::new("escape", CloseDialog, Some("Dialog")),
-                KeyBinding::new("escape", CloseDialog, Some("Dialog > Input")),
-                KeyBinding::new("escape", BlurFilter, Some("Input && !Dialog")),
-                KeyBinding::new("up", BranchUp, Some("Dialog")),
-                KeyBinding::new("down", BranchDown, Some("Dialog")),
-                KeyBinding::new("down", BranchDown, Some("BranchDialog > Input")),
-                KeyBinding::new("up", BranchUp, Some("BranchDialog > Input")),
-                KeyBinding::new("ctrl-n", BranchDown, Some("BranchDialog > Input")),
-                KeyBinding::new("ctrl-p", BranchUp, Some("BranchDialog > Input")),
-                KeyBinding::new("enter", BranchAccept, Some("Dialog")),
-                KeyBinding::new("f5", Reload, None),
-                KeyBinding::new(
-                    "ctrl-pageup",
-                    HistoryPageUp,
-                    Some("GitHistory && !Input && !Dialog"),
-                ),
-                KeyBinding::new(
-                    "ctrl-pagedown",
-                    HistoryPageDown,
-                    Some("GitHistory && !Input && !Dialog"),
-                ),
-                KeyBinding::new("/", FocusFilter, Some("GitHistory && !Input && !Dialog")),
-                KeyBinding::new("escape", BlurFilter, Some("GitHistory && !Dialog")),
-                KeyBinding::new("down", Next, Some("GitHistory && !Input && !Dialog")),
-                KeyBinding::new("j", Next, Some("GitHistory && !Input && !Dialog")),
-                KeyBinding::new("n", Next, Some("GitHistory && !Input && !Dialog")),
-                KeyBinding::new("up", Previous, Some("GitHistory && !Input && !Dialog")),
-                KeyBinding::new("k", Previous, Some("GitHistory && !Input && !Dialog")),
-                KeyBinding::new("p", Previous, Some("GitHistory && !Input && !Dialog")),
-                KeyBinding::new("home", First, Some("GitHistory && !Input && !Dialog")),
-                KeyBinding::new("end", Last, Some("GitHistory && !Input && !Dialog")),
-            ]);
+            bind_keys(cx);
             cx.on_window_closed(|cx| {
                 if cx.windows().is_empty() {
                     // Native X11 close still holds its client borrow during App::defer.

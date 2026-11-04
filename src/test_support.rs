@@ -11,6 +11,8 @@ impl Fixture {
             directory: tempfile::tempdir().unwrap(),
         };
         fixture.git(&["init", "--quiet", "--initial-branch=main"]);
+        fixture.git(&["config", "core.hooksPath", "/dev/null"]);
+        fixture.git(&["config", "core.fsmonitor", "false"]);
         fixture
     }
 

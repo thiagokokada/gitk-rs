@@ -1,3 +1,6 @@
+#[cfg(test)]
+mod tests;
+
 use super::fixed_font;
 use gitk_rs::{
     diff::{
@@ -566,6 +569,9 @@ impl Render for DiffPane {
                                                         });
                                                     div()
                                                         .id(("diff-file", i))
+                                                        .debug_selector(move || {
+                                                            format!("diff-file-{i}")
+                                                        })
                                                         .h(px((this.font_size * 1.9).max(24.)))
                                                         .px_2()
                                                         .truncate()

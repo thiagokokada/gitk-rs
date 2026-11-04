@@ -2,6 +2,10 @@ use super::*;
 
 impl HistoryWindow {
     pub(super) fn open_repository(&mut self, cx: &mut Context<Self>) {
+        if self.repository_prompt_pending {
+            return;
+        }
+        self.repository_prompt_pending = true;
         let receiver = cx.prompt_for_paths(gpui::PathPromptOptions {
             files: false,
             directories: true,
@@ -11,6 +15,7 @@ impl HistoryWindow {
         cx.spawn(async move |this, cx| {
             let result = receiver.await;
             let _ = this.update(cx, |this, cx| {
+                this.repository_prompt_pending = false;
                 match result {
                     Ok(Ok(Some(paths))) => {
                         if let Some(path) = paths.into_iter().next() {
