@@ -1,0 +1,111 @@
+{
+  "increment_1": [
+    {
+      "app": "rust",
+      "trial": "m1",
+      "target": 100000,
+      "loaded": 100000,
+      "elapsed_to_loaded_log_s": 8.175,
+      "application": {
+        "VmHWM": 302536,
+        "VmRSS": 302536,
+        "VmSwap": 0,
+        "Threads": 36,
+        "cpu_seconds": 5.63,
+        "command": ".gitk-rs-wrappe",
+        "smaps_kib": {
+          "Rss": 302536,
+          "Pss": 286110,
+          "Private_Clean": 40536,
+          "Private_Dirty": 235804,
+          "Anonymous": 235788
+        }
+      },
+      "children": [
+        {
+          "VmHWM": 329312,
+          "VmRSS": 329312,
+          "VmSwap": 0,
+          "Threads": 1,
+          "cpu_seconds": 0.89,
+          "command": "git",
+          "smaps_kib": {
+            "Rss": 329312,
+            "Pss": 327179,
+            "Private_Clean": 310832,
+            "Private_Dirty": 16188,
+            "Anonymous": 16188
+          }
+        }
+      ],
+      "idle_app_cpu_percent": 0.6,
+      "sampled_app_peak_rss_kib": 302536,
+      "sampled_children_peak_total_rss_kib": 399004
+    },
+    {
+      "app": "rust",
+      "trial": "m1",
+      "target": 200000,
+      "loaded": 200000,
+      "elapsed_to_loaded_log_s": 22.851,
+      "application": {
+        "VmHWM": 494564,
+        "VmRSS": 494564,
+        "VmSwap": 0,
+        "Threads": 36,
+        "cpu_seconds": 11.0,
+        "command": ".gitk-rs-wrappe",
+        "smaps_kib": {
+          "Rss": 494564,
+          "Pss": 478129,
+          "Private_Clean": 40580,
+          "Private_Dirty": 427768,
+          "Anonymous": 427752
+        }
+      },
+      "children": [
+        {
+          "VmHWM": 443796,
+          "VmRSS": 443796,
+          "VmSwap": 0,
+          "Threads": 1,
+          "cpu_seconds": 1.77,
+          "command": "git",
+          "smaps_kib": {
+            "Rss": 443796,
+            "Pss": 441664,
+            "Private_Clean": 411240,
+            "Private_Dirty": 30264,
+            "Anonymous": 30264
+          }
+        }
+      ],
+      "idle_app_cpu_percent": 0.4,
+      "sampled_app_peak_rss_kib": 494564,
+      "sampled_children_peak_total_rss_kib": 443796
+    },
+    {
+      "app": "rust",
+      "trial": "m1",
+      "action": "filter-nix",
+      "observed_seconds": 5.225,
+      "application_cpu_seconds": 0.14,
+      "loaded": 200000,
+      "application": {
+        "VmHWM": 495320,
+        "VmRSS": 495320,
+        "VmSwap": 0,
+        "Threads": 36,
+        "cpu_seconds": 11.19,
+        "command": ".gitk-rs-wrappe",
+        "smaps_kib": {
+          "Rss": 495320,
+          "Pss": 478881,
+          "Private_Clean": 40708,
+          "Private_Dirty": 428396,
+          "Anonymous": 428380
+        }
+      }
+    }
+  ]
+}

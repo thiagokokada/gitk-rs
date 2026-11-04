@@ -10,12 +10,12 @@ pub struct Edge {
     pub color: u8,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct GraphRow {
     pub node: Option<u16>,
     pub incoming: bool,
     pub color: u8,
-    pub edges: Vec<Edge>,
+    pub edges: Box<[Edge]>,
     pub width: u16,
     pub overflow: bool,
 }
@@ -182,8 +182,9 @@ impl GraphBuilder {
             color,
             width: before.len().max(self.lanes.len()).max(1) as u16,
             overflow,
-            edges: Vec::new(),
+            edges: Box::default(),
         };
+        let mut edges = Vec::new();
         for (index, parent) in commit.parents.iter().enumerate() {
             let to = if let Some(to) = self.find(parent) {
                 Some(to)
@@ -209,7 +210,7 @@ impl GraphBuilder {
                 })
             };
             if let Some(to) = to {
-                row.edges.push(Edge {
+                edges.push(Edge {
                     from: node as u16,
                     to: to as u16,
                     parent: true,
@@ -226,7 +227,7 @@ impl GraphBuilder {
             if lane.target != commit.id
                 && let Some(to) = self.find(&lane.target)
             {
-                row.edges.push(Edge {
+                edges.push(Edge {
                     from: from as u16,
                     to: to as u16,
                     parent: false,
@@ -234,6 +235,7 @@ impl GraphBuilder {
                 });
             }
         }
+        row.edges = edges.into_boxed_slice();
         while self.lanes.last().is_some_and(Option::is_none) {
             self.lanes.pop();
         }
@@ -241,6 +243,9 @@ impl GraphBuilder {
         row
     }
 }
+
+#[cfg(test)]
+mod reference;
 
 #[cfg(test)]
 mod tests {
@@ -253,6 +258,29 @@ mod tests {
             .collect::<Vec<_>>()
             .join(" ");
         crate::git::parse_commit(format!("{id:040x}\n{parents}\nA\na@b\n2026-01-01T00:00:00Z\nA\na@b\n2026-01-01T00:00:00Z\nMessage\n").as_bytes()).unwrap()
+    }
+
+    #[test]
+    fn complete_rows_match_the_previous_algorithm_across_caps() {
+        for cap in [1, 2, 3, 8, 32, 200] {
+            let mut graph = GraphBuilder::new(cap);
+            let mut reference = super::reference::ReferenceBuilder::new(cap);
+            let mut state = 0x23456789_u64;
+            for id in (1..=512_u64).rev() {
+                state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+                let parents = (0..(state >> 60).min(8))
+                    .filter_map(|index| {
+                        id.checked_sub(1 + (state.rotate_right(index as u32 * 7) % 31))
+                    })
+                    .map(|parent| format!("{parent:040x}"))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                let commit = crate::git::parse_commit(format!("{id:040x}\n{parents}\nA\na@b\n2026-01-01T00:00:00Z\nA\na@b\n2026-01-01T00:00:00Z\nMessage\n").as_bytes()).unwrap();
+                let actual = graph.push(&commit);
+                let expected = reference.push(&commit);
+                assert_eq!(actual, expected, "cap={cap} id={id}");
+            }
+        }
     }
 
     #[test]
@@ -346,7 +374,8 @@ mod tests {
                 to: 196,
                 parent: true,
                 color: 1,
-            }],
+            }]
+            .into_boxed_slice(),
             ..GraphRow::default()
         };
         let layout = GraphLayout::new([&first, &next], 280.);

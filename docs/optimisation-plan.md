@@ -1,7 +1,7 @@
 # Optimisation plan
 
-Status: analysis complete; runtime optimisations have not started. Resume this work
-in a future session. Keep each validated change in a separate commit.
+Status: implementation in progress on branch `optimisation`. Keep each validated
+change in a separate commit; retain measurements for each increment.
 
 ## Baseline: real nixpkgs history
 
@@ -85,14 +85,14 @@ The temporary diagnostic drivers were not added to the repository.
 
 ## Increment 1: reduce retained graph allocation
 
-- [ ] Add focused, opt-in Rust allocation accounting for real history and a small
+- [x] Add focused, opt-in Rust allocation accounting for real history and a small
   deterministic wide-graph fixture; keep large runs out of normal CI.
-- [ ] Reduce unused edge-vector capacity without changing the logical graph.
+- [x] Reduce unused edge-vector capacity without changing the logical graph.
   Compare exact reservation and compact final storage. Measure the CPU cost of
   shrinking or copying each row before choosing a representation.
-- [ ] Address spare parent-vector capacity if measurements justify a separate
+- [x] Address spare parent-vector capacity if measurements justify a separate
   small change. Preserve typed IDs and SHA-1/SHA-256 behavior.
-- [ ] Repeat the matched 100,000/200,000-commit workload and report application,
+- [x] Repeat the matched 100,000/200,000-commit workload and report application,
   Git child, and anonymous/private memory separately.
 
 Acceptance: node, edge, color, merge, lane-hole, overflow, and lane-cap behavior
@@ -176,3 +176,34 @@ Smoke-test native X11 and Wayland for UI changes, and use macOS CI for portabili
 Report unavailable checks explicitly. Keep one Git stream and demand-driven
 loading; do not introduce SQLite, a persistent history cache, repeated deep
 `--skip` scans, or a lower graph cap to manufacture a benchmark improvement.
+
+## Implementation evidence
+
+### Increment 1: compact immutable storage
+
+- Edges and parent IDs now use boxed slices; complete rows match a frozen
+  pre-optimisation oracle over 512 deterministic DAG commits at caps
+  1, 2, 3, 8, 32 and 200. Existing SHA-1/SHA-256 parsing remains unchanged.
+- At 200,000 commits, edge storage drops from 306,785,160 to 239,630,754 bytes,
+  parent-vector storage from 19,202,304 to 6,835,320 bytes, and Entry size from
+  264 to 248 bytes (payload accounting, not a heap profile).
+- An experimental upper-bound reservation kept 241,005,192 edge bytes and took
+  9.44 s in graph preparation; compact final slices kept 239,630,754 bytes and
+  took 8.91 s versus 8.78 s before the change. Single observations are noisy;
+  compact immutable storage was selected without claiming a CPU improvement.
+- Matched release GUI run: 200,000 commits use about 483 MiB application RSS,
+  versus 562 MiB in the balanced baseline. Git remains about 433 MiB, versus
+  438 MiB before; its clean mapped pages vary. Application CPU was 11.00 s
+  versus 10.81 s at that checkpoint. The driver includes deliberate delays.
+- Deep navigation and filtering completed; filtering still returns 30,026
+  matches. No application swap. The Nix release build and flake checks pass;
+  formatting, strict Clippy, all 68 Rust tests, and the opt-in diagnostic pass.
+- macOS execution is unavailable in this Linux session; portability remains
+  covered by the existing CI job, not claimed as a local check.
+
+Run the opt-in Rust accounting separately from normal CI:
+
+```sh
+GITK_BENCH_REPOSITORY=/path/to/nixpkgs nix develop --command \
+  cargo test --release --test optimisation -- --ignored --nocapture
+```

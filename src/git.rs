@@ -44,7 +44,7 @@ pub struct Signature {
 #[derive(Clone, Debug)]
 pub struct Commit {
     pub id: CommitId,
-    pub parents: Vec<CommitId>,
+    pub parents: Box<[CommitId]>,
     pub author: Signature,
     pub committer: Signature,
     pub message: String,
@@ -421,7 +421,8 @@ pub fn parse_commit(record: &[u8]) -> Result<Commit> {
     let parents = next()?
         .split_whitespace()
         .map(CommitId::parse)
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<Result<Vec<_>>>()?
+        .into_boxed_slice();
     let author = Signature {
         name: next()?,
         email: next()?,
