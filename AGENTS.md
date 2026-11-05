@@ -63,3 +63,9 @@ milestone without waiting for confirmation. Stop only when user input is actuall
   and display limitations with the command and actual error. Do not weaken checks
   or claim completion to work around an unavailable environment.
 - Do not rewrite existing Git history without an explicit user request.
+
+## Local environment limitations
+
+- Sandboxed `nix eval --raw --inputs-from . crane#outPath` failed with
+  `executing SQLite statement 'pragma synchronous = off': unable to open database file`
+  for the Nix fetcher cache. Run Nix validation with approved cache access.

@@ -96,5 +96,8 @@ jobs:
             nix-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('flake.lock', 'Cargo.lock', 'Cargo.toml', 'vendor/**') }}-
             nix-v1-${{ runner.os }}-${{ runner.arch }}-
 
-      - name: Check flake and package
+      - name: Build package and run Rust tests
+        run: nix build --print-build-logs
+
+      - name: Check formatting, linting, and scripts
         run: nix flake check --print-build-logs

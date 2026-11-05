@@ -108,7 +108,9 @@ cargo clippy --all-targets --locked -- -D warnings
 cargo test --all-targets --locked
 ```
 
-Run `nix flake check` to check formatting, packaging and the executable.
+Run `nix flake check` for Rust and Nix formatting, Clippy, Ruff linting and
+formatting, and Python script tests. Run `nix build` to build the package and
+run its Rust tests.
 
 ## License
 
