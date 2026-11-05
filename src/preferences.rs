@@ -50,7 +50,7 @@ impl Preferences {
     pub fn path() -> Result<PathBuf> {
         Ok(dirs::config_dir()
             .context("cannot locate configuration directory")?
-            .join("gitk-rs/preferences.json"))
+            .join("gitk-rs/preferences.toml"))
     }
     pub fn load() -> Result<Self> {
         Self::load_from(&Self::path()?)
@@ -69,7 +69,7 @@ impl Preferences {
         let mut bytes = Vec::new();
         file.take(65537).read_to_end(&mut bytes)?;
         ensure!(bytes.len() <= 65536, "preferences exceed 64 KiB");
-        let preferences: Self = serde_json::from_slice(&bytes)?;
+        let preferences: Self = toml::from_str(std::str::from_utf8(&bytes)?)?;
         preferences.validate()?;
         Ok(preferences)
     }
@@ -78,7 +78,7 @@ impl Preferences {
         let parent = path.parent().context("preferences directory is missing")?;
         fs::create_dir_all(parent)?;
         let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
-        temporary.write_all(&serde_json::to_vec_pretty(self)?)?;
+        temporary.write_all(toml::to_string_pretty(self)?.as_bytes())?;
         temporary.as_file().sync_all()?;
         temporary.persist(path)?;
         Ok(())
@@ -90,13 +90,18 @@ mod tests {
     #[test]
     fn atomic_preferences_roundtrip_and_invalid_input() {
         let root = tempfile::tempdir().unwrap();
-        let path = root.path().join("config/preferences.json");
+        let path = root.path().join("config/preferences.toml");
         let prefs = Preferences {
             fixed_font: "Example Mono".into(),
             font_size: 16.,
             ..Preferences::default()
         };
         prefs.save_to(&path).unwrap();
+        assert!(
+            fs::read_to_string(&path)
+                .unwrap()
+                .contains("font_size = 16.0")
+        );
         assert_eq!(Preferences::load_from(&path).unwrap(), prefs);
         fs::write(&path, "{invalid").unwrap();
         assert!(Preferences::load_from(&path).is_err());
@@ -108,5 +113,40 @@ mod tests {
             .validate()
             .is_err()
         );
+    }
+
+    #[test]
+    fn toml_preferences_support_comments_and_defaults() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("preferences.toml");
+        assert_eq!(
+            Preferences::load_from(&path).unwrap(),
+            Preferences::default()
+        );
+        fs::write(&path, "# Custom font size\nfont_size = 18.0\n").unwrap();
+        assert_eq!(
+            Preferences::load_from(&path).unwrap(),
+            Preferences {
+                font_size: 18.,
+                ..Preferences::default()
+            }
+        );
+    }
+
+    #[test]
+    fn toml_preferences_reject_invalid_values_and_encoding() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("preferences.toml");
+        for contents in [
+            b"font_size = 100.0".as_slice(),
+            b"font_size = 'large'",
+            b"ui_font = ''",
+            b"\xff",
+        ] {
+            fs::write(&path, contents).unwrap();
+            assert!(Preferences::load_from(&path).is_err());
+        }
+        fs::write(&path, vec![b' '; 65537]).unwrap();
+        assert!(Preferences::load_from(&path).is_err());
     }
 }
