@@ -26,7 +26,9 @@
         in
         {
           default = self.packages.${system}.gitk-rs;
-          gitk-rs = pkgs.callPackage ./gitk-rs.nix { };
+          gitk-rs = pkgs.callPackage ./gitk-rs.nix {
+            craneLib = crane.mkLib pkgs;
+          };
         }
       );
 
