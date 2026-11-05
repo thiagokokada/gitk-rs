@@ -99,5 +99,5 @@ jobs:
       - name: Build package and run Rust tests
         run: nix build --print-build-logs
 
-      - name: Check Rust formatting and Clippy
+      - name: Check formatting, linting, and scripts
         run: nix flake check --print-build-logs

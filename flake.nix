@@ -43,6 +43,7 @@
       checks = eachSystem (
         system:
         import ./checks.nix {
+          pkgs = nixpkgs.legacyPackages.${system};
           craneLib = crane.mkLib nixpkgs.legacyPackages.${system};
           gitk-rs = self.packages.${system}.gitk-rs;
         }
