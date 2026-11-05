@@ -2275,9 +2275,9 @@ dependencies = [
  "nix 0.29.0",
  "notify",
  "serde",
- "serde_json",
  "syntect",
  "tempfile",
+ "toml 1.1.8+spec-1.1.0",
  "two-face",
  "unicode-segmentation",
 ]

@@ -183,7 +183,7 @@ def exercise_preferences(ui: Window, config: Path) -> None:
     ui.shot("preferences")
     ui.keys("ctrl+Return")
     time.sleep(0.4)
-    assert (config / "gitk-rs/preferences.json").exists()
+    assert (config / "gitk-rs/preferences.toml").exists()
     ui.keys("alt+t")
     time.sleep(0.4)
     ui.shot("light-theme")

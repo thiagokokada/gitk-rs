@@ -50,6 +50,16 @@ For command-line options or the supported language list:
 ./gitk-rs --list-languages
 ```
 
+Font preferences are saved as `gitk-rs/preferences.toml` in the OS
+configuration directory (`~/.config` on Linux or `~/Library/Application
+Support` on macOS). For example:
+
+```toml
+ui_font = "DejaVu Sans"
+fixed_font = "DejaVu Sans Mono"
+font_size = 13.0
+```
+
 ## Development
 
 ### Building
