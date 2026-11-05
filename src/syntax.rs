@@ -12,7 +12,7 @@ use two_face::theme::{EmbeddedLazyThemeSet, EmbeddedThemeName};
 static SYNTAXES: LazyLock<SyntaxSet> = LazyLock::new(two_face::syntax::extra_newlines);
 static THEMES: LazyLock<EmbeddedLazyThemeSet> = LazyLock::new(two_face::theme::extra);
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Span {
     pub range: Range<usize>,
     pub color: u32,

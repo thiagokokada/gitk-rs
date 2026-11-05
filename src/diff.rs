@@ -2,7 +2,7 @@
 //! commit-history database or persistent parsing cache is created.
 use crate::{
     git::{Cancellation, Commit, GitStream, command_path},
-    syntax::{CodeHighlighter, Span},
+    syntax::Span,
 };
 use anyhow::{Context, Result, bail, ensure};
 use std::{
@@ -17,6 +17,11 @@ use std::{
     },
     thread::{self, JoinHandle},
 };
+
+mod highlight;
+#[cfg(test)]
+mod highlight_tests;
+use highlight::HighlightCache;
 
 pub mod selection;
 pub use selection::{TextPoint, TextSelection};
@@ -134,6 +139,7 @@ pub struct DiffDocument {
     max_width: usize,
     added: u64,
     removed: u64,
+    highlight_cache: Option<HighlightCache>,
 }
 
 impl DiffDocument {
@@ -279,6 +285,7 @@ impl DiffDocument {
             max_width,
             added,
             removed,
+            highlight_cache: None,
         })
     }
 
@@ -340,72 +347,11 @@ impl DiffDocument {
         settings: DiffSettings,
         obsolete: impl Fn() -> bool,
     ) -> Result<bool> {
-        if snapshot.lines.is_empty() {
-            return Ok(true);
-        }
-        let first = self.index[snapshot.start];
-        let start = if first.hunk > 0 {
-            first.hunk
-        } else {
-            snapshot.start
-        };
-        let end = snapshot.start + snapshot.lines.len();
-        let mut old = None;
-        let mut new = None;
-        let mut current_file = None;
-        for index in start..end {
-            if index % 32 == 0 && obsolete() {
-                return Ok(false);
-            }
-            let location = self.index[index];
-            if location.kind == LineKind::Hunk || current_file != location.file {
-                old = None;
-                new = None;
-                current_file = location.file;
-            }
-            if !location.kind.code() {
-                continue;
-            }
-            let text = self.line(index)?;
-            if text.len() > MAX_DISPLAY_BYTES {
-                old = None;
-                new = None;
-                continue;
-            }
-            let code = &text[1..];
-            let Some(file) = location.file.and_then(|file| self.files.get(file)) else {
-                continue;
-            };
-            if old.is_none() {
-                old = Some(CodeHighlighter::new(
-                    file.old_path.as_deref().unwrap_or(&file.path),
-                    code,
-                    settings.dark,
-                ));
-                new = Some(CodeHighlighter::new(&file.path, code, settings.dark));
-            }
-            let spans = match location.kind {
-                LineKind::Added => new.as_mut().unwrap().line(code),
-                LineKind::Removed => old.as_mut().unwrap().line(code),
-                _ => {
-                    let _ = old.as_mut().unwrap().line(code);
-                    new.as_mut().unwrap().line(code)
-                }
-            };
-            if index >= snapshot.start {
-                snapshot.lines[index - snapshot.start].spans = spans
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(|mut span| {
-                        span.range.start += 1;
-                        span.range.end += 1;
-                        span
-                    })
-                    .collect();
-            }
-        }
-        snapshot.highlighting = false;
-        Ok(true)
+        let mut cache = self.highlight_cache.take().unwrap_or_default();
+        let result = cache.apply(self, snapshot, settings, obsolete);
+        cache.limit_cursor();
+        self.highlight_cache = Some(cache);
+        result
     }
 
     fn copy(&mut self, request: CopyRequest, cancellation: &Cancellation) -> Result<String> {
@@ -923,7 +869,7 @@ mod tests {
     fn cancel() -> Cancellation {
         Arc::new(AtomicBool::new(false))
     }
-    fn selected(fixture: &Fixture, id: u64) -> DiffSelection {
+    pub(super) fn selected(fixture: &Fixture, id: u64) -> DiffSelection {
         let cancellation = cancel();
         let repository = Repository::open(fixture.root(), &cancellation).unwrap();
         let commit = repository
@@ -938,7 +884,7 @@ mod tests {
             source: DiffSource::Commit(Arc::new(commit)),
         }
     }
-    fn page(selection: u64) -> DiffPage {
+    pub(super) fn page(selection: u64) -> DiffPage {
         DiffPage {
             selection: SelectionId(selection),
             id: 1,

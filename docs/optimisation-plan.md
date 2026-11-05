@@ -117,12 +117,12 @@ loading cost, no whole-history lookup index, and no new retained duplication.
 
 ## Increment 3: bound repeated large-hunk highlighting work
 
-- [ ] Add an opt-in large single-hunk fixture and measure successive page requests,
+- [x] Add an opt-in large single-hunk fixture and measure successive page requests,
   deep jumps, reverse scrolling, and rapid cancellation.
-- [ ] Retain parser state or sparse checkpoints within a byte budget per active
+- [x] Retain parser state or sparse checkpoints within a byte budget per active
   diff. Preserve separate old/new parser states for removed and added code.
-- [ ] Invalidate on document/selection and theme changes; reject stale results.
-- [ ] Add unit and worker tests for multiline comments/strings, Unicode, hunk/file
+- [x] Invalidate on document/selection and theme changes; reject stale results.
+- [x] Add unit and worker tests for multiline comments/strings, Unicode, hunk/file
   boundaries, theme switches, cancellation, and checkpoint eviction.
 
 Acceptance: paged colors match parsing from the hunk start, deep pages do less
@@ -228,3 +228,25 @@ GITK_BENCH_REPOSITORY=/path/to/nixpkgs nix develop --command \
   in `optimisation-progress.json`; its mapped pages are not application heap.
 - Native Wayland and X11 startup/history-paint checks pass. macOS execution
   remains a CI check, not a locally verified desktop test.
+
+### Increment 3: resumable hunk parsing and bounded tokens
+
+- A single old/new parser cursor resumes forward pages; a suffix token ring
+  serves overlapping and nearby reverse pages. Token payload plus reserved ring
+  storage is capped at 4 MiB / 4096 lines. Retained cursor input is limited to
+  1 MiB; opaque Syntect parser allocations are not claimed as measured token bytes.
+  Older/evicted pages and larger cursor inputs replay the hunk when necessary.
+- Theme changes clear cursor/tokens; each diff document owns its cache. Obsolete
+  work preserves only a valid parsed prefix. Selection/request generations retain
+  their existing publication guards.
+- Five normal regressions cover multiline old/new state, Unicode boundaries,
+  theme/file transitions, eviction and zero cache, cancellation/resume, and large
+  input cursor release. All 75 normal Rust tests, strict Clippy, formatting, Nix
+  build and flake checks pass; native X11 and Wayland paint checks also pass.
+- The opt-in 25,000-line Rust fixture completes 12 deep forward/reverse requests
+  by parsing 22,048 lines total, retaining 884,736 token/ring bytes. Its debug
+  test run took 8.4 s. The same standalone optimized caller with local debug
+  dependencies took 94.533 s before versus 8.041 s after. These are controlled
+  service diagnostics, not production input-to-paint or full-release timings.
+- Matched 200,000-commit GUI run remains about 485 MiB RSS / 1.94 application
+  CPU seconds, no swap, and 30,026 broad-filter matches. Git is about 438 MiB.
