@@ -3,12 +3,8 @@ use super::{
     highlight::HighlightCache,
     tests::{page, selected},
 };
-use crate::test_support::Fixture;
-use std::{
-    cell::Cell,
-    fs,
-    sync::{Arc, atomic::AtomicBool},
-};
+use crate::{git::Cancellation, test_support::Fixture};
+use std::{cell::Cell, fs};
 
 fn document() -> (Fixture, DiffDocument) {
     let fixture = Fixture::new();
@@ -29,8 +25,7 @@ fn document() -> (Fixture, DiffDocument) {
         fixture.git(&["add", "."]);
         fixture.git(&["commit", "-qm", word]);
     }
-    let document =
-        DiffDocument::load(&selected(&fixture, 1), &Arc::new(AtomicBool::new(false))).unwrap();
+    let document = DiffDocument::load(&selected(&fixture, 1), &Cancellation::default()).unwrap();
     (fixture, document)
 }
 
@@ -150,7 +145,7 @@ fn very_large_hunks_release_the_cursor_and_keep_recent_tokens() {
     fixture.git(&["add", "."]);
     fixture.git(&["commit", "-qm", "large comment"]);
     let mut document =
-        DiffDocument::load(&selected(&fixture, 1), &Arc::new(AtomicBool::new(false))).unwrap();
+        DiffDocument::load(&selected(&fixture, 1), &Cancellation::default()).unwrap();
     let mut request = page(1);
     let mut snapshot = document.page(&request).unwrap();
     assert!(
@@ -187,7 +182,7 @@ fn large_hunk_paging_parses_the_prefix_once() {
     fixture.git(&["add", "."]);
     fixture.git(&["commit", "-qm", "large syntax fixture"]);
     let mut document =
-        DiffDocument::load(&selected(&fixture, 1), &Arc::new(AtomicBool::new(false))).unwrap();
+        DiffDocument::load(&selected(&fixture, 1), &Cancellation::default()).unwrap();
     let mut request = page(1);
     let mut warmup = document.page(&request).unwrap();
     document

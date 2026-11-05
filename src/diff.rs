@@ -11,10 +11,7 @@ use std::{
     io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write},
     ops::Range,
     path::PathBuf,
-    sync::{
-        Arc, Condvar, Mutex,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::{Arc, Condvar, Mutex, atomic::Ordering},
     thread::{self, JoinHandle},
 };
 
@@ -643,7 +640,7 @@ impl DiffEngine {
                 snapshot: None,
                 copied: None,
                 current: SelectionId(0),
-                cancellation: Arc::new(AtomicBool::new(false)),
+                cancellation: Cancellation::default(),
                 clear: false,
                 stopped: false,
             }),
@@ -691,7 +688,7 @@ impl DiffHandle {
         let old = {
             let mut mailbox = self.shared.mailbox.lock().unwrap();
             mailbox.cancellation.store(true, Ordering::Release);
-            mailbox.cancellation = Arc::new(AtomicBool::new(false));
+            mailbox.cancellation = Cancellation::default();
             mailbox.current = selection;
             mailbox.clear = true;
             (
@@ -867,7 +864,7 @@ mod tests {
     };
 
     fn cancel() -> Cancellation {
-        Arc::new(AtomicBool::new(false))
+        Cancellation::default()
     }
     pub(super) fn selected(fixture: &Fixture, id: u64) -> DiffSelection {
         let cancellation = cancel();

@@ -130,18 +130,20 @@ repeated work, and cache bytes remain bounded. Retain full language coverage.
 
 ## Increment 4: optional work after profiling
 
-- [ ] If filtering becomes material, reuse scratch storage or use an allocation-
-  avoiding fast path with equivalent Unicode and cross-field matching semantics.
-  Avoid permanently duplicating every commit's message as cached search text.
-- [ ] Replace idle mailbox polling with notifications, and make cancellation
-  wakeups event driven where practical. Preserve prompt child termination and
-  reaping; do not simply lengthen polling intervals to improve idle measurements.
-- [ ] Test missed/coalesced notifications, stale generations, shutdown, watcher
-  failure, and manual reload. Compare idle CPU with watching on and off.
+- [x] Reviewed filtering: defer scratch-buffer changes because the measured broad
+  filter already costs about 0.15 CPU seconds for 200,000 commits, off the UI thread.
+- [x] Replace 5 ms cancellation polling with shared condition-variable notifications;
+  stop workspace timer wakes entirely while watching is disabled.
+- [x] Test shared wakeups, rapid completion, cancellation, shutdown, watcher failure,
+  and manual reload. Compare idle behavior with watching on and off.
+- [x] Reviewed UI mailbox notification migration: defer it. Remaining measured
+  idle CPU is about 0.04 seconds over 12 seconds; a broader async-channel change
+  offers little demonstrated practical benefit in this workload.
 
-Acceptance: measured benefit, unchanged workflows, bounded pending work, and no
-stalled shutdown or missed refresh. Defer these changes if profiling shows little
-practical value.
+Acceptance: deterministic timed wakeups are removed, child cancellation/reaping
+and refresh behavior stay intact, and no extra dependencies or retained text are
+introduced. Filtering and UI mailbox migration were explicitly assessed and
+left unchanged under the plan's optional-work criterion.
 
 ## Validation and comparison procedure
 
@@ -250,3 +252,20 @@ GITK_BENCH_REPOSITORY=/path/to/nixpkgs nix develop --command \
   service diagnostics, not production input-to-paint or full-release timings.
 - Matched 200,000-commit GUI run remains about 485 MiB RSS / 1.94 application
   CPU seconds, no swap, and 30,026 broad-filter matches. Git is about 438 MiB.
+
+### Increment 4: event-driven cancellation and watcher-off sleep
+
+- Cancellation uses a shared flag and condition variable. Completion and cancel
+  notification synchronize with the predicate-to-wait transition, so the monitor
+  cannot miss a notification that precedes its wait. Every child remains reaped.
+- Existing blocked-helper cancellation plus new shared-child and rapid-normal-
+  completion regressions pass, as do watcher coalescing/failure/manual-refresh
+  coverage. All 77 normal Rust tests, formatting, strict Clippy, Nix release
+  build and flake checks pass locally.
+- Over matched 12-second idle samples, stable-thread voluntary context switches
+  fall from 5,961 to 3,462 with watching off and 6,164 to 3,791 with watching on.
+  The roughly 200 Hz process monitor disappears. CPU changes from 0.05 to 0.04 s
+  off and stays 0.04 s on: too small to claim a meaningful CPU reduction.
+- Broader UI mailbox migration and filtering changes are deferred based on these
+  measurements; their queues/data models remain unchanged. Final cleanup and
+  macOS CI follow-up are still to be completed before opening the PR.

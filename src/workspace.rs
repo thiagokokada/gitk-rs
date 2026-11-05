@@ -126,7 +126,7 @@ mod tests {
     use crate::test_support::Fixture;
     use std::fs;
     fn cancel() -> Cancellation {
-        Arc::new(AtomicBool::new(false))
+        Cancellation::default()
     }
 
     #[test]
@@ -382,7 +382,7 @@ impl WorkspaceEngine {
                 operation: None,
                 snapshot: None,
                 result: None,
-                cancel: Arc::new(AtomicBool::new(false)),
+                cancel: Cancellation::default(),
                 stopped: false,
             }),
             changed: Condvar::new(),
@@ -415,7 +415,7 @@ impl WorkspaceHandle {
         let mut mailbox = self.shared.mailbox.lock().unwrap();
         if mailbox.generation != request.generation {
             mailbox.cancel.store(true, Ordering::Release);
-            mailbox.cancel = Arc::new(AtomicBool::new(false));
+            mailbox.cancel = Cancellation::default();
             mailbox.generation = request.generation;
             mailbox.operation = None;
             mailbox.snapshot = None;
@@ -456,11 +456,17 @@ fn workspace_worker(shared: Arc<WorkShared>) {
         let (configured, operation, cancel) = {
             let mut mailbox = shared.mailbox.lock().unwrap();
             if mailbox.request.is_none() && mailbox.operation.is_none() && !mailbox.stopped {
-                mailbox = shared
-                    .changed
-                    .wait_timeout(mailbox, Duration::from_millis(100))
-                    .unwrap()
-                    .0;
+                mailbox = if request.as_ref().is_some_and(|request| request.watch) {
+                    shared
+                        .changed
+                        .wait_timeout(mailbox, Duration::from_millis(100))
+                        .unwrap()
+                        .0
+                } else {
+                    // With watching disabled, configure/operations/shutdown are
+                    // the only possible work. Each already notifies this condvar.
+                    shared.changed.wait(mailbox).unwrap()
+                };
             }
             if mailbox.stopped {
                 break;

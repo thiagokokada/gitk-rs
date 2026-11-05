@@ -349,5 +349,69 @@
     "debug_regression_ms": 8400,
     "parsed_lines": 22048,
     "token_cache_bytes": 884736
-  }
+  },
+  "increment_4_idle_before": [
+    {
+      "stable_thread_voluntary_switches": 5961,
+      "top_thread_switch_deltas": [
+        2374,
+        1946,
+        1497,
+        120,
+        24
+      ],
+      "watch": false,
+      "seconds": 12.001010952051729,
+      "cpu_seconds": 0.05,
+      "app_rss_kib": 81256,
+      "app_swap_kib": 0
+    },
+    {
+      "stable_thread_voluntary_switches": 6164,
+      "top_thread_switch_deltas": [
+        2373,
+        1947,
+        1493,
+        183,
+        144
+      ],
+      "watch": true,
+      "seconds": 12.001087052049115,
+      "cpu_seconds": 0.04,
+      "app_rss_kib": 81496,
+      "app_swap_kib": 0
+    }
+  ],
+  "increment_4_idle_after": [
+    {
+      "stable_thread_voluntary_switches": 3462,
+      "top_thread_switch_deltas": [
+        1946,
+        1492,
+        24,
+        0,
+        0
+      ],
+      "watch": false,
+      "seconds": 12.00107976491563,
+      "cpu_seconds": 0.04,
+      "app_rss_kib": 81284,
+      "app_swap_kib": 0
+    },
+    {
+      "stable_thread_voluntary_switches": 3791,
+      "top_thread_switch_deltas": [
+        1944,
+        1497,
+        185,
+        141,
+        24
+      ],
+      "watch": true,
+      "seconds": 12.00114773598034,
+      "cpu_seconds": 0.04,
+      "app_rss_kib": 81556,
+      "app_swap_kib": 0
+    }
+  ]
 }

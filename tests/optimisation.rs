@@ -1,6 +1,6 @@
 //! Opt-in real-history accounting; normal tests never scan a user's large repo.
 use gitk_rs::{
-    git::{CommitId, Repository},
+    git::{Cancellation, CommitId, Repository},
     graph::{Edge, GraphBuilder},
     history::Entry,
 };
@@ -8,7 +8,6 @@ use std::{
     env,
     mem::size_of,
     path::PathBuf,
-    sync::{Arc, atomic::AtomicBool},
     time::{Duration, Instant},
 };
 
@@ -20,7 +19,7 @@ fn real_history_allocation_and_cpu() {
         .unwrap_or("200000".into())
         .parse()
         .unwrap();
-    let cancel = Arc::new(AtomicBool::new(false));
+    let cancel = Cancellation::default();
     let repository = Repository::open(&path, &cancel).unwrap();
     let mut stream = repository.log(cancel).unwrap();
     let mut graph = GraphBuilder::new(200);
