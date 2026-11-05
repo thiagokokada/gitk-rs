@@ -87,14 +87,14 @@ jobs:
 
       - uses: cachix/install-nix-action@v31
 
-      - name: Check formatting
-        run: nix develop --command cargo fmt --all -- --check
-
-      - name: Clippy
-        run: nix develop --command cargo clippy --all-targets --locked -- -D warnings
-
-      - name: Test without a display
-        run: nix develop --command env -u DISPLAY -u WAYLAND_DISPLAY cargo test --all-targets --locked
+      - name: Cache Nix store
+        uses: nix-community/cache-nix-action@v7
+        with:
+          # Save each commit's store; restore earlier compiled dependencies.
+          primary-key: nix-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('flake.lock', 'Cargo.lock', 'Cargo.toml', 'vendor/**') }}-${{ github.sha }}
+          restore-prefixes-first-match: |
+            nix-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('flake.lock', 'Cargo.lock', 'Cargo.toml', 'vendor/**') }}-
+            nix-v1-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Check flake and package
         run: nix flake check --print-build-logs
