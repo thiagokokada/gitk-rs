@@ -5,6 +5,12 @@ edition = "2024"
 license = "MIT"
 description = "A streaming Git history explorer built with GPUI"
 
+[features]
+# SDK-only and sandboxed builds remain usable without Apple's Metal compiler.
+# Disable default features to embed build-time compiled shaders on macOS.
+default = ["runtime-shaders"]
+runtime-shaders = ["gpui/runtime_shaders"]
+
 [dependencies]
 gpui = { version = "=0.2.2", default-features = false }
 gpui-component = { version = "=0.5.1", default-features = false }
@@ -23,10 +29,8 @@ notify = "7"
 [target.'cfg(target_os = "linux")'.dependencies]
 gpui = { version = "=0.2.2", default-features = false, features = ["wayland", "x11"] }
 
-# Compile Metal shaders at runtime so builds need only the SDK, not the
-# proprietary Xcode Metal compiler (also unavailable in Nix sandboxes).
 [target.'cfg(target_os = "macos")'.dependencies]
-gpui = { version = "=0.2.2", default-features = false, features = ["font-kit", "runtime_shaders"] }
+gpui = { version = "=0.2.2", default-features = false, features = ["font-kit"] }
 
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.29", features = ["signal", "process"] }

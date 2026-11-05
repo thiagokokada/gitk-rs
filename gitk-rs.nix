@@ -19,7 +19,14 @@
   vulkan-loader,
   wayland,
   zlib,
+  # Optional store-backed toolchain providing bin/xcrun with metal/metallib.
+  # Host Xcode paths are deliberately not consulted by sandboxed builds.
+  metalToolchain ? null,
 }:
+
+assert lib.assertMsg (
+  metalToolchain == null || stdenv.hostPlatform.isDarwin
+) "gitk-rs: metalToolchain is only supported on macOS";
 
 rustPlatform.buildRustPackage rec {
   pname = "gitk-rs";
@@ -38,6 +45,12 @@ rustPlatform.buildRustPackage rec {
   };
 
   cargoLock.lockFile = ./Cargo.lock;
+  buildNoDefaultFeatures = true;
+  buildFeatures = lib.optional (metalToolchain == null) "runtime-shaders";
+
+  preBuild = lib.optionalString (metalToolchain != null) ''
+    export PATH="${metalToolchain}/bin:$PATH"
+  '';
 
   nativeBuildInputs = [
     clang
@@ -45,7 +58,8 @@ rustPlatform.buildRustPackage rec {
     makeWrapper
     pkg-config
     rustPlatform.bindgenHook
-  ];
+  ]
+  ++ lib.optional (metalToolchain != null) metalToolchain;
 
   nativeCheckInputs = [ git ];
 

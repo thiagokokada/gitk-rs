@@ -19,7 +19,12 @@ let
     CARGO_PROFILE = "dev";
     CARGO_PROFILE_DEV_DEBUG = "0";
     CARGO_PROFILE_TEST_DEBUG = "0";
-    preBuild = ''
+    cargoExtraArgs =
+      "--no-default-features"
+      + pkgs.lib.optionalString (gitk-rs.buildFeatures != [ ]) (
+        " --features " + pkgs.lib.concatStringsSep "," gitk-rs.buildFeatures
+      );
+    preBuild = gitk-rs.preBuild + ''
       unset DISPLAY WAYLAND_DISPLAY
     '';
   };

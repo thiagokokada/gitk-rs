@@ -63,3 +63,20 @@ milestone without waiting for confirmation. Stop only when user input is actuall
   and display limitations with the command and actual error. Do not weaken checks
   or claim completion to work around an unavailable environment.
 - Do not rewrite existing Git history without an explicit user request.
+
+## Startup measurements
+
+- Run a release build with `--timings` to report startup phases and first window,
+  history, selection, and diff CPU paint callbacks. `SelectionPainted` means a
+  commit is selected; `DiffPainted` requires a successful diff snapshot, including
+  an empty diff. These markers do not measure GPU presentation.
+- Timings start at `main`, excluding process launch and dynamic loading. Compare
+  the same repository and settings; report first launches separately from warm
+  launches. Repeated launches alone are not a cold-start benchmark.
+
+## Observed local limits
+
+- macOS: `nix develop --command cargo build --locked --no-default-features`
+  reaches GPUI's build-time shader step but fails with `error: tool 'metal' not
+  found`. The precompiled shader build and cold-start comparison need a Metal
+  compiler; SDK-only runtime-shader builds remain available.

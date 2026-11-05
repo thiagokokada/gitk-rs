@@ -33,12 +33,6 @@ with Metal support.
 ./gitk-rs --mode light ~/Projects/nixpkgs
 ```
 
-You can also build and run the executable directly:
-
-```sh
-./gitk-rs /path/to/repository
-```
-
 Use the arrow keys or j/k to select commits, / to filter, and Space/Backspace
 to page through a diff. Ctrl+O opens a repository, Ctrl+B switches branches,
 and F5 reloads. Press F1 for all shortcuts.
@@ -80,6 +74,13 @@ cargo build --release --locked
 ./target/release/gitk-rs /path/to/repository
 ```
 
+On macOS, builds use runtime shaders by default. With the full Xcode Metal
+toolchain installed, compile shaders at build time to reduce startup work:
+
+```sh
+cargo build --release --locked --no-default-features
+```
+
 #### Nix
 
 Assuming that you have [Flakes](https://wiki.nixos.org/wiki/Flakes) enabled:
@@ -88,6 +89,8 @@ Assuming that you have [Flakes](https://wiki.nixos.org/wiki/Flakes) enabled:
 nix build
 ./result/bin/gitk-rs /path/to/repository
 ```
+
+Nix uses runtime shaders by default.
 
 ### Checks
 
