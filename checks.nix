@@ -7,8 +7,14 @@ let
   # Share compiled dependencies between sandboxed development checks. The
   # dependency derivation stays reusable when only application source changes.
   cargoArgs = {
-    inherit (gitk-rs) src version buildInputs;
+    inherit (gitk-rs)
+      src
+      version
+      buildInputs
+      NIX_OUTPATH_USED_AS_RANDOM_SEED
+      ;
     pname = "gitk-rs-checks";
+    strictDeps = true;
     nativeBuildInputs = [
       pkgs.clang
       pkgs.cmake
@@ -49,15 +55,6 @@ let
         printf '%s\n' "$LIBCLANG_PATH" "$BINDGEN_EXTRA_CLANG_ARGS" > "$out"
       '';
     };
-in
-{
-  package = gitk-rs;
-
-  release-environment = pkgs.runCommand "gitk-rs-release-environment" { } ''
-    diff -u ${bindgenEnvironment gitk-rs.cargoArtifacts} ${bindgenEnvironment gitk-rs}
-    touch "$out"
-  '';
-
   clippy = craneLib.cargoClippy (
     cargoArgs
     // {
@@ -66,7 +63,6 @@ in
       cargoClippyExtraArgs = "--all-targets -- -D warnings";
     }
   );
-
   tests = craneLib.cargoTest (
     cargoArgs
     // {
@@ -75,6 +71,21 @@ in
       cargoTestExtraArgs = "--all-targets";
     }
   );
+in
+{
+  inherit clippy tests;
+  package = gitk-rs;
+
+  release-environment = pkgs.runCommand "gitk-rs-release-environment" { } ''
+    diff -u ${bindgenEnvironment gitk-rs.cargoArtifacts} ${bindgenEnvironment gitk-rs}
+    touch "$out"
+  '';
+
+  development-environment = pkgs.runCommand "gitk-rs-development-environment" { } ''
+    diff -u ${bindgenEnvironment cargoArtifacts} ${bindgenEnvironment clippy}
+    diff -u ${bindgenEnvironment cargoArtifacts} ${bindgenEnvironment tests}
+    touch "$out"
+  '';
 
   scripts =
     pkgs.runCommand "gitk-rs-scripts"
