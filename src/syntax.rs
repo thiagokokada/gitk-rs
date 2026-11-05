@@ -1,5 +1,5 @@
 //! Offline syntax coverage from bat's full two-face bundle. Initialize only on
-//! a worker (or an explicitly requested CLI inventory), never during rendering.
+//! a worker, never during rendering.
 use anyhow::Result;
 use std::{ops::Range, path::Path, sync::LazyLock};
 use syntect::{
@@ -77,20 +77,6 @@ impl CodeHighlighter {
         }
         Ok(spans)
     }
-}
-
-pub fn inventory() -> String {
-    let mut syntaxes: Vec<_> = SYNTAXES.syntaxes().iter().collect();
-    syntaxes.sort_by_key(|syntax| syntax.name.to_lowercase());
-    let mut output = format!("{} bundled syntaxes\n", syntaxes.len());
-    for syntax in syntaxes {
-        output.push_str(&format!(
-            "{}\t{}\n",
-            syntax.name,
-            syntax.file_extensions.join(", ")
-        ));
-    }
-    output
 }
 
 #[cfg(test)]

@@ -19,7 +19,6 @@ fn help_and_version_exit_successfully_on_stdout() {
         let help = String::from_utf8(output.stdout).unwrap();
         assert!(help.contains("Usage: gitk-rs"));
         assert!(help.contains("--graph-cols"));
-        assert!(help.contains("--list-languages"));
         assert!(help.contains("--nowatch"));
     }
     for flag in ["--version", "-V"] {
@@ -49,12 +48,4 @@ fn invalid_arguments_exit_with_diagnostics_on_stderr() {
         assert!(error.contains("error:"));
         assert!(error.contains("--help"), "missing help guidance: {error}");
     }
-}
-
-#[test]
-fn language_inventory_exits_without_opening_the_gui() {
-    let output = run(&["--list-languages"]);
-    assert!(output.status.success());
-    assert!(output.stderr.is_empty());
-    assert!(String::from_utf8(output.stdout).unwrap().contains("Rust"));
 }

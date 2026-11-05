@@ -30,7 +30,7 @@ milestone without waiting for confirmation. Stop only when user input is actuall
   need and an agreed plan change. Continue one Git stream, avoiding repeated --skip
   scans. Pause prefetch when browsing demand is satisfied.
 - Bundle broad offline language coverage, not a small allowlist. Preserve grammar
-  licenses, detect filenames/shebangs and keep --list-languages accurate.
+  licenses and detect filenames/shebangs.
 - Functionality and workflow parity take priority in v1. Timing/RSS numbers are
   aspirations, not release gates. Avoid obvious performance mistakes, record
   meaningful bottlenecks, and defer elaborate optimization until features work.

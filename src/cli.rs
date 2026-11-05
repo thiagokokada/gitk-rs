@@ -67,10 +67,6 @@ struct Args {
     #[arg(long)]
     nosyntax: bool,
 
-    /// List bundled languages and extensions
-    #[arg(long)]
-    list_languages: bool,
-
     /// Disable automatic repository refresh
     #[arg(long)]
     nowatch: bool,
@@ -80,20 +76,11 @@ struct Args {
     verbose: bool,
 }
 
-#[derive(Debug, PartialEq, Eq)]
-pub enum Command {
-    Open(Config),
-    Languages,
-}
-
 /// Parse arguments without argv[0], preserving non-UTF8 repository paths.
 /// Clap returns help and version output as successful-exit errors.
-pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, clap::Error> {
+pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Config, clap::Error> {
     let args = Args::try_parse_from(std::iter::once(OsString::from("gitk-rs")).chain(args))?;
-    if args.list_languages {
-        return Ok(Command::Languages);
-    }
-    Ok(Command::Open(Config {
+    Ok(Config {
         repository: args.repository,
         theme: args.mode,
         timings: args.timings,
@@ -103,7 +90,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, clap::
         syntax: !args.nosyntax,
         watch: !args.nowatch,
         verbose: args.verbose,
-    }))
+    })
 }
 
 #[cfg(test)]
@@ -116,7 +103,7 @@ mod tests {
         Args::command().debug_assert();
     }
 
-    fn command(args: &[&str]) -> Result<Command, String> {
+    fn command(args: &[&str]) -> Result<Config, String> {
         parse(args.iter().map(OsString::from)).map_err(|error| error.to_string())
     }
 
@@ -124,30 +111,27 @@ mod tests {
     fn defaults_and_explicit_theme() {
         assert_eq!(
             command(&[]),
-            Ok(Command::Open(Config {
+            Ok(Config {
                 repository: PathBuf::from("."),
                 theme: Theme::Dark,
                 timings: false,
                 ..Config::default()
-            }))
+            })
         );
         assert_eq!(
             command(&["--mode", "light", "repo with spaces"]),
-            Ok(Command::Open(Config {
+            Ok(Config {
                 repository: PathBuf::from("repo with spaces"),
                 theme: Theme::Light,
                 timings: false,
                 ..Config::default()
-            }))
+            })
         );
     }
 
     #[test]
-    fn syntax_controls_and_inventory_commands() {
-        assert_eq!(command(&["--list-languages"]), Ok(Command::Languages));
-        let Command::Open(config) = command(&["--nosyntax"]).unwrap() else {
-            panic!("expected config");
-        };
+    fn syntax_can_be_disabled() {
+        let config = command(&["--nosyntax"]).unwrap();
         assert!(!config.syntax);
     }
 
@@ -165,7 +149,7 @@ mod tests {
                 "--timings",
                 "--verbose",
             ]),
-            Ok(Command::Open(Config {
+            Ok(Config {
                 repository: "repo with spaces".into(),
                 theme: Theme::Light,
                 timings: true,
@@ -175,7 +159,7 @@ mod tests {
                 syntax: false,
                 watch: false,
                 verbose: true,
-            }))
+            })
         );
     }
 
@@ -224,12 +208,12 @@ mod tests {
     fn option_terminator_preserves_dash_path() {
         assert_eq!(
             command(&["--", "--help"]),
-            Ok(Command::Open(Config {
+            Ok(Config {
                 repository: PathBuf::from("--help"),
                 theme: Theme::Dark,
                 timings: false,
                 ..Config::default()
-            }))
+            })
         );
     }
 
@@ -240,12 +224,12 @@ mod tests {
         let path = OsString::from_vec(b"repo-\xff".to_vec());
         assert_eq!(
             parse([path.clone()]).unwrap(),
-            Command::Open(Config {
+            Config {
                 repository: path.into(),
                 theme: Theme::Dark,
                 timings: false,
                 ..Config::default()
-            })
+            }
         );
     }
 }

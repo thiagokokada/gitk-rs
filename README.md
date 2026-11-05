@@ -43,11 +43,10 @@ Use the arrow keys or j/k to select commits, / to filter, and Space/Backspace
 to page through a diff. Ctrl+O opens a repository, Ctrl+B switches branches,
 and F5 reloads. Press F1 for all shortcuts.
 
-For command-line options or the supported language list:
+For command-line options:
 
 ```sh
 ./gitk-rs --help
-./gitk-rs --list-languages
 ```
 
 Font preferences are saved as `gitk-rs/preferences.toml` in the OS
