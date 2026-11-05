@@ -196,7 +196,9 @@ impl HighlightCache {
             return Ok(Vec::new());
         }
         let code = &text[1..];
-        self.parser_bytes = self.parser_bytes.saturating_add(code.len());
+        self.parser_bytes = self
+            .parser_bytes
+            .saturating_add(code.len().saturating_add(1));
         let Some(file) = location.file.and_then(|file| document.files.get(file)) else {
             return Ok(Vec::new());
         };

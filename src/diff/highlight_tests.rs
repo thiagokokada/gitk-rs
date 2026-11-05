@@ -247,3 +247,34 @@ fn separate_hunks_in_one_file_reset_their_parser_state() {
         assert_fresh_range(&mut document, start..start + 4, true);
     }
 }
+
+#[test]
+fn cursor_input_budget_counts_blank_line_separators() {
+    let fixture = Fixture::new();
+    fs::write(fixture.root().join("blank.rs"), "\n".repeat(300)).unwrap();
+    fixture.git(&["add", "."]);
+    fixture.git(&["commit", "-qm", "blank syntax lines"]);
+    let mut document =
+        DiffDocument::load(&selected(&fixture, 1), &Cancellation::default()).unwrap();
+    let request = page(1);
+    let mut snapshot = document.page(&request).unwrap();
+    document
+        .highlight(&mut snapshot, request.settings, || false)
+        .unwrap();
+    // Each diff marker replaces the newline appended by CodeHighlighter::line.
+    let expected = snapshot
+        .lines
+        .iter()
+        .filter(|line| line.kind.code())
+        .map(|line| line.text.len())
+        .sum::<usize>();
+    assert!(expected > 0);
+    assert_eq!(
+        document
+            .highlight_cache
+            .as_ref()
+            .unwrap()
+            .cursor_input_bytes(),
+        expected
+    );
+}
