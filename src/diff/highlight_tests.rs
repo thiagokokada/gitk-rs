@@ -31,9 +31,17 @@ fn document() -> (Fixture, DiffDocument) {
 
 // A fresh parser replays the hunk; the warmed path must produce identical tokens.
 fn assert_fresh_page(document: &mut DiffDocument, start: usize, dark: bool) -> DiffSnapshot {
+    assert_fresh_range(document, start..start + 128, dark)
+}
+
+fn assert_fresh_range(
+    document: &mut DiffDocument,
+    range: std::ops::Range<usize>,
+    dark: bool,
+) -> DiffSnapshot {
     let cache = document.highlight_cache.take();
     let mut request = page(1);
-    request.range = start..start + 128;
+    request.range = range;
     request.settings.dark = dark;
     let mut expected = document.page(&request).unwrap();
     assert!(
@@ -210,4 +218,32 @@ fn large_hunk_paging_parses_the_prefix_once() {
         cache.parsed_lines,
         cache.retained_bytes()
     );
+}
+
+#[test]
+fn separate_hunks_in_one_file_reset_their_parser_state() {
+    let fixture = Fixture::new();
+    let mut lines = (0..200)
+        .map(|i| format!("let value_{i} = {i};\n"))
+        .collect::<Vec<_>>();
+    fs::write(fixture.root().join("hunks.rs"), lines.concat()).unwrap();
+    fixture.git(&["add", "."]);
+    fixture.git(&["commit", "-qm", "base hunks"]);
+    lines[10] = "let first = \"λ\";\n".into();
+    lines[150] = "let second = \"λ\";\n".into();
+    fs::write(fixture.root().join("hunks.rs"), lines.concat()).unwrap();
+    fixture.git(&["add", "."]);
+    fixture.git(&["commit", "-qm", "two hunks"]);
+    let mut document =
+        DiffDocument::load(&selected(&fixture, 1), &Cancellation::default()).unwrap();
+    let hunks = document
+        .index
+        .iter()
+        .enumerate()
+        .filter_map(|(i, line)| (line.kind == super::LineKind::Hunk).then_some(i))
+        .collect::<Vec<_>>();
+    assert_eq!(hunks.len(), 2);
+    for start in [hunks[0], hunks[0] + 3, hunks[1], hunks[1] + 3, hunks[0]] {
+        assert_fresh_range(&mut document, start..start + 4, true);
+    }
 }

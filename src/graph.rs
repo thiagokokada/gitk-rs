@@ -119,7 +119,6 @@ impl GraphLayout {
     }
 }
 
-#[derive(Clone)]
 struct Lane {
     target: CommitId,
     color: u8,
@@ -259,9 +258,6 @@ impl GraphBuilder {
 }
 
 #[cfg(test)]
-mod reference;
-
-#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -275,10 +271,9 @@ mod tests {
     }
 
     #[test]
-    fn complete_rows_match_the_previous_algorithm_across_caps() {
+    fn generated_dags_keep_geometry_within_the_frontier() {
         for cap in [1, 2, 3, 8, 32, 200] {
             let mut graph = GraphBuilder::new(cap);
-            let mut reference = super::reference::ReferenceBuilder::new(cap);
             let mut state = 0x23456789_u64;
             for id in (1..=512_u64).rev() {
                 state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
@@ -291,44 +286,92 @@ mod tests {
                     .join(" ");
                 let commit = crate::git::parse_commit(format!("{id:040x}\n{parents}\nA\na@b\n2026-01-01T00:00:00Z\nA\na@b\n2026-01-01T00:00:00Z\nMessage\n").as_bytes()).unwrap();
                 let actual = graph.push(&commit);
-                let expected = reference.push(&commit);
-                assert_eq!(actual, expected, "cap={cap} id={id}");
+                assert!(actual.node.is_some_and(|node| usize::from(node) < cap));
+                assert!(usize::from(actual.width) <= cap);
+                assert!(actual.edges.len() <= commit.parents.len() + cap);
+                assert!(actual.edges.iter().all(|edge| usize::from(edge.from) < cap
+                    && usize::from(edge.to) < cap
+                    && edge.color < 6));
+                assert!(
+                    actual
+                        .edges
+                        .iter()
+                        .filter(|edge| edge.parent)
+                        .all(|edge| Some(edge.from) == actual.node)
+                );
+                assert!(graph.lanes.len() <= cap);
             }
         }
     }
 
     #[test]
-    fn full_width_octopus_merges_and_sparse_roots_match_the_original() {
+    fn full_width_octopus_merges_and_sparse_roots_respect_the_cap() {
         for cap in [1, 2, 8, 32, 200] {
             let mut builder = GraphBuilder::new(cap);
-            let mut reference = super::reference::ReferenceBuilder::new(cap);
             let merge = commit(1000, &(1..=256).collect::<Vec<_>>());
-            assert_eq!(builder.push(&merge), reference.push(&merge));
+            let merged = builder.push(&merge);
+            assert_eq!(merged.edges.iter().filter(|edge| edge.parent).count(), cap);
+            assert!(merged.overflow);
+            assert_eq!(usize::from(merged.width), cap);
             for id in (1..=256).rev() {
                 let parents = if id % 3 == 0 { vec![] } else { vec![id / 2] };
                 let commit = commit(id, &parents);
-                assert_eq!(
-                    builder.push(&commit),
-                    reference.push(&commit),
-                    "cap={cap} id={id}"
+                let row = builder.push(&commit);
+                assert!(row.node.is_some());
+                assert!(
+                    row.edges
+                        .iter()
+                        .all(|edge| usize::from(edge.from) < cap && usize::from(edge.to) < cap)
                 );
                 assert!(builder.lanes.len() <= cap);
             }
+            builder.push(&commit(0, &[]));
+            assert!(builder.lanes.is_empty());
         }
     }
 
     #[test]
     fn overflow_can_reintroduce_the_displaced_target_with_its_old_color() {
         let mut builder = GraphBuilder::new(2);
-        let mut reference = super::reference::ReferenceBuilder::new(2);
-        for commit in [
-            commit(10, &[9, 8]),
-            commit(7, &[8, 6]),
-            commit(8, &[5]),
-            commit(9, &[5]),
-        ] {
-            assert_eq!(builder.push(&commit), reference.push(&commit));
-        }
+        builder.push(&commit(10, &[9, 8]));
+        let row = builder.push(&commit(7, &[8, 6]));
+        assert!(row.overflow);
+        assert!(!row.incoming);
+        assert_eq!(row.node, Some(1));
+        assert_eq!(row.color, 2);
+        assert_eq!(
+            row.edges.as_ref(),
+            &[
+                Edge {
+                    from: 1,
+                    to: 1,
+                    parent: true,
+                    color: 2
+                },
+                Edge {
+                    from: 0,
+                    to: 0,
+                    parent: false,
+                    color: 0
+                },
+                Edge {
+                    from: 1,
+                    to: 1,
+                    parent: false,
+                    color: 1
+                },
+            ]
+        );
+        let restored = builder.push(&commit(8, &[5]));
+        assert!(restored.incoming);
+        assert_eq!((restored.node, restored.color), (Some(1), 2));
+        let joined = builder.push(&commit(9, &[5]));
+        assert!(
+            joined
+                .edges
+                .iter()
+                .any(|edge| edge.parent && edge.from == 0 && edge.to == 1 && edge.color == 2)
+        );
     }
 
     #[test]

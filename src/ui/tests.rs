@@ -662,8 +662,7 @@ fn workspace_changes_before_layout_preserve_the_top_commit(cx: &mut TestAppConte
         );
         std::thread::sleep(Duration::from_millis(10));
     }
-    // No layout has applied the deferred scroll: indices must already describe
-    // the new row count before another HEAD update captures its bookmark.
+    // Layout must preserve the same bookmark before the next HEAD update.
     assert_eq!(
         cx.update(|_, cx| {
             let view = app.view.read(cx);
