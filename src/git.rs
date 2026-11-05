@@ -593,6 +593,7 @@ mod tests {
         assert!(receiver.recv_timeout(Duration::from_secs(3)).unwrap());
         worker.join().unwrap();
     }
+
     #[test]
     fn shared_cancellation_wakes_all_monitors_after_another_child_finishes() {
         let fixture = Fixture::new();
