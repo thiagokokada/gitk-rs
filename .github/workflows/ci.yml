@@ -79,8 +79,6 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     env:
-      CARGO_PROFILE_DEV_DEBUG: 0
-      CARGO_PROFILE_TEST_DEBUG: 0
       CARGO_TERM_COLOR: always
     steps:
       - uses: actions/checkout@v6
@@ -89,28 +87,14 @@ jobs:
 
       - uses: cachix/install-nix-action@v31
 
-      - name: Cache Nix Cargo artifacts
-        uses: actions/cache@v5
+      - name: Cache Nix store
+        uses: nix-community/cache-nix-action@v7
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          # Keep Nix artifacts separate from native Cargo builds. Include the
-          # commit so successful source changes refresh the immutable cache.
-          key: nix-cargo-v1-${{ runner.os }}-${{ runner.arch }}-debug0-${{ hashFiles('flake.lock', 'flake.nix', 'shell.nix', 'gitk-rs.nix') }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'vendor/**') }}-${{ github.sha }}
-          restore-keys: |
-            nix-cargo-v1-${{ runner.os }}-${{ runner.arch }}-debug0-${{ hashFiles('flake.lock', 'flake.nix', 'shell.nix', 'gitk-rs.nix') }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'vendor/**') }}-
-            nix-cargo-v1-${{ runner.os }}-${{ runner.arch }}-debug0-${{ hashFiles('flake.lock', 'flake.nix', 'shell.nix', 'gitk-rs.nix') }}-
-
-      - name: Check formatting
-        run: nix develop --command cargo fmt --all -- --check
-
-      - name: Clippy
-        run: nix develop --command cargo clippy --all-targets --locked -- -D warnings
-
-      - name: Test without a display
-        run: nix develop --command env -u DISPLAY -u WAYLAND_DISPLAY cargo test --all-targets --locked
+          # Save each commit's store; restore earlier compiled dependencies.
+          primary-key: nix-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('flake.lock', 'Cargo.lock', 'Cargo.toml', 'vendor/**') }}-${{ github.sha }}
+          restore-prefixes-first-match: |
+            nix-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('flake.lock', 'Cargo.lock', 'Cargo.toml', 'vendor/**') }}-
+            nix-v1-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Check flake and package
         run: nix flake check --print-build-logs

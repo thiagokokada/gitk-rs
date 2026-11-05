@@ -1,6 +1,7 @@
 {
   pkgs,
   gitk-rs,
+  craneLib,
 }:
 let
   inherit (pkgs)
@@ -10,9 +11,58 @@ let
     desktop-file-utils
     librsvg
     ;
+  # Share compiled dependencies between sandboxed development checks. The
+  # dependency derivation stays reusable when only application source changes.
+  cargoArgs = {
+    inherit (gitk-rs) src version buildInputs;
+    pname = "gitk-rs-checks";
+    nativeBuildInputs = with pkgs; [
+      clang
+      cmake
+      pkg-config
+      rustPlatform.bindgenHook
+      git
+    ];
+    CARGO_PROFILE = "dev";
+    CARGO_PROFILE_DEV_DEBUG = "0";
+    CARGO_PROFILE_TEST_DEBUG = "0";
+    preBuild = ''
+      unset DISPLAY WAYLAND_DISPLAY
+    '';
+  };
+  cargoArtifacts = craneLib.buildDepsOnly (
+    cargoArgs
+    // {
+      cargoTestExtraArgs = "--all-targets --no-run";
+      # Registry crates consume this patched local dependency's real API.
+      # Preserve it instead of Crane's stub, without depending on app sources.
+      extraDummyScript = ''
+        rm -r "$out/vendor/xattr"
+        cp -r ${./vendor/xattr} "$out/vendor/xattr"
+      '';
+    }
+  );
 in
 {
   package = gitk-rs;
+
+  clippy = craneLib.cargoClippy (
+    cargoArgs
+    // {
+      inherit cargoArtifacts;
+      doInstallCargoArtifacts = false;
+      cargoClippyExtraArgs = "--all-targets -- -D warnings";
+    }
+  );
+
+  tests = craneLib.cargoTest (
+    cargoArgs
+    // {
+      inherit cargoArtifacts;
+      doInstallCargoArtifacts = false;
+      cargoTestExtraArgs = "--all-targets";
+    }
+  );
 
   scripts =
     runCommand "gitk-rs-scripts"
@@ -36,13 +86,14 @@ in
     runCommand "gitk-rs-format"
       {
         nativeBuildInputs = [
+          pkgs.cargo
           rustfmt
           nixfmt
         ];
       }
       ''
         cd ${gitk-rs.src}
-        find src tests -name '*.rs' -print0 | xargs -0 rustfmt --edition 2024 --check
+        cargo fmt --all -- --check
         nixfmt --check ${./flake.nix} ${./gitk-rs.nix} ${./shell.nix} ${./checks.nix}
         touch $out
       '';

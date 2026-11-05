@@ -2,9 +2,14 @@
   description = "gitk-rs: a Git history explorer";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+  inputs.crane.url = "github:ipetkov/crane";
 
   outputs =
-    { self, nixpkgs }:
+    {
+      self,
+      nixpkgs,
+      crane,
+    }:
     let
       systems = [
         "x86_64-linux"
@@ -35,6 +40,7 @@
         system:
         import ./checks.nix {
           pkgs = nixpkgs.legacyPackages.${system};
+          craneLib = crane.mkLib nixpkgs.legacyPackages.${system};
           gitk-rs = self.packages.${system}.gitk-rs;
         }
       );
