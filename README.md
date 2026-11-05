@@ -74,12 +74,22 @@ cargo build --release --locked
 ./target/release/gitk-rs /path/to/repository
 ```
 
-On macOS, builds use runtime shaders by default. With the full Xcode Metal
-toolchain installed, compile shaders at build time to reduce startup work:
+On macOS, builds compile Metal shaders at startup by default. To compile them
+at build time, install and open full Xcode to finish setup, then run these commands
+outside `nix develop`:
 
 ```sh
+export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
+/usr/bin/xcodebuild -downloadComponent MetalToolchain
+/usr/bin/xcrun -sdk macosx --find metal
+/usr/bin/xcrun -sdk macosx --find metallib
 cargo build --release --locked --no-default-features
+./target/release/gitk-rs /path/to/repository
 ```
+
+The Command Line Tools alone may lack the Metal compiler. See Apple's
+[additional Xcode components](https://developer.apple.com/documentation/xcode/downloading-and-installing-additional-xcode-components)
+instructions for installing the toolchain.
 
 #### Nix
 
@@ -90,7 +100,11 @@ nix build
 ./result/bin/gitk-rs /path/to/repository
 ```
 
-Nix uses runtime shaders by default.
+Nix uses runtime shaders by default. Its SDK does not provide the Metal compiler,
+and sandboxed builds cannot automatically use Xcode from `/Applications`.
+The package accepts `metalToolchain` as an override: a Nix store package providing
+`bin/xcrun` with `metal`, `metallib`, and their dependencies. Supplying it enables
+build-time compilation, but a packaged toolchain is not yet included here.
 
 ### Checks
 
