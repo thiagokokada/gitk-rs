@@ -568,13 +568,14 @@ mod tests {
 
     #[test]
     fn cancellation_kills_helpers_and_unblocks_reading() {
+        // Create the helper before readiness, so cancellation cannot race its fork.
         let fixture = Fixture::new();
         let cancel = Cancellation::default();
         let mut stream = GitStream::spawn(
             fixture.root(),
             &[
                 "-c",
-                "alias.blocked=!printf 'ready\\n'; sleep 30",
+                "alias.blocked=!sleep 30 & helper=$!; printf 'ready\\n'; wait \"$helper\"",
                 "blocked",
             ],
             cancel.clone(),
@@ -602,7 +603,7 @@ mod tests {
                 fixture.root(),
                 &[
                     "-c",
-                    "alias.blocked=!printf 'ready\\n'; sleep 30",
+                    "alias.blocked=!sleep 30 & helper=$!; printf 'ready\\n'; wait \"$helper\"",
                     "blocked",
                 ],
                 cancel.clone(),
