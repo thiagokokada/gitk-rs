@@ -35,9 +35,28 @@ let
       '';
     }
   );
+  # Probe setup-hook flags without compiling either derivation. A difference
+  # here makes bindgen invalidate GPUI even when cargoArtifacts is restored.
+  bindgenEnvironment =
+    drv:
+    drv.overrideAttrs {
+      name = "${drv.pname}-bindgen-environment";
+      src = null;
+      cargoArtifacts = null;
+      cargoVendorDir = null;
+      phases = [ "buildPhase" ];
+      buildPhase = ''
+        printf '%s\n' "$LIBCLANG_PATH" "$BINDGEN_EXTRA_CLANG_ARGS" > "$out"
+      '';
+    };
 in
 {
   package = gitk-rs;
+
+  release-environment = pkgs.runCommand "gitk-rs-release-environment" { } ''
+    diff -u ${bindgenEnvironment gitk-rs.cargoArtifacts} ${bindgenEnvironment gitk-rs}
+    touch "$out"
+  '';
 
   clippy = craneLib.cargoClippy (
     cargoArgs

@@ -26,6 +26,10 @@ let
   commonArgs = {
     pname = "gitk-rs";
     version = "0.1.0";
+    strictDeps = true;
+    # bindgenHook copies NIX_CFLAGS_COMPILE into a tracked environment variable.
+    # Keep its random seed identical across dependency and application builds.
+    NIX_OUTPATH_USED_AS_RANDOM_SEED = builtins.hashFile "sha256" ./Cargo.lock;
     src = lib.fileset.toSource {
       root = ./.;
       fileset = lib.fileset.unions [
