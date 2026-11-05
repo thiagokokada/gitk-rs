@@ -9,10 +9,7 @@ use std::{
     collections::HashMap,
     ops::Range,
     path::PathBuf,
-    sync::{
-        Arc, Condvar, Mutex,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::{Arc, Condvar, Mutex, atomic::Ordering},
     thread::{self, JoinHandle},
 };
 
@@ -118,7 +115,7 @@ impl HistoryEngine {
                 generation: initial.generation,
                 request: Some(initial),
                 snapshot: None,
-                cancellation: Arc::new(AtomicBool::new(false)),
+                cancellation: Cancellation::default(),
                 stopped: false,
             }),
             changed: Condvar::new(),
@@ -158,7 +155,7 @@ impl HistoryHandle {
             let mut state = self.shared.state.lock().unwrap();
             if request.generation != state.generation {
                 state.cancellation.store(true, Ordering::Release);
-                state.cancellation = Arc::new(AtomicBool::new(false));
+                state.cancellation = Cancellation::default();
                 state.generation = request.generation;
             }
             state.request.replace(request)
@@ -587,7 +584,7 @@ mod tests {
         fixture.commit("first\n\nHidden body needle");
         fixture.commit("second");
         let mut request = request(&fixture);
-        let mut session = Session::open(&request, Arc::new(AtomicBool::new(false))).unwrap();
+        let mut session = Session::open(&request, Cancellation::default()).unwrap();
         while session.step(&request).unwrap() {}
         let before = session.entries[1].clone();
         request.anchor = Some(1);
@@ -639,7 +636,7 @@ mod tests {
         let fixture = Fixture::new();
         let id = fixture.commit("tagged");
         fixture.git(&["tag", "-a", "v1", "-m", "version one"]);
-        let cancel = Arc::new(AtomicBool::new(false));
+        let cancel = Cancellation::default();
         let repository = Repository::open(fixture.root(), &cancel).unwrap();
         let refs = load_refs(&repository, &cancel).unwrap();
         assert!(

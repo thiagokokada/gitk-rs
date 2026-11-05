@@ -2,8 +2,9 @@ name: CI
 
 on:
   push:
+    branches: [ "main" ]
   pull_request:
-  workflow_dispatch:
+    branches: [ "main" ]
 
 permissions:
   contents: read
@@ -22,14 +23,14 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     env:
-      CARGO_BUILD_JOBS: 2
       CARGO_PROFILE_DEV_DEBUG: 0
       CARGO_PROFILE_TEST_DEBUG: 0
       CARGO_TERM_COLOR: always
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@v6
         with:
           persist-credentials: false
+
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
         run: |
@@ -38,16 +39,19 @@ jobs:
             libfontconfig1-dev libfreetype6-dev libssl-dev zlib1g-dev libwayland-dev \
             libxcb1-dev libxkbcommon-x11-dev libx11-dev libxcursor-dev libxi-dev \
             libxrandr-dev libvulkan-dev fonts-dejavu-core
+
       - name: Install macOS dependencies
         if: runner.os == 'macOS'
         run: brew install cmake pkg-config
+
       - name: Install stable Rust
         id: rust
         run: |
           rustup toolchain install stable --profile minimal
           rustup default stable
           echo "version=$(rustc --version | shasum -a 256 | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+
+      - uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -56,10 +60,13 @@ jobs:
           key: cargo-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust.outputs.version }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'vendor/**') }}
           restore-keys: |
             cargo-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust.outputs.version }}-
+
       - name: Build
         run: cargo build --locked
+
       - name: Test without a display
         run: env -u DISPLAY -u WAYLAND_DISPLAY cargo test --all-targets --locked
+
       - name: Check executable
         run: ./target/debug/gitk-rs --version
 
@@ -72,18 +79,22 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     env:
-      CARGO_BUILD_JOBS: 2
       CARGO_TERM_COLOR: always
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@v6
         with:
           persist-credentials: false
-      - uses: cachix/install-nix-action@75c75c31ebece974e48ebc36b4ad125bd97bd97b # v31
+
+      - uses: cachix/install-nix-action@v31
+
       - name: Check formatting
         run: nix develop --command cargo fmt --all -- --check
+
       - name: Clippy
         run: nix develop --command cargo clippy --all-targets --locked -- -D warnings
+
       - name: Test without a display
         run: nix develop --command env -u DISPLAY -u WAYLAND_DISPLAY cargo test --all-targets --locked
+
       - name: Check flake and package
-        run: nix flake check --print-build-logs --option cores 2
+        run: nix flake check --print-build-logs

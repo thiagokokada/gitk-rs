@@ -618,3 +618,83 @@ fn repository_path_dialog_replaces_history_and_restores_navigation(cx: &mut Test
     cx.simulate_keystrokes("j");
     assert_eq!(selected(&app.view, cx).as_deref(), Some(base.as_str()));
 }
+
+#[gpui::test]
+fn workspace_changes_before_layout_preserve_the_top_commit(cx: &mut TestAppContext) {
+    let fixture = history_fixture(100);
+    let (app, cx) = open(&fixture, cx);
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            let view = app.view.read(cx);
+            view.cached(60).is_some() && view.workspace_snapshot.is_some()
+        })
+    });
+    app.view
+        .update_in(cx, |view, window, cx| view.select(55, window, cx));
+    app.view.update(cx, |view, cx| {
+        view.scroll.scroll_to_item_strict(50, ScrollStrategy::Top);
+        cx.notify();
+    });
+    until(cx, |cx| {
+        cx.update(|_, cx| app.view.read(cx).viewport.start == 50)
+    });
+    let top = cx.update(|_, cx| app.view.read(cx).cached(50).unwrap().commit.id.clone());
+    let chosen = selected(&app.view, cx).unwrap();
+    std::fs::write(fixture.root().join("transient.txt"), "not committed yet").unwrap();
+    app.view.update(cx, |view, _| view.refresh_workspace());
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        if app.view.update(cx, |view, cx| {
+            view.consume_workspace(cx);
+            if view.local_rows.len() == 1 {
+                // Assert before this update returns and GPUI can run layout.
+                assert_eq!(view.cached(view.viewport.start).unwrap().commit.id, top);
+                true
+            } else {
+                false
+            }
+        }) {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "workspace did not observe local row"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    // Layout must preserve the same bookmark before the next HEAD update.
+    assert_eq!(
+        cx.update(|_, cx| {
+            let view = app.view.read(cx);
+            view.cached(view.viewport.start).unwrap().commit.id.clone()
+        }),
+        top
+    );
+    let generation = cx.update(|_, cx| app.view.read(cx).request.generation);
+    fixture.commit("committed transient row");
+    app.view.update(cx, |view, _| view.refresh_workspace());
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        if app.view.update(cx, |view, cx| {
+            view.consume_workspace(cx);
+            view.request.generation != generation
+        }) {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "workspace did not observe HEAD change"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            let view = app.view.read(cx);
+            view.reload_selection.is_none()
+                && view
+                    .cached(view.viewport.start)
+                    .is_some_and(|entry| entry.commit.id == top)
+        })
+    });
+    assert_eq!(selected(&app.view, cx).as_deref(), Some(chosen.as_str()));
+}

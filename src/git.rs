@@ -6,7 +6,7 @@ use std::{
     path::{Path, PathBuf},
     process::{Child, ChildStdout, Command, ExitStatus, Stdio},
     sync::{
-        Arc, Mutex,
+        Arc, Condvar, Mutex,
         atomic::{AtomicBool, Ordering},
     },
     thread::{self, JoinHandle},
@@ -15,7 +15,47 @@ use std::{
 
 pub const MAX_RECORD_BYTES: usize = 2 * 1024 * 1024;
 const MAX_STDERR_BYTES: usize = 64 * 1024;
-pub type Cancellation = Arc<AtomicBool>;
+/// Shared cancellation flag with a notification for blocked process monitors.
+#[derive(Clone, Default)]
+pub struct Cancellation(Arc<CancellationState>);
+
+#[derive(Default)]
+struct CancellationState {
+    cancelled: AtomicBool,
+    waiting: Mutex<()>,
+    changed: Condvar,
+}
+
+impl Cancellation {
+    pub fn load(&self, ordering: Ordering) -> bool {
+        self.0.cancelled.load(ordering)
+    }
+
+    pub fn store(&self, value: bool, ordering: Ordering) {
+        let _guard = self.0.waiting.lock().unwrap();
+        self.0.cancelled.store(value, ordering);
+        self.0.changed.notify_all();
+    }
+
+    fn wake(&self) {
+        // Synchronize with the predicate-to-wait transition, including when a
+        // child finishes just before its monitor begins waiting.
+        let _guard = self.0.waiting.lock().unwrap();
+        self.0.changed.notify_all();
+    }
+
+    fn wait(&self, finished: &AtomicBool) {
+        let guard = self.0.waiting.lock().unwrap();
+        drop(
+            self.0
+                .changed
+                .wait_while(guard, |_| {
+                    !self.load(Ordering::Acquire) && !finished.load(Ordering::Acquire)
+                })
+                .unwrap(),
+        );
+    }
+}
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct CommitId(String);
@@ -44,7 +84,7 @@ pub struct Signature {
 #[derive(Clone, Debug)]
 pub struct Commit {
     pub id: CommitId,
-    pub parents: Vec<CommitId>,
+    pub parents: Box<[CommitId]>,
     pub author: Signature,
     pub committer: Signature,
     pub message: String,
@@ -269,12 +309,9 @@ impl GitStream {
             let finished = finished.clone();
             let cancel = cancel.clone();
             thread::spawn(move || {
-                while !finished.load(Ordering::Acquire) {
-                    if cancel.load(Ordering::Acquire) {
-                        terminate(&mut child.lock().unwrap());
-                        break;
-                    }
-                    thread::park_timeout(Duration::from_millis(5));
+                cancel.wait(&finished);
+                if cancel.load(Ordering::Acquire) && !finished.load(Ordering::Acquire) {
+                    terminate(&mut child.lock().unwrap());
                 }
             })
         };
@@ -358,8 +395,8 @@ impl GitStream {
             .and_then(|t| t.join().ok())
             .unwrap_or_default();
         self.finished.store(true, Ordering::Release);
+        self.cancel.wake();
         if let Some(killer) = self.killer.take() {
-            killer.thread().unpark();
             let _ = killer.join();
         }
         ensure!(
@@ -386,8 +423,8 @@ impl Drop for GitStream {
             let _ = self.child.lock().unwrap().wait();
         }
         self.finished.store(true, Ordering::Release);
+        self.cancel.wake();
         if let Some(killer) = self.killer.take() {
-            killer.thread().unpark();
             let _ = killer.join();
         }
         if let Some(stderr) = self.stderr.take() {
@@ -421,7 +458,8 @@ pub fn parse_commit(record: &[u8]) -> Result<Commit> {
     let parents = next()?
         .split_whitespace()
         .map(CommitId::parse)
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<Result<Vec<_>>>()?
+        .into_boxed_slice();
     let author = Signature {
         name: next()?,
         email: next()?,
@@ -465,7 +503,7 @@ mod tests {
     #[test]
     fn streaming_unborn_and_detached_heads() {
         let fixture = Fixture::new();
-        let cancel = Arc::new(AtomicBool::new(false));
+        let cancel = Cancellation::default();
         assert!(
             Repository::open(fixture.root(), &cancel)
                 .unwrap()
@@ -490,7 +528,7 @@ mod tests {
     #[test]
     fn oversized_records_are_rejected_before_unbounded_allocation() {
         let fixture = Fixture::new();
-        let cancel = Arc::new(AtomicBool::new(false));
+        let cancel = Cancellation::default();
         let mut stream = GitStream::spawn(
             fixture.root(),
             &["-c", "alias.flood=!head -c 3145728 /dev/zero", "flood"],
@@ -511,7 +549,7 @@ mod tests {
     #[test]
     fn stderr_is_drained_and_exit_errors_are_reported() {
         let fixture = Fixture::new();
-        let cancel = Arc::new(AtomicBool::new(false));
+        let cancel = Cancellation::default();
         let error = run_bytes(
             fixture.root(),
             &[
@@ -530,13 +568,14 @@ mod tests {
 
     #[test]
     fn cancellation_kills_helpers_and_unblocks_reading() {
+        // Create the helper before readiness, so cancellation cannot race its fork.
         let fixture = Fixture::new();
-        let cancel = Arc::new(AtomicBool::new(false));
+        let cancel = Cancellation::default();
         let mut stream = GitStream::spawn(
             fixture.root(),
             &[
                 "-c",
-                "alias.blocked=!printf 'ready\\n'; sleep 30",
+                "alias.blocked=!sleep 30 & helper=$!; printf 'ready\\n'; wait \"$helper\"",
                 "blocked",
             ],
             cancel.clone(),
@@ -554,6 +593,70 @@ mod tests {
         assert!(receiver.recv_timeout(Duration::from_secs(3)).unwrap());
         worker.join().unwrap();
     }
+
+    #[test]
+    fn shared_cancellation_wakes_all_monitors_after_another_child_finishes() {
+        let fixture = Fixture::new();
+        let cancel = Cancellation::default();
+        let mut streams = Vec::new();
+        for _ in 0..2 {
+            let mut stream = GitStream::spawn(
+                fixture.root(),
+                &[
+                    "-c",
+                    "alias.blocked=!sleep 30 & helper=$!; printf 'ready\\n'; wait \"$helper\"",
+                    "blocked",
+                ],
+                cancel.clone(),
+                &[0],
+            )
+            .unwrap();
+            assert_eq!(stream.record(b'\n').unwrap().unwrap().bytes, b"ready");
+            streams.push(stream);
+        }
+        run_bytes(fixture.root(), &["rev-parse", "--git-dir"], &cancel, &[0]).unwrap();
+        assert!(!cancel.load(Ordering::Acquire));
+        assert!(
+            streams
+                .iter()
+                .all(|stream| stream.child.lock().unwrap().try_wait().unwrap().is_none())
+        );
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let workers = streams
+            .into_iter()
+            .map(|mut stream| {
+                let sender = sender.clone();
+                thread::spawn(move || {
+                    let failed = stream.record(b'\n').is_err();
+                    drop(stream);
+                    sender.send(failed).unwrap();
+                })
+            })
+            .collect::<Vec<_>>();
+        cancel.store(true, Ordering::Release);
+        for _ in 0..2 {
+            assert!(receiver.recv_timeout(Duration::from_secs(3)).unwrap());
+        }
+        for worker in workers {
+            worker.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn rapid_normal_completion_cannot_miss_the_monitor_wakeup() {
+        let fixture = Fixture::new();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let worker = thread::spawn(move || {
+            let cancel = Cancellation::default();
+            for _ in 0..32 {
+                run_bytes(fixture.root(), &["rev-parse", "--git-dir"], &cancel, &[0]).unwrap();
+            }
+            sender.send(()).unwrap();
+        });
+        receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+        worker.join().unwrap();
+    }
+
     #[test]
     fn linked_worktree_resolves_its_common_directory_and_history() {
         let fixture = Fixture::new();
@@ -568,7 +671,7 @@ mod tests {
             "linked",
             linked.path().to_str().unwrap(),
         ]);
-        let cancel = Arc::new(AtomicBool::new(false));
+        let cancel = Cancellation::default();
         let repository = Repository::open(linked.path(), &cancel).unwrap();
         assert_eq!(
             repository.common_dir,
@@ -603,7 +706,7 @@ mod tests {
             fixture.root().to_str().unwrap(),
             clone.path().to_str().unwrap(),
         ]);
-        let cancel = Arc::new(AtomicBool::new(false));
+        let cancel = Cancellation::default();
         let repository = Repository::open(clone.path(), &cancel).unwrap();
         let mut stream = repository.log(cancel).unwrap();
         let commit = stream.next_commit().unwrap().unwrap();

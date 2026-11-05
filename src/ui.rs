@@ -487,10 +487,11 @@ impl HistoryWindow {
             *index = index.saturating_sub(old_count) + self.local_rows.len();
         }
         if old_count != self.local_rows.len() && old_top > old_count {
-            self.scroll.scroll_to_item_strict(
-                old_top - old_count + self.local_rows.len(),
-                ScrollStrategy::Top,
-            );
+            let top = old_top - old_count + self.local_rows.len();
+            // HEAD may change before layout applies this scroll. Bookmarks
+            // must already address the current local-row count.
+            self.viewport = top..top.saturating_add(self.viewport.len());
+            self.scroll.scroll_to_item_strict(top, ScrollStrategy::Top);
         }
         if let Some(staged) = self.local_selection {
             if self.local_rows.contains(&staged) {
