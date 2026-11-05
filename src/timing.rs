@@ -10,10 +10,21 @@ use std::{
 
 #[derive(Clone, Copy, Debug)]
 pub enum Phase {
+    PreferencesLoaded,
+    WorkersStarted,
+    ApplicationCreated,
+    ComponentsInitialized,
+    WindowOpening,
     WindowCreated,
+    ViewCreated,
     WindowPainted,
     HistoryPainted,
     SelectionPainted,
+    DiffPainted,
+}
+
+impl Phase {
+    const COUNT: usize = Self::DiffPainted as usize + 1;
 }
 
 enum Event {
@@ -39,7 +50,7 @@ impl TimingGuard {
             let (sender, receiver) = mpsc::sync_channel(64);
             let worker = thread::spawn(move || {
                 let mut samples = VecDeque::with_capacity(512);
-                let mut first = [true; 4];
+                let mut first = [true; Phase::COUNT];
                 let mut output = io::BufWriter::new(io::stderr());
                 while let Ok(event) = receiver.recv() {
                     match event {

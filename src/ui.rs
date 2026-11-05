@@ -1000,6 +1000,7 @@ impl Render for HistoryWindow {
         let timing = self.timing.clone();
         let history_ready = self.snapshot.as_ref().is_some_and(|s| !s.rows.is_empty());
         let selection_ready = self.selected.is_some();
+        let diff_ready = self.diff.read(cx).ready_for_paint();
         let (background, foreground, panel, border) = match self.config.theme {
             Theme::Dark => (0x202329, 0xe0e4eb, 0x292d35, 0x454b57),
             Theme::Light => (0xf5f6f8, 0x202329, 0xffffff, 0xc4c9d2),
@@ -1375,6 +1376,9 @@ impl Render for HistoryWindow {
                             if selection_ready {
                                 timing.mark(Phase::SelectionPainted);
                             }
+                            if diff_ready {
+                                timing.mark(Phase::DiffPainted);
+                            }
                             timing.frame(started);
                         },
                     )
@@ -1475,12 +1479,13 @@ fn bind_keys(cx: &mut App) {
 }
 
 pub fn run(config: Config, launched: Instant) {
+    let guard = TimingGuard::start(config.timings, launched);
+    let timing = guard.timing();
     let preferences = Preferences::load().unwrap_or_else(|error| {
         eprintln!("gitk-rs: preferences: {error:#}");
         Preferences::default()
     });
-    let guard = TimingGuard::start(config.timings, launched);
-    let timing = guard.timing();
+    timing.mark(Phase::PreferencesLoaded);
     let request = Request {
         generation: Generation(1),
         id: 0,
@@ -1503,7 +1508,10 @@ pub fn run(config: Config, launched: Instant) {
     let workspace = workspace_engine.handle();
     let diff_engine = DiffEngine::spawn();
     let diff_handle = diff_engine.handle();
-    Application::new()
+    timing.mark(Phase::WorkersStarted);
+    let application = Application::new();
+    timing.mark(Phase::ApplicationCreated);
+    application
         .with_assets(gpui_component_assets::Assets)
         .run(move |cx: &mut App| {
             gpui_component::init(cx);
@@ -1516,6 +1524,7 @@ pub fn run(config: Config, launched: Instant) {
                 cx,
             );
             bind_keys(cx);
+            timing.mark(Phase::ComponentsInitialized);
             cx.on_window_closed(|cx| {
                 if cx.windows().is_empty() {
                     // Native X11 close still holds its client borrow during App::defer.
@@ -1534,6 +1543,7 @@ pub fn run(config: Config, launched: Instant) {
             })
             .detach();
             let bounds = Bounds::centered(None, size(px(1280.), px(850.)), cx);
+            timing.mark(Phase::WindowOpening);
             if let Err(error) = cx.open_window(
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -1546,7 +1556,7 @@ pub fn run(config: Config, launched: Instant) {
                     let view = cx.new(|cx| {
                         HistoryWindow::new(
                             config,
-                            timing,
+                            timing.clone(),
                             WindowServices {
                                 history,
                                 workspace,
@@ -1558,6 +1568,7 @@ pub fn run(config: Config, launched: Instant) {
                             cx,
                         )
                     });
+                    timing.mark(Phase::ViewCreated);
                     cx.new(|cx| Root::new(view, window, cx))
                 },
             ) {

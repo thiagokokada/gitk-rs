@@ -110,6 +110,10 @@ pub(super) struct DiffPane {
 }
 
 impl DiffPane {
+    pub(super) fn ready_for_paint(&self) -> bool {
+        self.snapshot.as_ref().is_some_and(|s| s.error.is_none())
+    }
+
     pub(super) fn new(handle: DiffHandle, settings: DiffSettings, cx: &mut Context<Self>) -> Self {
         let poll = cx.spawn(async |this, cx| {
             loop {
