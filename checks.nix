@@ -4,24 +4,17 @@
   craneLib,
 }:
 let
-  inherit (pkgs)
-    runCommand
-    rustfmt
-    nixfmt
-    desktop-file-utils
-    librsvg
-    ;
   # Share compiled dependencies between sandboxed development checks. The
   # dependency derivation stays reusable when only application source changes.
   cargoArgs = {
     inherit (gitk-rs) src version buildInputs;
     pname = "gitk-rs-checks";
-    nativeBuildInputs = with pkgs; [
-      clang
-      cmake
-      pkg-config
-      rustPlatform.bindgenHook
-      git
+    nativeBuildInputs = [
+      pkgs.clang
+      pkgs.cmake
+      pkgs.pkg-config
+      pkgs.rustPlatform.bindgenHook
+      pkgs.git
     ];
     CARGO_PROFILE = "dev";
     CARGO_PROFILE_DEV_DEBUG = "0";
@@ -65,7 +58,7 @@ in
   );
 
   scripts =
-    runCommand "gitk-rs-scripts"
+    pkgs.runCommand "gitk-rs-scripts"
       {
         nativeBuildInputs = [
           pkgs.python3
@@ -83,12 +76,12 @@ in
       '';
 
   format =
-    runCommand "gitk-rs-format"
+    pkgs.runCommand "gitk-rs-format"
       {
         nativeBuildInputs = [
           pkgs.cargo
-          rustfmt
-          nixfmt
+          pkgs.rustfmt
+          pkgs.nixfmt
         ];
       }
       ''
@@ -98,18 +91,18 @@ in
         touch $out
       '';
 
-  executable = runCommand "gitk-rs-executable" { } ''
+  executable = pkgs.runCommand "gitk-rs-executable" { } ''
     test "$(env -u DISPLAY -u WAYLAND_DISPLAY ${gitk-rs}/bin/gitk-rs --version)" = "gitk-rs ${gitk-rs.version}"
     touch $out
   '';
 }
 // pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
   desktop =
-    runCommand "gitk-rs-desktop"
+    pkgs.runCommand "gitk-rs-desktop"
       {
         nativeBuildInputs = [
-          desktop-file-utils
-          librsvg
+          pkgs.desktop-file-utils
+          pkgs.librsvg
         ];
       }
       ''
