@@ -1,26 +1,20 @@
 {
   lib,
-  mkShell,
+  craneLib,
+  checks,
   stdenv,
-  cargo,
-  rustc,
-  rustfmt,
-  clippy,
   git,
   python3,
   ruff,
   gitk-rs,
 }:
 
-mkShell (
+craneLib.devShell (
   {
     name = "gitk-rs-development";
+    inherit checks;
     inputsFrom = [ gitk-rs ];
     packages = [
-      cargo
-      rustc
-      rustfmt
-      clippy
       git
       python3
       ruff

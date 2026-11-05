@@ -26,12 +26,16 @@
         in
         {
           default = self.packages.${system}.gitk-rs;
-          gitk-rs = pkgs.callPackage ./gitk-rs.nix { };
+          gitk-rs = pkgs.callPackage ./gitk-rs.nix {
+            craneLib = crane.mkLib pkgs;
+          };
         }
       );
 
       devShells = eachSystem (system: {
         default = nixpkgs.legacyPackages.${system}.callPackage ./shell.nix {
+          craneLib = crane.mkLib nixpkgs.legacyPackages.${system};
+          checks = self.checks.${system};
           gitk-rs = self.packages.${system}.gitk-rs;
         };
       });
@@ -39,7 +43,6 @@
       checks = eachSystem (
         system:
         import ./checks.nix {
-          pkgs = nixpkgs.legacyPackages.${system};
           craneLib = crane.mkLib nixpkgs.legacyPackages.${system};
           gitk-rs = self.packages.${system}.gitk-rs;
         }
