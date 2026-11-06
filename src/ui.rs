@@ -447,7 +447,7 @@ impl HistoryWindow {
                 Ok(_) => {
                     self.dialog = None;
                     self.restore_focus = true;
-                    self.operation_message = "Branch switched.".into();
+                    self.operation_message = "branch switched".into();
                     // The forced worker probe will supply fresh state. Avoid a
                     // second HEAD-change reload losing the pending selection.
                     self.workspace_snapshot = None;
@@ -703,6 +703,42 @@ impl HistoryWindow {
     fn toggle_auto_reload(&mut self, cx: &mut Context<Self>) {
         self.config.watch = !self.config.watch;
         self.reload(cx);
+    }
+
+    fn status_text(&self) -> String {
+        let mut status = self.snapshot.as_ref().map_or_else(
+            || "loading commits…".into(),
+            |s| {
+                if let Some(error) = &s.error {
+                    return error.clone();
+                }
+                format!(
+                    "showing {} / {} loaded commits on {}{}{}",
+                    s.visible,
+                    s.loaded,
+                    s.branch,
+                    if s.eof {
+                        " — end of history"
+                    } else {
+                        " — more available"
+                    },
+                    if s.filtering { " — filtering…" } else { "" }
+                )
+            },
+        );
+        if !self.operation_message.is_empty() && self.dialog.is_none() {
+            status.push_str("  — ");
+            status.push_str(&self.operation_message);
+        }
+        if let Some(error) = self
+            .workspace_snapshot
+            .as_ref()
+            .and_then(|s| s.watcher_error.as_deref())
+        {
+            status.push_str("  — ");
+            status.push_str(error);
+        }
+        status
     }
 
     fn row(&mut self, index: usize, cx: &mut Context<Self>) -> AnyElement {
@@ -1006,38 +1042,7 @@ impl Render for HistoryWindow {
                 .border_1()
                 .border_color(rgb(palette.border))
         };
-        let mut status = self.snapshot.as_ref().map_or_else(
-            || "Loading commits…".into(),
-            |s| {
-                if let Some(error) = &s.error {
-                    return error.clone();
-                }
-                format!(
-                    "Showing {} / {} loaded commits on {}{}{}",
-                    s.visible,
-                    s.loaded,
-                    s.branch,
-                    if s.eof {
-                        " — end of history"
-                    } else {
-                        " — more available"
-                    },
-                    if s.filtering { " — filtering…" } else { "" }
-                )
-            },
-        );
-        if !self.operation_message.is_empty() && self.dialog.is_none() {
-            status.push_str("  — ");
-            status.push_str(&self.operation_message);
-        }
-        if let Some(error) = self
-            .workspace_snapshot
-            .as_ref()
-            .and_then(|s| s.watcher_error.as_deref())
-        {
-            status.push_str("  — ");
-            status.push_str(error);
-        }
+        let status = self.status_text();
         let count = self.snapshot.as_ref().map_or(0, |s| {
             self.local_rows.len() + s.visible + usize::from(!s.eof && s.error.is_none())
         });

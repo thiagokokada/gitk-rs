@@ -92,7 +92,7 @@ impl HistoryWindow {
         self.branch_index = 0;
         self.branch_filter
             .update(cx, |input, cx| input.focus(window, cx));
-        self.operation_message = "Loading local branches…".into();
+        self.operation_message = "loading local branches…".into();
         self.operation_id += 1;
         if self.workspace.operate(
             self.workspace_generation,
@@ -101,7 +101,7 @@ impl HistoryWindow {
         ) {
             self.pending_operation = Some((self.operation_id, false));
         } else {
-            self.operation_message = "A repository operation is already pending.".into();
+            self.operation_message = "a repository operation is already pending".into();
         }
         cx.notify();
     }
@@ -118,7 +118,7 @@ impl HistoryWindow {
             return;
         };
         self.operation_id += 1;
-        self.operation_message = format!("Switching to {branch}…");
+        self.operation_message = format!("switching to {branch}…");
         if self.config.verbose {
             eprintln!("gitk-rs: {}", self.operation_message);
         }
@@ -392,8 +392,8 @@ impl HistoryWindow {
             let result = save.await;
             let _ = this.update(cx, |this, cx| {
                 this.operation_message = result.err().map_or_else(
-                    || "Preferences saved.".into(),
-                    |error| format!("Save preferences: {error}"),
+                    || "preferences saved".into(),
+                    |error| format!("save preferences: {error}"),
                 );
                 cx.notify();
             });

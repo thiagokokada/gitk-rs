@@ -464,14 +464,21 @@ fn status_messages_keep_one_line_at_narrow_widths(cx: &mut TestAppContext) {
     until(cx, |cx| selected(&app.view, cx).as_deref() == Some(&tip));
     let height = cx.update(|window, _| window.find("history-status").bounds().size.height);
     for message in [
-        "Branch switched.".to_owned(),
+        "branch switched".to_owned(),
+        "preferences saved".to_owned(),
+        "Git failed: /CaseSensitive/Repository.git".to_owned(),
         "Long operation message ".repeat(30),
     ] {
         cx.update(|_, cx| {
             app.view.update(cx, |view, cx| {
-                view.operation_message = message;
+                view.operation_message = message.clone();
                 cx.notify();
             });
+        });
+        cx.update(|_, cx| {
+            let status = app.view.read(cx).status_text();
+            assert!(status.starts_with("showing "));
+            assert!(status.ends_with(&message));
         });
         cx.simulate_resize(size(px(740.), px(850.)));
         cx.refresh().unwrap();
@@ -632,6 +639,7 @@ fn branch_protection_and_selected_ancestor_survive_switch(cx: &mut TestAppContex
         })
     });
     assert_eq!(selected(&app.view, cx).as_deref(), Some(ancestor.as_str()));
+    assert!(cx.update(|_, cx| app.view.read(cx).status_text().ends_with("branch switched")));
     cx.simulate_keystrokes("home");
     assert_eq!(selected(&app.view, cx).as_deref(), Some(tip.as_str()));
 }
