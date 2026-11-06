@@ -1473,6 +1473,7 @@ fn bind_keys(cx: &mut App) {
             Some("GitHistory && !Input && !Dialog"),
         ),
         KeyBinding::new("f1", Help, Some("GitHistory && !Dialog")),
+        KeyBinding::new("?", Help, Some("GitHistory && !Input && !Dialog")),
         KeyBinding::new("escape", CloseDialog, Some("Dialog")),
         KeyBinding::new("escape", CloseDialog, Some("Dialog > Input")),
         KeyBinding::new("escape", BlurFilter, Some("Input && !Dialog")),
@@ -1503,7 +1504,9 @@ fn bind_keys(cx: &mut App) {
         KeyBinding::new("k", Previous, Some("GitHistory && !Input && !Dialog")),
         KeyBinding::new("p", Previous, Some("GitHistory && !Input && !Dialog")),
         KeyBinding::new("home", First, Some("GitHistory && !Input && !Dialog")),
+        KeyBinding::new("g g", First, Some("GitHistory && !Input && !Dialog")),
         KeyBinding::new("end", Last, Some("GitHistory && !Input && !Dialog")),
+        KeyBinding::new("shift-g", Last, Some("GitHistory && !Input && !Dialog")),
     ]);
     // Keep Control bindings available on macOS, including Emacs input editing.
     #[cfg(target_os = "macos")]

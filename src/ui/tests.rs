@@ -880,3 +880,55 @@ fn command_aliases_open_repositories_and_respect_input_and_dialog_focus(cx: &mut
     cx.simulate_keystrokes("escape");
     assert!(cx.update(|_, cx| app.view.read(cx).dialog.is_none()));
 }
+
+#[gpui_kit::test]
+fn vim_history_jumps_and_help_respect_focus(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let oldest = fixture.commit("oldest");
+    let middle = fixture.commit("middle");
+    let newest = fixture.commit("newest");
+    let (app, cx) = open(&fixture, cx);
+    until(cx, |cx| selected(&app.view, cx).as_deref() == Some(&newest));
+
+    cx.simulate_keystrokes("j g");
+    assert_eq!(
+        selected(&app.view, cx).as_deref(),
+        Some(middle.as_str()),
+        "a single g must wait for the second key"
+    );
+    cx.simulate_keystrokes("g");
+    assert_eq!(selected(&app.view, cx).as_deref(), Some(newest.as_str()));
+    cx.simulate_keystrokes("shift-g");
+    assert_eq!(selected(&app.view, cx).as_deref(), Some(oldest.as_str()));
+    cx.simulate_keystrokes("g g");
+    assert_eq!(selected(&app.view, cx).as_deref(), Some(newest.as_str()));
+
+    for keys in ["?", "shift-/->?"] {
+        cx.simulate_keystrokes(keys);
+        assert!(cx.update(|_, cx| matches!(app.view.read(cx).dialog, Some(DialogKind::Help))));
+        cx.simulate_keystrokes("shift-g g g ?");
+        assert_eq!(selected(&app.view, cx).as_deref(), Some(newest.as_str()));
+        assert!(cx.update(|_, cx| matches!(app.view.read(cx).dialog, Some(DialogKind::Help))));
+        cx.simulate_keystrokes("escape");
+    }
+
+    cx.simulate_keystrokes("/");
+    cx.simulate_input("ggG?");
+    assert!(cx.update(|_, cx| app.view.read(cx).dialog.is_none()));
+    assert_eq!(
+        cx.update(|_, cx| app.view.read(cx).filter.read(cx).value().to_string()),
+        "ggG?"
+    );
+    cx.simulate_keystrokes("ctrl-a ctrl-k escape");
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            app.view
+                .read(cx)
+                .snapshot
+                .as_ref()
+                .is_some_and(|s| s.visible == 3)
+        })
+    });
+    cx.simulate_keystrokes("shift-g");
+    assert_eq!(selected(&app.view, cx).as_deref(), Some(oldest.as_str()));
+}

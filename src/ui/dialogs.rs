@@ -368,8 +368,8 @@ const SHORTCUT_GROUPS: &[ShortcutGroup] = &[
         shortcuts: &[
             ("Up / p / k", "Move up one commit"),
             ("Down / n / j", "Move down one commit"),
-            ("Home", "Jump to the first commit"),
-            ("End", "Jump to the last loaded commit"),
+            ("Home / gg", "Jump to the first commit"),
+            ("End / G", "Jump to the last loaded commit"),
             (
                 command_shortcut!("PageUp / PageDown"),
                 "Scroll history up / down a page",
@@ -403,7 +403,7 @@ const SHORTCUT_GROUPS: &[ShortcutGroup] = &[
             ("/", "Focus the filter box"),
             ("Escape", "Leave the filter box"),
             ("F5", "Reload commits"),
-            ("F1", "Show keyboard shortcuts"),
+            ("F1 / ?", "Show keyboard shortcuts (? outside text inputs)"),
             (command_shortcut!("O"), "Open repository"),
             (command_shortcut!("Shift+O"), "Open repository by path"),
             (
