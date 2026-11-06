@@ -14,7 +14,8 @@ dirs = "7"
 serde = { version = "1", features = ["derive"] }
 toml = "1"
 tempfile = "3"
-syntect = { version = "5.3", default-features = false, features = ["default-fancy"] }
+# Syntaxes and themes come from two-face; no source-format loaders or HTML export.
+syntect = { version = "5.3", default-features = false, features = ["parsing", "regex-fancy", "dump-load"] }
 two-face = { version = "=0.5.2", default-features = false, features = ["syntect-fancy"] }
 unicode-segmentation = "1.13"
 notify = "8"
