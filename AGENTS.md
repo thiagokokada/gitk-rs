@@ -23,12 +23,12 @@ milestone without waiting for confirmation. Stop only when user input is actuall
 - Never run blocking Git, filesystem scans, or highlighting in render paths
   or on the UI thread. Never wait for a total history count before showing rows.
 - Virtualize history and diff lines. Paint graph geometry only for visible rows.
-- Match Go's streaming batch model: retain loaded history in memory, avoid eager
-  whole-history loading and duplicate large data, and keep pending batches bounded.
+- Retain loaded history in memory, stream incrementally, avoid duplicate large
+  data, and keep pending batches bounded. Stream to EOF by default.
   Virtualization limits drawing work; it does not bound total retained history.
 - Do not introduce SQLite or a persistent history/parsing cache without measured
   need and an agreed plan change. Continue one Git stream, avoiding repeated --skip
-  scans. Pause prefetch when browsing demand is satisfied.
+  scans. With opt-in --limit N, pause prefetch when browsing demand is satisfied.
 - Bundle broad offline language coverage, not a small allowlist. Preserve grammar
   licenses and detect filenames/shebangs.
 - Functionality and workflow parity take priority in v1. Timing/RSS numbers are
@@ -66,6 +66,25 @@ milestone without waiting for confirmation. Stop only when user input is actuall
   and display limitations with the command and actual error. Do not weaken checks
   or claim completion to work around an unavailable environment.
 - Do not rewrite existing Git history without an explicit user request.
+
+## Opt-in history memory probe
+
+- `GITK_PROFILE_REPOSITORY`: required repository path; the probe only reads it.
+- `GITK_PROFILE_COMMITS`: prefetch target, defaults to 100000; must be an integer
+  greater than 64 that fits usize. Stops earlier if Git reaches EOF.
+- Run explicitly; this test is ignored by ordinary test runs:
+
+```sh
+nix develop --command env \
+  GITK_PROFILE_REPOSITORY="$HOME/Projects/nixpkgs" \
+  GITK_PROFILE_COMMITS=100000 \
+  cargo test --lib profile_retained_history --locked -- --ignored --nocapture
+```
+
+- Compare the same repository HEAD, loaded count, and graph lane cap (200).
+  Accounted retained bytes exclude allocator/runtime overhead. Linux RSS reports
+  the history-only test process and live children separately; these are neither
+  desktop nor peak-memory measurements. Git may have exited at EOF.
 
 ## Local environment limitations
 
