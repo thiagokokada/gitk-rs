@@ -4,8 +4,10 @@ mod tests;
 mod colors;
 mod dialogs;
 mod diff_view;
+mod font_preferences;
 
 use colors::Palette;
+use font_preferences::{FontCatalogGeneration, FontChoices};
 use gitk_rs::{
     cli::{Config, Theme},
     diff::{DiffEngine, DiffHandle, DiffSettings},
@@ -28,6 +30,7 @@ use gpui_kit::component::{
     menu::{ContextMenuExt, DropdownMenu, PopupMenuItem},
     resizable::{resizable_panel, v_resizable},
     scroll::{ScrollableElement, Scrollbar, ScrollbarMode},
+    select::{SearchableVec, Select, SelectEvent, SelectState},
     tooltip::Tooltip,
 };
 use gpui_kit::{
@@ -113,8 +116,12 @@ enum DialogKind {
 struct HistoryWindow {
     config: Config,
     preferences: Preferences,
-    ui_font_input: Entity<InputState>,
-    fixed_font_input: Entity<InputState>,
+    ui_font_select: Entity<SelectState<FontChoices>>,
+    fixed_font_select: Entity<SelectState<FontChoices>>,
+    _font_subscriptions: Vec<Subscription>,
+    font_catalog: Option<Vec<SharedString>>,
+    font_catalog_generation: FontCatalogGeneration,
+    _font_catalog_task: Option<Task<()>>,
     font_size_input: Entity<InputState>,
     reload_selection: Option<gitk_rs::git::CommitId>,
     focus: FocusHandle,
@@ -176,12 +183,41 @@ impl HistoryWindow {
             workspace,
             diff: diff_handle,
         } = services;
-        let ui_font_input =
-            cx.new(|cx| InputState::new(window, cx).default_value(preferences.ui_font.clone()));
-        let fixed_font_input =
-            cx.new(|cx| InputState::new(window, cx).default_value(preferences.fixed_font.clone()));
+        let ui_font_select = cx.new(|cx| {
+            SelectState::new(
+                SearchableVec::new(vec![SharedString::from(preferences.ui_font.clone())]),
+                Some(gpui_kit::component::IndexPath::new(0)),
+                window,
+                cx,
+            )
+            .searchable(true)
+        });
+        let fixed_font_select = cx.new(|cx| {
+            SelectState::new(
+                SearchableVec::new(vec![SharedString::from(preferences.fixed_font.clone())]),
+                Some(gpui_kit::component::IndexPath::new(0)),
+                window,
+                cx,
+            )
+            .searchable(true)
+        });
         let font_size_input = cx
             .new(|cx| InputState::new(window, cx).default_value(preferences.font_size.to_string()));
+        let mut font_subscriptions = Vec::new();
+        for selector in [&ui_font_select, &fixed_font_select] {
+            font_subscriptions.push(
+                cx.subscribe(selector, |_, _, _: &SelectEvent<FontChoices>, cx| {
+                    cx.notify()
+                }),
+            );
+        }
+        font_subscriptions.push(
+            cx.subscribe(&font_size_input, |_, _, event: &InputEvent, cx| {
+                if matches!(event, InputEvent::Change) {
+                    cx.notify();
+                }
+            }),
+        );
         let branch_filter =
             cx.new(|cx| InputState::new(window, cx).placeholder("Filter local branches"));
         let branch_subscription = cx.subscribe_in(
@@ -266,8 +302,12 @@ impl HistoryWindow {
         });
         Self {
             preferences,
-            ui_font_input,
-            fixed_font_input,
+            ui_font_select,
+            fixed_font_select,
+            _font_subscriptions: font_subscriptions,
+            font_catalog: None,
+            font_catalog_generation: FontCatalogGeneration(0),
+            _font_catalog_task: None,
             font_size_input,
             reload_selection: None,
             diff,
@@ -1135,11 +1175,7 @@ impl Render for HistoryWindow {
                 this.diff.update(cx, |diff, cx| diff.scroll_lines(-18, cx))
             }))
             .on_action(cx.listener(|this, _: &FontPreferences, window, cx| {
-                this.dialog = Some(DialogKind::Preferences);
-                this.operation_message.clear();
-                this.ui_font_input
-                    .update(cx, |input, cx| input.focus(window, cx));
-                cx.notify();
+                this.open_font_preferences(window, cx);
             }))
             .on_action(cx.listener(|this, _: &ApplyPreferences, window, cx| {
                 this.apply_preferences(window, cx)
@@ -1527,7 +1563,7 @@ fn bind_keys(cx: &mut App) {
         KeyBinding::new("f1", Help, Some("GitHistory && !Dialog")),
         KeyBinding::new("?", Help, Some("GitHistory && !Input && !Dialog")),
         KeyBinding::new("escape", CloseDialog, Some("Dialog")),
-        KeyBinding::new("escape", CloseDialog, Some("Dialog > Input")),
+        KeyBinding::new("escape", CloseDialog, Some("Dialog > Input && !Select")),
         KeyBinding::new("escape", BlurFilter, Some("Input && !Dialog")),
         KeyBinding::new("up", BranchUp, Some("Dialog")),
         KeyBinding::new("down", BranchDown, Some("Dialog")),

@@ -893,6 +893,10 @@ fn command_aliases_open_repositories_and_respect_input_and_dialog_focus(cx: &mut
     cx.simulate_keystrokes("escape cmd-,");
     assert!(cx.update(|_, cx| matches!(app.view.read(cx).dialog, Some(DialogKind::Preferences))));
     // Invalid preferences exercise Cmd+Enter without writing user preferences.
+    app.view.update_in(cx, |view, window, cx| {
+        view.font_size_input
+            .update(cx, |input, cx| input.focus(window, cx));
+    });
     cx.simulate_keystrokes("ctrl-a ctrl-k cmd-enter");
     assert!(cx.update(|_, cx| {
         let view = app.view.read(cx);
@@ -1287,4 +1291,197 @@ fn alt_list_navigation_preserves_filter_focus_and_emacs_editing(cx: &mut TestApp
             .to_string()),
         "keep this path"
     );
+}
+
+#[gpui_kit::test]
+fn searchable_font_selectors_preview_drafts_and_cancel_restores_preferences(
+    cx: &mut TestAppContext,
+) {
+    let fixture = Fixture::new();
+    let tip = fixture.commit("tip");
+    let (app, cx) = open(&fixture, cx);
+    until(cx, |cx| selected(&app.view, cx).as_deref() == Some(&tip));
+    let original = cx.update(|_, cx| app.view.read(cx).preferences.clone());
+    app.view.update(cx, |view, _| {
+        view.font_catalog = Some(vec![
+            original.ui_font.clone().into(),
+            original.fixed_font.clone().into(),
+            ".SystemUIFont".into(),
+        ])
+    });
+    cx.simulate_keystrokes("ctrl-,");
+    cx.refresh().unwrap();
+    for (id, query, is_ui) in [
+        ("ui-font-select", original.fixed_font.as_str(), true),
+        ("fixed-font-select", ".SystemUIFont", false),
+    ] {
+        cx.update(|window, cx| window.click(id, cx));
+        assert_eq!(
+            cx.update(|window, _| window.find(id).expanded()),
+            Some(true)
+        );
+        cx.simulate_input(query);
+        cx.background_executor
+            .advance_clock(Duration::from_millis(200));
+        cx.run_until_parked();
+        cx.refresh().unwrap();
+        cx.simulate_keystrokes("enter");
+        until(cx, |cx| {
+            cx.update(|_, cx| {
+                let draft = app.view.read(cx).draft_preferences(cx);
+                if is_ui {
+                    draft.ui_font == query
+                } else {
+                    draft.fixed_font == query
+                }
+            })
+        });
+        assert!(
+            cx.update(|_, cx| matches!(app.view.read(cx).dialog, Some(DialogKind::Preferences)))
+        );
+    }
+    let small = cx.update(|window, _| {
+        (
+            window.find("ui-font-preview").bounds().size.height,
+            window.find("fixed-font-preview").bounds().size.height,
+        )
+    });
+    cx.update(|window, cx| window.click("font-size-input", cx));
+    cx.simulate_keystrokes("ctrl-a ctrl-k");
+    cx.simulate_input("24");
+    cx.refresh().unwrap();
+    cx.update(|window, _| {
+        assert!(window.find("ui-font-preview").bounds().size.height > small.0);
+        assert!(window.find("fixed-font-preview").bounds().size.height > small.1);
+    });
+    assert_eq!(
+        cx.update(|_, cx| app.view.read(cx).preferences.clone()),
+        original,
+        "preview must not apply or save the draft"
+    );
+    assert!(cx.update(|_, cx| app.view.read(cx).draft_preferences(cx).validate().is_ok()));
+    cx.simulate_keystrokes("ctrl-a ctrl-k");
+    cx.simulate_input("NaN");
+    cx.refresh().unwrap();
+    assert!(cx.update(|_, cx| app.view.read(cx).draft_preferences(cx).validate().is_err()));
+    cx.update(|window, cx| window.click("apply-preferences", cx));
+    assert!(cx.update(|_, cx| {
+        let view = app.view.read(cx);
+        matches!(view.dialog, Some(DialogKind::Preferences))
+            && view.preferences == original
+            && view.operation_message.contains("font size")
+    }));
+    cx.simulate_keystrokes("escape ctrl-,");
+    assert_eq!(
+        cx.update(|_, cx| app.view.read(cx).draft_preferences(cx)),
+        original
+    );
+    cx.update(|window, cx| window.click("ui-font-select", cx));
+    cx.simulate_input("no matching font");
+    cx.simulate_keystrokes("escape");
+    assert!(
+        cx.update(|_, cx| matches!(app.view.read(cx).dialog, Some(DialogKind::Preferences))),
+        "Escape must close the font dropdown before the preferences dialog"
+    );
+    assert_eq!(
+        cx.update(|window, _| window.find("ui-font-select").expanded()),
+        Some(false)
+    );
+    cx.simulate_keystrokes("escape");
+    assert!(cx.update(|_, cx| app.view.read(cx).dialog.is_none()));
+}
+
+#[gpui_kit::test]
+fn font_catalog_loading_rejects_closed_and_superseded_preferences(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    fixture.commit("tip");
+    let (app, cx) = open(&fixture, cx);
+    cx.simulate_keystrokes("ctrl-,");
+    until(cx, |cx| {
+        cx.update(|_, cx| app.view.read(cx).font_catalog.is_some())
+    });
+    let old = cx.update(|_, cx| app.view.read(cx).font_catalog_generation);
+    cx.simulate_keystrokes("escape ctrl-,");
+    let current = cx.update(|_, cx| app.view.read(cx).font_catalog_generation);
+    assert_ne!(old, current);
+    let original = cx.update(|_, cx| app.view.read(cx).draft_preferences(cx));
+    app.view.update_in(cx, |view, window, cx| {
+        view.accept_font_catalog(old, vec!["stale font".into()], window, cx)
+    });
+    assert!(!cx.update(|_, cx| {
+        app.view
+            .read(cx)
+            .font_catalog
+            .as_ref()
+            .unwrap()
+            .iter()
+            .any(|name| name.as_ref() == "stale font")
+    }));
+    app.view.update_in(cx, |view, window, cx| {
+        view.accept_font_catalog(current, vec!["Newly installed font".into()], window, cx)
+    });
+    assert_eq!(
+        cx.update(|_, cx| app.view.read(cx).draft_preferences(cx)),
+        original
+    );
+    cx.simulate_keystrokes("escape");
+    app.view.update_in(cx, |view, window, cx| {
+        view.accept_font_catalog(current, vec!["closed font".into()], window, cx)
+    });
+    assert!(!cx.update(|_, cx| {
+        app.view
+            .read(cx)
+            .font_catalog
+            .as_ref()
+            .unwrap()
+            .iter()
+            .any(|name| name.as_ref() == "closed font")
+    }));
+}
+
+#[gpui_kit::test]
+fn font_preferences_keep_actions_visible_with_large_fonts_in_a_small_window(
+    cx: &mut TestAppContext,
+) {
+    let fixture = Fixture::new();
+    fixture.commit("tip");
+    let (app, cx) = open(&fixture, cx);
+    app.view.update_in(cx, |view, window, cx| {
+        view.preferences.font_size = 24.;
+        apply_fonts(&view.preferences, cx);
+        view.font_catalog = Some(vec![
+            view.preferences.ui_font.clone().into(),
+            view.preferences.fixed_font.clone().into(),
+        ]);
+        window.refresh();
+    });
+    cx.simulate_resize(size(px(800.), px(500.)));
+    cx.simulate_keystrokes("ctrl-,");
+    cx.refresh().unwrap();
+    cx.update(|window, _| {
+        let apply = window.find("apply-preferences");
+        let close = window.find("close-dialog");
+        assert!(apply.visible() && close.visible());
+        assert!(close.bounds().bottom() <= window.viewport_size().height);
+        assert!(
+            window.find("ui-font-select").bounds().bottom()
+                <= window.find("fixed-font-select").bounds().top()
+        );
+    });
+    cx.update(|window, cx| {
+        window.scroll(
+            "ui-font-select",
+            gpui_kit::ScrollDelta::Pixels(point(px(0.), px(-1000.))),
+            cx,
+        )
+    });
+    cx.refresh().unwrap();
+    cx.update(|window, _| {
+        assert!(window.find("fixed-font-preview").visible());
+        assert!(
+            window.find("fixed-font-preview").bounds().bottom()
+                <= window.find("apply-preferences").bounds().top()
+        );
+        assert!(window.find("close-dialog").visible());
+    });
 }

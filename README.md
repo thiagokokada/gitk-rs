@@ -15,7 +15,7 @@ A lightweight Git history explorer for Linux and macOS, written in Rust with
 - File list to jump between changes, with text selection and copying
 - Staged, unstaged and untracked changes
 - Branch switching, automatic refresh and keyboard navigation
-- Light and dark themes with configurable fonts
+- Light and dark themes with searchable font selection and live previews
 
 ## Usage
 

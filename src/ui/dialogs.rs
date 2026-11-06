@@ -239,14 +239,92 @@ impl HistoryWindow {
                     )
             }
             Some(DialogKind::Preferences) => {
+                let draft = self.draft_preferences(cx);
+                let preview_size =
+                    font_preferences::preview_size(draft.font_size, self.preferences.font_size);
                 body = body
-                    .child("UI font family")
-                    .child(Input::new(&self.ui_font_input))
-                    .child("Fixed font family")
-                    .child(Input::new(&self.fixed_font_input))
-                    .child("Font size (8–24 pixels)")
-                    .child(Input::new(&self.font_size_input))
-                    .child(self.operation_message.clone())
+                    .h(px(640.))
+                    .overflow_hidden()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_h_0()
+                            .flex()
+                            .flex_col()
+                            .gap_2()
+                            .pr_3()
+                            .child("UI font family")
+                            .child(
+                                div().h_8().flex_shrink_0().child(
+                                    Select::new(&self.ui_font_select)
+                                        .id("ui-font-select")
+                                        .disabled(self.font_catalog.is_none())
+                                        .accessibility_label("UI font family")
+                                        .search_placeholder("Search installed fonts…")
+                                        .menu_max_h(px(220.))
+                                        .w_full(),
+                                ),
+                            )
+                            .child("Fixed font family")
+                            .child(
+                                div().h_8().flex_shrink_0().child(
+                                    Select::new(&self.fixed_font_select)
+                                        .id("fixed-font-select")
+                                        .disabled(self.font_catalog.is_none())
+                                        .accessibility_label("Fixed font family")
+                                        .search_placeholder("Search installed fonts…")
+                                        .menu_max_h(px(220.))
+                                        .w_full(),
+                                ),
+                            )
+                            .when(self.font_catalog.is_none(), |form| {
+                                form.child("Loading installed fonts…")
+                            })
+                            .child("Font size (8–24 pixels)")
+                            .child(Input::new(&self.font_size_input).id("font-size-input"))
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap_2()
+                                    .p_3()
+                                    .bg(rgb(palette.row))
+                                    .border_1()
+                                    .border_color(rgb(palette.border))
+                                    .child("Interface preview")
+                                    .child(
+                                        div()
+                                            .id("ui-font-preview")
+                                            .flex()
+                                            .flex_col()
+                                            .test_support()
+                                            .font_family(SharedString::from(draft.ui_font))
+                                            .text_size(px(preview_size))
+                                            .line_height(px(preview_size * 1.5))
+                                            .child("The quick brown fox jumps over the lazy dog.")
+                                            .child("AaBbCc 0123456789"),
+                                    )
+                                    .child("Fixed-width preview")
+                                    .child(
+                                        div()
+                                            .id("fixed-font-preview")
+                                            .flex()
+                                            .flex_col()
+                                            .test_support()
+                                            .font_family(SharedString::from(draft.fixed_font))
+                                            .text_size(px(preview_size))
+                                            .line_height(px(preview_size * 1.5))
+                                            .child("fn main() { let value = 42; }")
+                                            .child("0123456789  []{}()  != ->"),
+                                    ),
+                            )
+                            .overflow_y_scrollbar()
+                            .id("font-preferences-fields")
+                            .scroll_bounce(false),
+                    )
+                    .when(!self.operation_message.is_empty(), |body| {
+                        body.child(self.operation_message.clone())
+                    })
                     .child(
                         Button::new("apply-preferences")
                             .label("Apply and save")
@@ -363,11 +441,7 @@ impl HistoryWindow {
         if !matches!(self.dialog, Some(DialogKind::Preferences)) {
             return;
         }
-        let preferences = Preferences {
-            ui_font: self.ui_font_input.read(cx).value().to_string(),
-            fixed_font: self.fixed_font_input.read(cx).value().to_string(),
-            font_size: self.font_size_input.read(cx).value().parse().unwrap_or(0.),
-        };
+        let preferences = self.draft_preferences(cx);
         if let Err(error) = preferences.validate() {
             self.operation_message = error.to_string();
             cx.notify();
