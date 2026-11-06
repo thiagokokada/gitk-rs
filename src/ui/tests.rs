@@ -1523,3 +1523,79 @@ fn shortcuts_descriptions_wrap_without_clipping(cx: &mut TestAppContext) {
         );
     });
 }
+
+#[gpui_kit::test]
+fn shortcuts_keyboard_scrolls_lines_pages_and_boundaries_without_moving_history(
+    cx: &mut TestAppContext,
+) {
+    let fixture = history_fixture(200);
+    let (app, cx) = open(&fixture, cx);
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            app.view
+                .read(cx)
+                .snapshot
+                .as_ref()
+                .is_some_and(|s| s.loaded == 200)
+        })
+    });
+    app.view.update(cx, |view, cx| {
+        view.scroll.scroll_to_item_strict(40, ScrollStrategy::Top);
+        cx.notify();
+    });
+    until(cx, |cx| {
+        cx.update(|_, cx| app.view.read(cx).viewport.start == 40)
+    });
+    let history = cx.update(|_, cx| app.view.read(cx).scroll.0.borrow().base_handle.offset());
+    let commit = selected(&app.view, cx);
+    cx.simulate_keystrokes("f1");
+    cx.refresh().unwrap();
+    cx.simulate_keystrokes("down");
+    cx.refresh().unwrap();
+    let line = cx.update(|_, cx| app.view.read(cx).help_scroll.offset().y);
+    assert!(line < px(0.));
+    cx.simulate_keystrokes("up");
+    cx.refresh().unwrap();
+    assert_eq!(
+        cx.update(|_, cx| app.view.read(cx).help_scroll.offset().y),
+        px(0.)
+    );
+    cx.simulate_keystrokes("pagedown");
+    cx.refresh().unwrap();
+    assert!(cx.update(|_, cx| app.view.read(cx).help_scroll.offset().y < line));
+    cx.simulate_keystrokes("pageup");
+    cx.refresh().unwrap();
+    assert_eq!(
+        cx.update(|_, cx| app.view.read(cx).help_scroll.offset().y),
+        px(0.)
+    );
+    cx.simulate_keystrokes("end");
+    cx.refresh().unwrap();
+    cx.update(|_, cx| {
+        let scroll = &app.view.read(cx).help_scroll;
+        assert_eq!(scroll.offset().y, -scroll.max_offset().y);
+    });
+    cx.simulate_keystrokes("down pagedown end");
+    cx.refresh().unwrap();
+    cx.update(|_, cx| {
+        let scroll = &app.view.read(cx).help_scroll;
+        assert_eq!(scroll.offset().y, -scroll.max_offset().y);
+    });
+    cx.simulate_keystrokes("home up pageup");
+    cx.refresh().unwrap();
+    assert_eq!(
+        cx.update(|_, cx| app.view.read(cx).help_scroll.offset().y),
+        px(0.)
+    );
+    assert_eq!(
+        cx.update(|_, cx| app.view.read(cx).scroll.0.borrow().base_handle.offset()),
+        history
+    );
+    assert_eq!(selected(&app.view, cx), commit);
+    cx.simulate_keystrokes("escape down");
+    assert_ne!(
+        selected(&app.view, cx),
+        commit,
+        "arrow keys must return to history navigation after closing help"
+    );
+}

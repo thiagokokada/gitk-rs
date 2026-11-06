@@ -145,6 +145,16 @@ impl HistoryWindow {
         cx.notify();
     }
 
+    pub(super) fn scroll_shortcuts(&mut self, delta: gpui_kit::Pixels, cx: &mut Context<Self>) {
+        if !matches!(self.dialog, Some(DialogKind::Help)) {
+            return;
+        }
+        let mut offset = self.help_scroll.offset();
+        offset.y = (offset.y - delta).clamp(-self.help_scroll.max_offset().y, px(0.));
+        self.help_scroll.set_offset(offset);
+        cx.notify();
+    }
+
     pub(super) fn dialog_element(&self, cx: &mut Context<Self>) -> AnyElement {
         let title = match self.dialog {
             Some(DialogKind::Branches) => "Switch local branch",
@@ -441,10 +451,10 @@ impl HistoryWindow {
             .items_center()
             .justify_center()
             .track_focus(&self.dialog_focus)
-            .key_context(if matches!(self.dialog, Some(DialogKind::Branches)) {
-                "Dialog BranchDialog"
-            } else {
-                "Dialog"
+            .key_context(match self.dialog {
+                Some(DialogKind::Branches) => "Dialog BranchDialog",
+                Some(DialogKind::Help) => "Dialog HelpDialog",
+                _ => "Dialog",
             })
             .child(body)
             .into_any_element()
@@ -575,6 +585,14 @@ const SHORTCUT_GROUPS: &[ShortcutGroup] = &[
             ("Down / Ctrl+N / Alt+J", "Select next branch"),
             ("Enter", "Switch to selected branch"),
             ("Type in filter", "Filter local branches"),
+        ],
+    },
+    ShortcutGroup {
+        title: "Shortcuts dialog",
+        shortcuts: &[
+            ("Up / Down", "Scroll up / down one line"),
+            ("PageUp / PageDown", "Scroll up / down one page"),
+            ("Home / End", "Jump to the top / bottom"),
         ],
     },
     ShortcutGroup {

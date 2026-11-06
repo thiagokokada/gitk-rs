@@ -63,6 +63,12 @@ actions!(
         OpenRepositoryPath,
         OpenBranches,
         Help,
+        HelpScrollUp,
+        HelpScrollDown,
+        HelpPageUp,
+        HelpPageDown,
+        HelpTop,
+        HelpBottom,
         About,
         CloseDialog,
         BranchUp,
@@ -1226,6 +1232,24 @@ impl Render for HistoryWindow {
                 this.dialog_focus.focus(window, cx);
                 cx.notify();
             }))
+            .on_action(cx.listener(|this, _: &HelpScrollUp, _, cx| {
+                this.scroll_shortcuts(px(-this.preferences.font_size * 1.5), cx);
+            }))
+            .on_action(cx.listener(|this, _: &HelpScrollDown, _, cx| {
+                this.scroll_shortcuts(px(this.preferences.font_size * 1.5), cx);
+            }))
+            .on_action(cx.listener(|this, _: &HelpPageUp, _, cx| {
+                this.scroll_shortcuts(-this.help_scroll.bounds().size.height, cx);
+            }))
+            .on_action(cx.listener(|this, _: &HelpPageDown, _, cx| {
+                this.scroll_shortcuts(this.help_scroll.bounds().size.height, cx);
+            }))
+            .on_action(cx.listener(|this, _: &HelpTop, _, cx| {
+                this.scroll_shortcuts(-this.help_scroll.max_offset().y, cx);
+            }))
+            .on_action(cx.listener(|this, _: &HelpBottom, _, cx| {
+                this.scroll_shortcuts(this.help_scroll.max_offset().y, cx);
+            }))
             .on_action(cx.listener(|this, _: &About, window, cx| {
                 this.dialog = Some(DialogKind::About);
                 this.dialog_focus.focus(window, cx);
@@ -1562,11 +1586,17 @@ fn bind_keys(cx: &mut App) {
         ),
         KeyBinding::new("f1", Help, Some("GitHistory && !Dialog")),
         KeyBinding::new("?", Help, Some("GitHistory && !Input && !Dialog")),
+        KeyBinding::new("up", HelpScrollUp, Some("HelpDialog")),
+        KeyBinding::new("down", HelpScrollDown, Some("HelpDialog")),
+        KeyBinding::new("pageup", HelpPageUp, Some("HelpDialog")),
+        KeyBinding::new("pagedown", HelpPageDown, Some("HelpDialog")),
+        KeyBinding::new("home", HelpTop, Some("HelpDialog")),
+        KeyBinding::new("end", HelpBottom, Some("HelpDialog")),
         KeyBinding::new("escape", CloseDialog, Some("Dialog")),
         KeyBinding::new("escape", CloseDialog, Some("Dialog > Input && !Select")),
         KeyBinding::new("escape", BlurFilter, Some("Input && !Dialog")),
-        KeyBinding::new("up", BranchUp, Some("Dialog")),
-        KeyBinding::new("down", BranchDown, Some("Dialog")),
+        KeyBinding::new("up", BranchUp, Some("BranchDialog")),
+        KeyBinding::new("down", BranchDown, Some("BranchDialog")),
         KeyBinding::new("down", BranchDown, Some("BranchDialog > Input")),
         KeyBinding::new("up", BranchUp, Some("BranchDialog > Input")),
         KeyBinding::new("alt-j", BranchDown, Some("BranchDialog > Input")),
@@ -1575,7 +1605,7 @@ fn bind_keys(cx: &mut App) {
         KeyBinding::new("alt-k", Previous, Some("HistoryFilter > Input")),
         KeyBinding::new("ctrl-n", BranchDown, Some("BranchDialog > Input")),
         KeyBinding::new("ctrl-p", BranchUp, Some("BranchDialog > Input")),
-        KeyBinding::new("enter", BranchAccept, Some("Dialog")),
+        KeyBinding::new("enter", BranchAccept, Some("BranchDialog")),
         KeyBinding::new("f5", Reload, None),
         KeyBinding::new(
             "ctrl-pageup",
