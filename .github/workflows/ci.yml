@@ -106,7 +106,10 @@ jobs:
 
       - name: Run the X11 GUI smoke test in a VM
         if: runner.os == 'Linux'
-        run: nix build .#gui-smoke --out-link result-gui-smoke --print-build-logs 2>&1 | tee gui-smoke-build.log
+        shell: bash
+        run: |
+          set -o pipefail
+          nix build .#gui-smoke --out-link result-gui-smoke --print-build-logs 2>&1 | tee gui-smoke-build.log
 
       - name: Upload GUI smoke screenshots and logs
         if: always() && runner.os == 'Linux'

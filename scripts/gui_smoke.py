@@ -182,8 +182,14 @@ def exercise_preferences(ui: Window, config: Path) -> None:
     time.sleep(0.2)
     ui.shot("preferences")
     ui.keys("ctrl+Return")
-    time.sleep(0.4)
-    assert (config / "gitk-rs/preferences.toml").exists()
+    try:
+        wait_until(
+            lambda: (config / "gitk-rs/preferences.toml").exists(),
+            "Preferences were not saved after Apply; see preferences-save-failed.png",
+        )
+    except RuntimeError:
+        ui.shot("preferences-save-failed")
+        raise
     ui.keys("alt+t")
     time.sleep(0.4)
     ui.shot("light-theme")

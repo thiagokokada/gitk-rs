@@ -9,6 +9,7 @@ pub(super) struct Harness {
     _history: HistoryEngine,
     _workspace: WorkspaceEngine,
     _diff: DiffEngine,
+    _preferences_directory: tempfile::TempDir,
 }
 
 pub(super) fn open<'a>(
@@ -55,10 +56,12 @@ fn open_with_batch<'a>(
         bind_keys(cx);
     });
     let mut view = None;
+    let preferences_directory = tempfile::tempdir().unwrap();
+    let preferences_path = preferences_directory.path().join("preferences.toml");
     let (_, cx) = cx.add_window_view(|window, cx| {
         let entity = cx.new(|cx| {
             let preferences = Preferences::default().with_config(&config);
-            HistoryWindow::new(
+            let mut view = HistoryWindow::new(
                 config,
                 TimingGuard::start(false, Instant::now()).timing(),
                 WindowServices {
@@ -70,7 +73,10 @@ fn open_with_batch<'a>(
                 request,
                 window,
                 cx,
-            )
+            );
+            // Even a failing validation regression must never write user settings.
+            view.preferences_path = Some(preferences_path.clone());
+            view
         });
         view = Some(entity.clone());
         gpui_kit::base::Root::new(entity, window, cx)
@@ -82,6 +88,7 @@ fn open_with_batch<'a>(
             _history: history,
             _workspace: workspace,
             _diff: diff,
+            _preferences_directory: preferences_directory,
         },
         cx,
     )
@@ -1348,6 +1355,46 @@ fn alt_list_navigation_preserves_filter_focus_and_emacs_editing(cx: &mut TestApp
             .value()
             .to_string()),
         "keep this path"
+    );
+}
+
+#[gpui_kit::test]
+fn preferences_apply_shortcuts_work_from_initial_font_selector_focus(cx: &mut TestAppContext) {
+    let settings = tempfile::tempdir().unwrap();
+    let fixture = Fixture::new();
+    fixture.commit("tip");
+    let (app, cx) = open(&fixture, cx);
+    cx.simulate_keystrokes("ctrl-,");
+    until(cx, |cx| {
+        cx.update(|_, cx| app.view.read(cx).font_catalog.is_some())
+    });
+    app.view.update_in(cx, |view, window, cx| {
+        view.preferences_path = Some(settings.path().join("preferences.toml"));
+        view.graph_columns_input
+            .update(cx, |input, cx| input.set_value("0", window, cx));
+    });
+    cx.refresh().unwrap();
+    let shortcuts: &[&str] = if cfg!(target_os = "macos") {
+        &["ctrl-enter", "cmd-enter"]
+    } else {
+        &["ctrl-enter"]
+    };
+    for &shortcut in shortcuts {
+        app.view
+            .update(cx, |view, _| view.operation_message.clear());
+        let contexts = cx.update(|window, _| window.context_stack());
+        cx.simulate_keystrokes(shortcut);
+        let message = cx.update(|_, cx| app.view.read(cx).operation_message.clone());
+        assert!(
+            message.contains("graph columns"),
+            "{shortcut} did not apply from the initial selector focus: {contexts:?}; message={message:?}"
+        );
+    }
+    cx.simulate_keystrokes("enter");
+    cx.refresh().unwrap();
+    assert_eq!(
+        cx.update(|window, _| window.find("ui-font-select").expanded()),
+        Some(true)
     );
 }
 
