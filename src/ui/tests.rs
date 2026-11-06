@@ -1393,6 +1393,61 @@ fn searchable_font_selectors_preview_drafts_and_cancel_restores_preferences(
 }
 
 #[gpui_kit::test]
+fn font_size_steps_with_buttons_and_keyboard_within_bounds(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    fixture.commit("tip");
+    let (app, cx) = open(&fixture, cx);
+    let original = cx.update(|_, cx| app.view.read(cx).preferences.clone());
+    cx.simulate_keystrokes("ctrl-,");
+    until(cx, |cx| {
+        cx.update(|_, cx| app.view.read(cx).font_catalog.is_some())
+    });
+    cx.update(|window, cx| window.click("font-size-input", cx));
+    cx.simulate_keystrokes("ctrl-a ctrl-k");
+    cx.simulate_input("12");
+    cx.refresh().unwrap();
+    let height = cx.update(|window, _| window.find("ui-font-preview").bounds().size.height);
+    cx.update(|window, cx| window.within("font-size-input").click("increment", cx));
+    cx.refresh().unwrap();
+    assert_eq!(
+        cx.update(|_, cx| app.view.read(cx).draft_preferences(cx).font_size),
+        13.
+    );
+    assert!(cx.update(|window, _| window.find("ui-font-preview").bounds().size.height) > height);
+    cx.update(|window, cx| window.within("font-size-input").click("decrement", cx));
+    assert_eq!(
+        cx.update(|_, cx| app.view.read(cx).draft_preferences(cx).font_size),
+        12.
+    );
+    cx.simulate_keystrokes("up");
+    assert_eq!(
+        cx.update(|_, cx| app.view.read(cx).draft_preferences(cx).font_size),
+        13.
+    );
+    cx.simulate_keystrokes("down");
+    assert_eq!(
+        cx.update(|_, cx| app.view.read(cx).draft_preferences(cx).font_size),
+        12.
+    );
+    for (value, key, button) in [("24", "up", "increment"), ("8", "down", "decrement")] {
+        cx.simulate_keystrokes("ctrl-a ctrl-k");
+        cx.simulate_input(value);
+        cx.simulate_keystrokes(key);
+        cx.refresh().unwrap();
+        cx.update(|window, cx| window.within("font-size-input").click(button, cx));
+        assert_eq!(
+            cx.update(|_, cx| app.view.read(cx).draft_preferences(cx).font_size),
+            value.parse::<f32>().unwrap()
+        );
+    }
+    assert_eq!(
+        cx.update(|_, cx| app.view.read(cx).preferences.clone()),
+        original
+    );
+    cx.simulate_keystrokes("escape");
+}
+
+#[gpui_kit::test]
 fn font_catalog_loading_rejects_closed_and_superseded_preferences(cx: &mut TestAppContext) {
     let fixture = Fixture::new();
     fixture.commit("tip");

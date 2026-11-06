@@ -26,7 +26,7 @@ use gitk_rs::{
 use gpui_kit::component::{
     ThemeMode,
     button::Button,
-    input::{Input, InputEvent, InputState},
+    input::{Input, InputEvent, InputState, NumberInput},
     menu::{ContextMenuExt, DropdownMenu, PopupMenuItem},
     resizable::{resizable_panel, v_resizable},
     scroll::{ScrollableElement, Scrollbar, ScrollbarMode},
@@ -207,8 +207,13 @@ impl HistoryWindow {
             )
             .searchable(true)
         });
-        let font_size_input = cx
-            .new(|cx| InputState::new(window, cx).default_value(preferences.font_size.to_string()));
+        let font_size_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .default_value(preferences.font_size.to_string())
+                .step(1.)
+                .min(8.)
+                .max(24.)
+        });
         let mut font_subscriptions = Vec::new();
         for selector in [&ui_font_select, &fixed_font_select] {
             font_subscriptions.push(

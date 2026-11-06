@@ -291,7 +291,18 @@ impl HistoryWindow {
                                 form.child("Loading installed fonts…")
                             })
                             .child("Font size (8–24 pixels)")
-                            .child(Input::new(&self.font_size_input).id("font-size-input"))
+                            .child(
+                                div()
+                                    .id("font-size-input")
+                                    .test_support()
+                                    .h_8()
+                                    .flex_shrink_0()
+                                    .child(
+                                        NumberInput::new(&self.font_size_input)
+                                            .accessibility_label("Font size in pixels")
+                                            .w_full(),
+                                    ),
+                            )
                             .child(
                                 div()
                                     .flex()
