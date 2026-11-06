@@ -33,8 +33,20 @@
         touch $out
       '';
 
-  nixfmt = pkgs.runCommand "gitk-rs-nixfmt" { nativeBuildInputs = [ pkgs.nixfmt ]; } ''
-    nixfmt --check ${./flake.nix} ${./gitk-rs.nix} ${./shell.nix} ${./checks.nix} ${./gui-smoke.nix}
-    touch $out
-  '';
+  nixfmt =
+    pkgs.runCommand "gitk-rs-nixfmt"
+      {
+        src = pkgs.lib.fileset.toSource {
+          root = ./.;
+          fileset = pkgs.lib.fileset.fileFilter (file: file.hasExt "nix") ./.;
+        };
+        nativeBuildInputs = [
+          pkgs.findutils
+          pkgs.nixfmt
+        ];
+      }
+      ''
+        find "$src" -type f -name '*.nix' -exec nixfmt --check {} +
+        touch $out
+      '';
 }

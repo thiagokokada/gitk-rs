@@ -24,6 +24,10 @@ explicitly, for example:
 nix build .#packages.x86_64-linux.gui-smoke --max-jobs 0 --print-build-logs
 ```
 
+GitHub Actions runs the VM test in the Ubuntu Nix job on pushes and pull
+requests to `main`, and uploads successful runs' screenshots and logs as the
+`gui-smoke-x11` artifact. Failed runs print the smoke logs in the job output.
+
 To run against your existing X11 session instead:
 
 ```sh

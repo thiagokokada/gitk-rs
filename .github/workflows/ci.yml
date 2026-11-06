@@ -85,7 +85,15 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Enable KVM for the GUI VM test
+        if: runner.os == 'Linux'
+        run: |
+          test -c /dev/kvm
+          sudo chmod a+rw /dev/kvm
+
       - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: ${{ runner.os == 'Linux' && 'extra-system-features = kvm nixos-test' || '' }}
 
       - name: Cache Nix store
         uses: nix-community/cache-nix-action@v7
@@ -101,3 +109,17 @@ jobs:
 
       - name: Check formatting, linting, and scripts
         run: nix flake check --print-build-logs
+
+      - name: Run the X11 GUI smoke test in a VM
+        if: runner.os == 'Linux'
+        run: nix build .#gui-smoke --out-link result-gui-smoke --print-build-logs 2>&1 | tee gui-smoke-build.log
+
+      - name: Upload GUI smoke screenshots and logs
+        if: always() && runner.os == 'Linux'
+        uses: actions/upload-artifact@v6
+        with:
+          name: gui-smoke-x11
+          path: |
+            gui-smoke-build.log
+            result-gui-smoke/artifacts/gui-smoke/
+          if-no-files-found: ignore
