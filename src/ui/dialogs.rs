@@ -172,26 +172,115 @@ impl HistoryWindow {
         body = body.child(div().text_size(px(18.)).child(title));
         match self.dialog {
             Some(DialogKind::Branches) => {
-                body = body.child(Input::new(&self.branch_filter)).child(uniform_list("branches", self.filtered_branches.len(), cx.processor(|this, range: Range<usize>, _, cx| {
-                        range.map(|i| div().id(("branch", i)).h(px((this.preferences.font_size * 2.).max(26.))).px_2().bg(rgb(if i == this.branch_index { 0x285b8e } else if this.config.theme == Theme::Dark { 0x292d35 } else { 0xffffff }))
-                            .when(i == this.branch_index, |row| row.text_color(rgb(0xffffff))).child(this.branches[this.filtered_branches[i]].clone()).cursor_pointer()
-                            .on_click(cx.listener(move |this, _, _, cx| this.switch_branch(i, cx)))).collect::<Vec<_>>()
-                    })).h(px(300.)).track_scroll(&self.branch_scroll))
+                body = body
+                    .child(Input::new(&self.branch_filter))
+                    .child(
+                        uniform_list(
+                            "branches",
+                            self.filtered_branches.len(),
+                            cx.processor(|this, range: Range<usize>, _, cx| {
+                                range
+                                    .map(|i| {
+                                        div()
+                                            .id(("branch", i))
+                                            .h(px((this.preferences.font_size * 2.).max(26.)))
+                                            .px_2()
+                                            .bg(rgb(if i == this.branch_index {
+                                                0x285b8e
+                                            } else if this.config.theme == Theme::Dark {
+                                                0x292d35
+                                            } else {
+                                                0xffffff
+                                            }))
+                                            .when(i == this.branch_index, |row| {
+                                                row.text_color(rgb(0xffffff))
+                                            })
+                                            .child(this.branches[this.filtered_branches[i]].clone())
+                                            .cursor_pointer()
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                this.switch_branch(i, cx)
+                                            }))
+                                    })
+                                    .collect::<Vec<_>>()
+                            }),
+                        )
+                        .h(px(300.))
+                        .track_scroll(&self.branch_scroll),
+                    )
                     .child(self.operation_message.clone());
             }
-            Some(DialogKind::OpenRepository) => body = body.child("Repository directory").child(Input::new(&self.repository_input)).child(self.operation_message.clone())
-                .child(Button::new("open-path").label("Open").on_click(cx.listener(|this, _, _, cx| this.apply_repository_path(cx)))),
-            Some(DialogKind::Preferences) => body = body.child("UI font family").child(Input::new(&self.ui_font_input))
-                .child("Fixed font family").child(Input::new(&self.fixed_font_input))
-                .child("Font size (8–24 pixels)").child(Input::new(&self.font_size_input))
-                .child(self.operation_message.clone())
-                .child(Button::new("apply-preferences").label("Apply and save").on_click(cx.listener(|this, _, window, cx| this.apply_preferences(window, cx)))),
-            Some(DialogKind::Help) => body = body.child("Arrows / j,k / n,p: select commit\nHome / End: first / last loaded\nCtrl+PageUp / PageDown: scroll history\nSpace: page diff down; Backspace / Delete / b: up\nu / d: scroll diff 18 lines\nDrag: select; Shift-click: extend; double-click: word\nCtrl+A in diff: select all; Ctrl+C: copy\nCtrl+Shift+C: copy without diff markers\n/: filter; Escape: leave filter / close dialog\nCtrl+O: open repository; Ctrl+B: local branches\nF5: reload; F1: help; Ctrl+Q: quit\nCtrl+,: fonts; Ctrl+Enter: apply preferences\nAlt+T: theme; Alt+R: automatic reload\nGraph: drag header edge to resize; dashed lanes fold idle branches\nFilter Ctrl+A/E: start/end; B/F: character\nFilter Ctrl+W/U/K/D: delete word/start/end/forward"),
-            _ => body = body.child(format!("gitk-rs {}\nRust/GPUI port of gitk-go.\nMIT licensed.", env!("CARGO_PKG_VERSION"))),
+            Some(DialogKind::OpenRepository) => {
+                body = body
+                    .child("Repository directory")
+                    .child(Input::new(&self.repository_input))
+                    .child(self.operation_message.clone())
+                    .child(
+                        Button::new("open-path")
+                            .label("Open")
+                            .on_click(cx.listener(|this, _, _, cx| this.apply_repository_path(cx))),
+                    )
+            }
+            Some(DialogKind::Preferences) => {
+                body = body
+                    .child("UI font family")
+                    .child(Input::new(&self.ui_font_input))
+                    .child("Fixed font family")
+                    .child(Input::new(&self.fixed_font_input))
+                    .child("Font size (8–24 pixels)")
+                    .child(Input::new(&self.font_size_input))
+                    .child(self.operation_message.clone())
+                    .child(
+                        Button::new("apply-preferences")
+                            .label("Apply and save")
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.apply_preferences(window, cx)
+                            })),
+                    )
+            }
+            Some(DialogKind::Help) => {
+                body = body.overflow_hidden().child(
+                    div()
+                        .id("shortcut-groups")
+                        .test_support()
+                        .min_h_0()
+                        .overflow_y_scroll()
+                        .flex()
+                        .flex_col()
+                        .gap_4()
+                        .children(SHORTCUT_GROUPS.iter().map(|group| {
+                            div()
+                                .id(group.title)
+                                .test_support()
+                                .flex_shrink_0()
+                                .flex()
+                                .flex_col()
+                                .gap_1()
+                                .child(
+                                    div()
+                                        .font_weight(gpui_kit::FontWeight::BOLD)
+                                        .child(group.title),
+                                )
+                                .children(group.shortcuts.iter().map(|&(keys, description)| {
+                                    div()
+                                        .flex()
+                                        .gap_3()
+                                        .child(div().w(px(235.)).flex_shrink_0().child(keys))
+                                        .child(div().flex_1().child(description))
+                                }))
+                        })),
+                );
+            }
+            _ => {
+                body = body.child(format!(
+                    "gitk-rs {}\nRust/GPUI port of gitk-go.\nMIT licensed.",
+                    env!("CARGO_PKG_VERSION")
+                ))
+            }
         }
         body = body.child(
             div()
                 .id("close-dialog")
+                .test_support()
                 .px_3()
                 .py_2()
                 .bg(rgb(button))
@@ -262,3 +351,90 @@ impl HistoryWindow {
         cx.notify();
     }
 }
+
+struct ShortcutGroup {
+    title: &'static str,
+    shortcuts: &'static [(&'static str, &'static str)],
+}
+
+const SHORTCUT_GROUPS: &[ShortcutGroup] = &[
+    ShortcutGroup {
+        title: "Commit list",
+        shortcuts: &[
+            ("Up / p / k", "Move up one commit"),
+            ("Down / n / j", "Move down one commit"),
+            ("Home", "Jump to the first commit"),
+            ("End", "Jump to the last loaded commit"),
+            ("Ctrl+PageUp / PageDown", "Scroll history up / down a page"),
+            (
+                "Ctrl+C",
+                "Copy selected commit hash and summary (history focused)",
+            ),
+        ],
+    },
+    ShortcutGroup {
+        title: "Diff view",
+        shortcuts: &[
+            ("Delete / Backspace / b / B", "Scroll diff up one page"),
+            ("Space", "Scroll diff down one page"),
+            ("u / U", "Scroll diff up 18 lines"),
+            ("d / D", "Scroll diff down 18 lines"),
+            ("Drag / Shift-click", "Select text / extend selection"),
+            ("Double-click", "Select a word"),
+            ("Ctrl+A", "Select all (diff focused)"),
+            ("Ctrl+C", "Copy selection (diff focused)"),
+            ("Ctrl+Shift+C", "Copy without +/- markers (diff focused)"),
+        ],
+    },
+    ShortcutGroup {
+        title: "General",
+        shortcuts: &[
+            ("/", "Focus the filter box"),
+            ("Escape", "Leave the filter box"),
+            ("F5", "Reload commits"),
+            ("F1", "Show keyboard shortcuts"),
+            ("Ctrl+O", "Open repository"),
+            ("Ctrl+Shift+O", "Open repository by path"),
+            ("Ctrl+B", "Switch local branch (outside text inputs)"),
+            ("Ctrl+,", "Open font preferences"),
+            ("Alt+T", "Toggle theme (outside text inputs)"),
+            ("Alt+R", "Toggle automatic reload (outside text inputs)"),
+            ("Ctrl+Q", "Quit gitk-rs"),
+        ],
+    },
+    ShortcutGroup {
+        title: "Filter box and text inputs",
+        shortcuts: &[
+            ("Ctrl+A / Ctrl+E", "Move to start / end of line"),
+            ("Ctrl+B / Ctrl+F", "Move back / forward one character"),
+            ("Ctrl+W", "Delete word before cursor"),
+            ("Ctrl+U", "Delete to start of line"),
+            ("Ctrl+K", "Delete to end of line"),
+            ("Ctrl+D", "Delete character at cursor"),
+        ],
+    },
+    ShortcutGroup {
+        title: "Branch dialog",
+        shortcuts: &[
+            ("Up / Ctrl+P", "Select previous branch"),
+            ("Down / Ctrl+N", "Select next branch"),
+            ("Enter", "Switch to selected branch"),
+            ("Type in filter", "Filter local branches"),
+        ],
+    },
+    ShortcutGroup {
+        title: "Dialogs",
+        shortcuts: &[
+            ("Escape", "Close the dialog"),
+            ("Enter", "Open repository in the path input"),
+            ("Ctrl+Enter", "Apply and save font preferences"),
+        ],
+    },
+    ShortcutGroup {
+        title: "Graph",
+        shortcuts: &[
+            ("Drag header edge", "Resize the graph column"),
+            ("Dashed lanes", "Indicate folded idle branches"),
+        ],
+    },
+];

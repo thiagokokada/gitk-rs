@@ -733,3 +733,57 @@ fn workspace_changes_before_layout_preserve_the_top_commit(cx: &mut TestAppConte
     });
     assert_eq!(selected(&app.view, cx).as_deref(), Some(chosen.as_str()));
 }
+
+#[gpui_kit::test]
+fn shortcuts_are_grouped_scrollable_and_restore_focus(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let older = fixture.commit("older");
+    let newer = fixture.commit("newer");
+    let (app, cx) = open(&fixture, cx);
+    until(cx, |cx| selected(&app.view, cx).as_deref() == Some(&newer));
+
+    for theme in [Theme::Dark, Theme::Light] {
+        app.view.update(cx, |view, cx| {
+            view.config.theme = theme;
+            view.preferences.font_size = 24.;
+            cx.notify();
+        });
+        cx.simulate_resize(size(px(800.), px(600.)));
+        cx.simulate_keystrokes("f1");
+        cx.refresh().unwrap();
+        cx.update(|window, _| {
+            let commits = window.find("Commit list").bounds();
+            let diff = window.find("Diff view").bounds();
+            assert!(commits.size.height > px(0.));
+            assert!(
+                diff.origin.y > commits.bottom(),
+                "groups need visible spacing"
+            );
+            let viewport = window.find("shortcut-groups").bounds();
+            let close = window.find("close-dialog");
+            assert!(close.visible());
+            assert!(close.bounds().origin.y >= viewport.bottom());
+            assert!(close.bounds().bottom() <= window.bounds().size.height);
+            assert!(!window.find("Graph").visible());
+        });
+        cx.update(|window, cx| {
+            window.scroll(
+                "shortcut-groups",
+                gpui_kit::ScrollDelta::Pixels(point(px(0.), px(-4000.))),
+                cx,
+            );
+        });
+        cx.refresh().unwrap();
+        cx.update(|window, _| {
+            assert!(
+                window.find("Graph").visible(),
+                "last group must be reachable"
+            );
+            assert!(window.find("close-dialog").visible());
+        });
+        cx.simulate_keystrokes("escape");
+        assert!(cx.update(|_, cx| app.view.read(cx).dialog.is_none()));
+    }
+    cx.simulate_keystrokes("j");
+    assert_eq!(selected(&app.view, cx).as_deref(), Some(older.as_str()));
+}
