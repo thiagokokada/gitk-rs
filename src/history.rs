@@ -581,6 +581,90 @@ mod tests {
         }
     }
 
+    /// Opt-in, history-only memory probe. Does not modify the repository.
+    #[test]
+    #[ignore = "requires GITK_PROFILE_REPOSITORY; reads real history"]
+    fn profile_retained_history() {
+        use std::mem::size_of;
+
+        let repository =
+            std::env::var_os("GITK_PROFILE_REPOSITORY").expect("set GITK_PROFILE_REPOSITORY");
+        let count: usize = std::env::var("GITK_PROFILE_COMMITS")
+            .unwrap_or_else(|_| "100000".into())
+            .parse()
+            .unwrap();
+        assert!(count > 64);
+        let request = Request {
+            generation: Generation(1),
+            id: 1,
+            refs_revision: 0,
+            repository: repository.into(),
+            range: 0..1,
+            query: String::new(),
+            batch: count,
+            graph_columns: 200,
+            anchor: None,
+            restore: None,
+        };
+        let started = Instant::now();
+        let mut session = Session::open(&request, Cancellation::default()).unwrap();
+        while session.step(&request).unwrap() {}
+        let mut records = 0;
+        let mut metadata = 0;
+        let mut messages = 0;
+        let mut graph = 0;
+        for entry in &session.entries {
+            records += size_of::<Entry>() + 2 * size_of::<usize>();
+            let commit = &entry.commit;
+            metadata += commit.id.as_str().len()
+                + size_of_val(commit.parents.as_ref())
+                + commit
+                    .parents
+                    .iter()
+                    .map(|p| p.as_str().len())
+                    .sum::<usize>();
+            for signature in [&commit.author, &commit.committer] {
+                metadata += signature.name.capacity()
+                    + signature.email.capacity()
+                    + signature.time.capacity();
+            }
+            messages += commit.message.capacity();
+            graph += size_of_val(entry.graph.edges.as_ref());
+        }
+        let index = session.entries.capacity() * size_of::<Arc<Entry>>()
+            + session.matches.capacity() * size_of::<usize>();
+        eprintln!(
+            "history_probe loaded={} eof={} elapsed_ms={} records_bytes={records} metadata_bytes={metadata} messages_bytes={messages} graph_bytes={graph} index_bytes={index} accounted_bytes={}",
+            session.entries.len(),
+            session.eof,
+            started.elapsed().as_millis(),
+            records + metadata + messages + graph + index,
+        );
+        // RSS includes allocator overhead and the test harness. Keep the probe
+        // separate from desktop measurements; never combine Git RSS with ours.
+        #[cfg(target_os = "linux")]
+        {
+            fn rss(pid: &str) -> String {
+                std::fs::read_to_string(format!("/proc/{pid}/status"))
+                    .unwrap_or_default()
+                    .lines()
+                    .find(|line| line.starts_with("VmRSS:"))
+                    .unwrap_or("VmRSS: unavailable (process exited)")
+                    .to_owned()
+            }
+            let pid = std::process::id().to_string();
+            eprintln!("history_probe process_pid={pid} {}", rss(&pid));
+            // Git is spawned on this test thread, which need not be the main thread.
+            for task in std::fs::read_dir(format!("/proc/{pid}/task")).unwrap() {
+                let children = std::fs::read_to_string(task.unwrap().path().join("children"))
+                    .unwrap_or_default();
+                for child in children.split_whitespace() {
+                    eprintln!("history_probe child_pid={child} {}", rss(child));
+                }
+            }
+        }
+    }
+
     #[test]
     fn filtering_searches_full_messages_without_copying_loaded_commits() {
         let fixture = Fixture::new();
