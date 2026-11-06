@@ -316,10 +316,10 @@ impl HistoryWindow {
                 );
             }
             _ => {
-                body = body.child(format!(
-                    "gitk-rs {}\nRust/GPUI port of gitk-go.\nMIT licensed.",
-                    env!("CARGO_PKG_VERSION")
-                ))
+                body = body
+                    .child(format!("gitk-rs {}", env!("CARGO_PKG_VERSION")))
+                    .child("A lightweight Git history explorer, written in Rust with GPUI.")
+                    .child("MIT licensed.")
             }
         }
         body = body.child(
