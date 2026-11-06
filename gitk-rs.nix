@@ -18,15 +18,18 @@
   openssl,
   pkg-config,
   rustPlatform,
+  revision ? "unknown",
   vulkan-loader,
   wayland,
   zlib,
 }:
 
 let
+  baseVersion = (builtins.fromTOML (builtins.readFile ./Cargo.toml)).package.version;
   commonArgs = {
     pname = "gitk-rs";
-    version = "0.1.0";
+    version = "${baseVersion}-${revision}";
+    GITK_RS_REVISION = revision;
     src = lib.fileset.toSource {
       root = ./.;
       fileset = lib.fileset.unions [
@@ -74,6 +77,9 @@ let
   cargoArtifacts = craneLib.buildDepsOnly (
     commonArgs
     // {
+      # Keep dependency artifacts reusable across application revisions.
+      version = baseVersion;
+      GITK_RS_REVISION = "unknown";
       cargoTestExtraArgs = "--all-targets --no-run";
     }
   );

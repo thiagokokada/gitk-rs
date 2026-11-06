@@ -1,5 +1,6 @@
 [package]
 name = "gitk-rs"
+# The displayed application/package version appends the short Git revision.
 version = "0.1.0"
 edition = "2024"
 license = "MIT"

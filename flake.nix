@@ -17,6 +17,7 @@
         "aarch64-darwin"
       ];
       eachSystem = nixpkgs.lib.genAttrs systems;
+      revision = builtins.substring 0 7 (self.rev or (self.dirtyRev or "unknown"));
     in
     {
       packages = eachSystem (
@@ -27,6 +28,7 @@
         {
           default = self.packages.${system}.gitk-rs;
           gitk-rs = pkgs.callPackage ./gitk-rs.nix {
+            inherit revision;
             craneLib = crane.mkLib pkgs;
           };
         }

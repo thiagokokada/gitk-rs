@@ -317,7 +317,7 @@ impl HistoryWindow {
             }
             _ => {
                 body = body
-                    .child(format!("gitk-rs {}", env!("CARGO_PKG_VERSION")))
+                    .child(format!("gitk-rs {}", gitk_rs::VERSION))
                     .child("A lightweight Git history explorer, written in Rust with GPUI.")
                     .child("MIT licensed.")
             }

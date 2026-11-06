@@ -37,7 +37,7 @@ impl Default for Config {
 }
 
 #[derive(Debug, Parser)]
-#[command(name = "gitk-rs", version, about)]
+#[command(name = "gitk-rs", version = crate::VERSION, about)]
 struct Args {
     /// Git repository to browse
     #[arg(default_value = ".")]
