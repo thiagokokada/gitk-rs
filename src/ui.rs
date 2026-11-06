@@ -31,8 +31,8 @@ use gpui_kit::component::{
     tooltip::Tooltip,
 };
 use gpui_kit::{
-    AnyElement, App, Bounds, Context, Entity, FocusHandle, KeyBinding, PathBuilder, ScrollStrategy,
-    SharedString, Subscription, Task, TestSupportExt, UniformListDecoration,
+    AnyElement, App, Bounds, Context, Entity, FocusHandle, KeyBinding, PathBuilder, ScrollHandle,
+    ScrollStrategy, SharedString, Subscription, Task, TestSupportExt, UniformListDecoration,
     UniformListScrollHandle, Window, WindowBounds, WindowOptions, actions, canvas, div, fill,
     point, prelude::*, px, rgb, size, uniform_list,
 };
@@ -138,6 +138,7 @@ struct HistoryWindow {
     _repository_subscription: Subscription,
     branch_index: usize,
     branch_scroll: UniformListScrollHandle,
+    help_scroll: ScrollHandle,
     operation_id: u64,
     pending_operation: Option<(u64, bool)>,
     operation_message: String,
@@ -288,6 +289,7 @@ impl HistoryWindow {
             _repository_subscription: repository_subscription,
             branch_index: 0,
             branch_scroll: UniformListScrollHandle::new(),
+            help_scroll: ScrollHandle::new(),
             operation_id: 0,
             pending_operation: None,
             operation_message: String::new(),
@@ -1131,6 +1133,7 @@ impl Render for HistoryWindow {
                 cx.listener(|this, _: &OpenBranches, window, cx| this.open_branches(window, cx)),
             )
             .on_action(cx.listener(|this, _: &Help, window, cx| {
+                this.help_scroll.set_offset(point(px(0.), px(0.)));
                 this.dialog = Some(DialogKind::Help);
                 this.dialog_focus.focus(window, cx);
                 cx.notify();

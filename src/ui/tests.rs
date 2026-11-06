@@ -1,5 +1,5 @@
 use super::*;
-use gpui_kit::{TestAppContext, VisualTestContext, test::TestWindowExt};
+use gpui_kit::{InputEvent as _, TestAppContext, VisualTestContext, test::TestWindowExt};
 #[path = "../test_support.rs"]
 mod test_support;
 pub(super) use test_support::Fixture;
@@ -931,4 +931,127 @@ fn vim_history_jumps_and_help_respect_focus(cx: &mut TestAppContext) {
     });
     cx.simulate_keystrokes("shift-g");
     assert_eq!(selected(&app.view, cx).as_deref(), Some(oldest.as_str()));
+}
+
+#[gpui_kit::test]
+fn dialog_scrollbars_and_wheel_events_are_isolated_from_history(cx: &mut TestAppContext) {
+    let fixture = history_fixture(200);
+    for i in 0..60 {
+        fixture.git(&["branch", &format!("branch-{i:03}")]);
+    }
+    let (app, cx) = open(&fixture, cx);
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            app.view
+                .read(cx)
+                .snapshot
+                .as_ref()
+                .is_some_and(|s| s.loaded == 200)
+        })
+    });
+    for (keys, viewport) in [
+        ("f1", "help-scrollbar-viewport"),
+        ("ctrl-b", "branch-scrollbar-viewport"),
+    ] {
+        app.view.update(cx, |view, cx| {
+            view.scroll.scroll_to_item_strict(40, ScrollStrategy::Top);
+            cx.notify();
+        });
+        until(cx, |cx| {
+            cx.update(|_, cx| app.view.read(cx).viewport.start == 40)
+        });
+        let history_offset =
+            cx.update(|_, cx| app.view.read(cx).scroll.0.borrow().base_handle.offset());
+        let commit = selected(&app.view, cx);
+        cx.simulate_keystrokes(keys);
+        if keys == "ctrl-b" {
+            until(cx, |cx| {
+                cx.update(|_, cx| app.view.read(cx).branches.len() == 61)
+            });
+        }
+        cx.refresh().unwrap();
+        let handle = cx.update(|_, cx| {
+            let view = app.view.read(cx);
+            if keys == "f1" {
+                view.help_scroll.clone()
+            } else {
+                view.branch_scroll.0.borrow().base_handle.clone()
+            }
+        });
+        assert_eq!(handle.offset().y, px(0.));
+        cx.update(|window, cx| {
+            window.scroll(
+                viewport,
+                gpui_kit::ScrollDelta::Pixels(point(px(0.), px(-140.))),
+                cx,
+            )
+        });
+        cx.refresh().unwrap();
+        assert!(
+            handle.offset().y < px(0.),
+            "dialog must scroll on wheel events"
+        );
+        assert_eq!(
+            cx.update(|_, cx| app.view.read(cx).scroll.0.borrow().base_handle.offset()),
+            history_offset
+        );
+        // Repeated scrolling at either boundary must also stay inside the modal.
+        for delta in [-10000., -10000., 10000., 10000.] {
+            cx.update(|window, cx| {
+                window.scroll(
+                    viewport,
+                    gpui_kit::ScrollDelta::Pixels(point(px(0.), px(delta))),
+                    cx,
+                )
+            });
+            cx.refresh().unwrap();
+            assert_eq!(
+                cx.update(|_, cx| app.view.read(cx).scroll.0.borrow().base_handle.offset()),
+                history_offset
+            );
+        }
+        let bounds = cx.update(|window, _| window.find(viewport).bounds());
+        cx.simulate_click(
+            point(bounds.right() - px(8.), bounds.bottom() - px(4.)),
+            gpui_kit::Modifiers::default(),
+        );
+        cx.refresh().unwrap();
+        assert!(
+            handle.offset().y < px(0.),
+            "visible scrollbar track must be clickable"
+        );
+        // Wheel events on the dimmed backdrop must not reach history either.
+        cx.update(|window, cx| {
+            let bounds = window.find("history-scrollbar-viewport").bounds();
+            window.dispatch_event(
+                gpui_kit::ScrollEvent {
+                    position: bounds.origin + point(px(10.), px(10.)),
+                    delta: gpui_kit::ScrollDelta::Pixels(point(px(0.), px(-140.))),
+                    ..Default::default()
+                }
+                .to_platform_input(),
+                cx,
+            );
+        });
+        cx.refresh().unwrap();
+        assert_eq!(
+            cx.update(|_, cx| app.view.read(cx).scroll.0.borrow().base_handle.offset()),
+            history_offset
+        );
+        assert_eq!(selected(&app.view, cx), commit);
+        cx.simulate_keystrokes("escape");
+    }
+    let before = cx.update(|_, cx| app.view.read(cx).scroll.0.borrow().base_handle.offset());
+    cx.update(|window, cx| {
+        window.scroll(
+            "history-scrollbar-viewport",
+            gpui_kit::ScrollDelta::Pixels(point(px(0.), px(-140.))),
+            cx,
+        )
+    });
+    cx.refresh().unwrap();
+    assert!(
+        cx.update(|_, cx| app.view.read(cx).scroll.0.borrow().base_handle.offset().y < before.y),
+        "history must scroll again after closing the dialog"
+    );
 }

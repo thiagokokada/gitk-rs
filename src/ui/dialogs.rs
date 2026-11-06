@@ -165,41 +165,65 @@ impl HistoryWindow {
             .p_4()
             .bg(rgb(palette.panel))
             .text_color(rgb(palette.foreground));
-        body = body.child(div().text_size(px(18.)).child(title));
+        body = body.child(div().flex_shrink_0().text_size(px(18.)).child(title));
         match self.dialog {
             Some(DialogKind::Branches) => {
                 body = body
+                    .overflow_hidden()
                     .child(Input::new(&self.branch_filter))
                     .child(
-                        uniform_list(
-                            "branches",
-                            self.filtered_branches.len(),
-                            cx.processor(|this, range: Range<usize>, _, cx| {
-                                range
-                                    .map(|i| {
-                                        div()
-                                            .id(("branch", i))
-                                            .h(px((this.preferences.font_size * 2.).max(26.)))
-                                            .px_2()
-                                            .bg(rgb(if i == this.branch_index {
-                                                colors::SOLID_SELECTION
-                                            } else {
-                                                Palette::for_theme(this.config.theme).panel
-                                            }))
-                                            .when(i == this.branch_index, |row| {
-                                                row.text_color(rgb(colors::ON_SOLID))
+                        div()
+                            .relative()
+                            .h(px(300.))
+                            .min_h_0()
+                            .child(
+                                uniform_list(
+                                    "branches",
+                                    self.filtered_branches.len(),
+                                    cx.processor(|this, range: Range<usize>, _, cx| {
+                                        range
+                                            .map(|i| {
+                                                div()
+                                                    .id(("branch", i))
+                                                    .h(px(
+                                                        (this.preferences.font_size * 2.).max(26.)
+                                                    ))
+                                                    .px_2()
+                                                    .bg(rgb(if i == this.branch_index {
+                                                        colors::SOLID_SELECTION
+                                                    } else {
+                                                        Palette::for_theme(this.config.theme).panel
+                                                    }))
+                                                    .when(i == this.branch_index, |row| {
+                                                        row.text_color(rgb(colors::ON_SOLID))
+                                                    })
+                                                    .child(
+                                                        this.branches[this.filtered_branches[i]]
+                                                            .clone(),
+                                                    )
+                                                    .cursor_pointer()
+                                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                                        this.switch_branch(i, cx)
+                                                    }))
                                             })
-                                            .child(this.branches[this.filtered_branches[i]].clone())
-                                            .cursor_pointer()
-                                            .on_click(cx.listener(move |this, _, _, cx| {
-                                                this.switch_branch(i, cx)
-                                            }))
-                                    })
-                                    .collect::<Vec<_>>()
-                            }),
-                        )
-                        .h(px(300.))
-                        .track_scroll(&self.branch_scroll),
+                                            .collect::<Vec<_>>()
+                                    }),
+                                )
+                                .size_full()
+                                .track_scroll(&self.branch_scroll),
+                            )
+                            .child(
+                                div()
+                                    .absolute()
+                                    .inset_0()
+                                    .id("branch-scrollbar-viewport")
+                                    .test_support()
+                                    .child(
+                                        Scrollbar::vertical(&self.branch_scroll)
+                                            .mode(ScrollbarMode::Always)
+                                            .id("branch-scrollbar"),
+                                    ),
+                            ),
                     )
                     .child(self.operation_message.clone());
             }
@@ -232,36 +256,63 @@ impl HistoryWindow {
                     )
             }
             Some(DialogKind::Help) => {
-                body = body.overflow_hidden().child(
+                body = body.h(gpui_kit::relative(0.9)).overflow_hidden().child(
                     div()
-                        .id("shortcut-groups")
-                        .test_support()
+                        .relative()
+                        .flex_1()
                         .min_h_0()
-                        .overflow_y_scroll()
-                        .flex()
-                        .flex_col()
-                        .gap_4()
-                        .children(SHORTCUT_GROUPS.iter().map(|group| {
+                        .child(
                             div()
-                                .id(group.title)
+                                .id("shortcut-groups")
                                 .test_support()
-                                .flex_shrink_0()
+                                .size_full()
+                                .pr_3()
+                                .overflow_y_scroll()
+                                .track_scroll(&self.help_scroll)
                                 .flex()
                                 .flex_col()
-                                .gap_1()
-                                .child(
+                                .gap_4()
+                                .children(SHORTCUT_GROUPS.iter().map(|group| {
                                     div()
-                                        .font_weight(gpui_kit::FontWeight::BOLD)
-                                        .child(group.title),
-                                )
-                                .children(group.shortcuts.iter().map(|&(keys, description)| {
-                                    div()
+                                        .id(group.title)
+                                        .test_support()
+                                        .flex_shrink_0()
                                         .flex()
-                                        .gap_3()
-                                        .child(div().w(px(235.)).flex_shrink_0().child(keys))
-                                        .child(div().flex_1().child(description))
-                                }))
-                        })),
+                                        .flex_col()
+                                        .gap_1()
+                                        .child(
+                                            div()
+                                                .font_weight(gpui_kit::FontWeight::BOLD)
+                                                .child(group.title),
+                                        )
+                                        .children(group.shortcuts.iter().map(
+                                            |&(keys, description)| {
+                                                div()
+                                                    .flex()
+                                                    .gap_3()
+                                                    .child(
+                                                        div()
+                                                            .w(px(235.))
+                                                            .flex_shrink_0()
+                                                            .child(keys),
+                                                    )
+                                                    .child(div().flex_1().child(description))
+                                            },
+                                        ))
+                                })),
+                        )
+                        .child(
+                            div()
+                                .absolute()
+                                .inset_0()
+                                .id("help-scrollbar-viewport")
+                                .test_support()
+                                .child(
+                                    Scrollbar::vertical(&self.help_scroll)
+                                        .mode(ScrollbarMode::Always)
+                                        .id("help-scrollbar"),
+                                ),
+                        ),
                 );
             }
             _ => {
@@ -274,6 +325,7 @@ impl HistoryWindow {
         body = body.child(
             div()
                 .id("close-dialog")
+                .flex_shrink_0()
                 .test_support()
                 .px_3()
                 .py_2()
@@ -287,8 +339,13 @@ impl HistoryWindow {
                 })),
         );
         div()
+            .id("dialog-overlay")
+            .test_support()
             .absolute()
             .inset_0()
+            // Modal hit testing must include scroll events, including at list boundaries.
+            .occlude()
+            .on_scroll(|_, _, cx| cx.stop_propagation())
             .bg(gpui_kit::rgba(colors::DIALOG_OVERLAY))
             .flex()
             .items_center()
