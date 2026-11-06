@@ -26,6 +26,7 @@ use gpui_kit::component::{
     menu::{ContextMenuExt, DropdownMenu, PopupMenuItem},
     resizable::{resizable_panel, v_resizable},
     scroll::{Scrollbar, ScrollbarMode},
+    tooltip::Tooltip,
 };
 use gpui_kit::{
     AnyElement, App, Bounds, Context, Entity, FocusHandle, KeyBinding, PathBuilder, ScrollStrategy,
@@ -1276,11 +1277,19 @@ impl Render for HistoryWindow {
                                             .bg(rgb(border))
                                             .child(
                                                 div()
+                                                    .id("graph-heading")
                                                     .relative()
                                                     .w(px(self.graph_width))
                                                     .flex_shrink_0()
                                                     .px_2()
                                                     .child(if self.graph_layout.has_collapsed() { "Graph · … idle lanes" } else { "Graph" })
+                                                    .when(self.graph_layout.has_collapsed(), |heading| {
+                                                        heading.tooltip(|window, cx| {
+                                                            Tooltip::new("Idle lanes are history lines with no commit, branch, or merge junction in the visible rows. They are grouped into a dashed column to save space; commit dots and junctions stay separate.")
+                                                                .max_w(px(360.))
+                                                                .build(window, cx)
+                                                        })
+                                                    })
                                                     .child(div().id("graph-divider").test_support()
                                                         .absolute().right_0().top_0().bottom_0().w(px(7.))
                                                         .cursor_col_resize()
