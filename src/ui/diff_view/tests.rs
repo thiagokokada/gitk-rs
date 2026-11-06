@@ -1,5 +1,5 @@
 use crate::ui::tests::{Fixture, open, until};
-use gpui_kit::{Modifiers, TestAppContext, point, px};
+use gpui_kit::{Modifiers, TestAppContext, point, px, test::TestWindowExt};
 
 #[gpui_kit::test]
 fn ref_refresh_preserves_local_diff_page_and_text_selection(cx: &mut TestAppContext) {
@@ -107,13 +107,15 @@ fn file_scrollbar_reaches_and_selects_offscreen_files(cx: &mut TestAppContext) {
                 .is_some_and(|s| s.files.len() == 80)
         })
     });
-    let scrollbar = cx.debug_bounds("files-scrollbar").unwrap();
+    let scrollbar = cx.update(|window, _| window.find("files-scrollbar-viewport").bounds());
     cx.simulate_click(
         point(scrollbar.right() - px(8.), scrollbar.bottom() - px(2.)),
         Modifiers::default(),
     );
-    until(cx, |cx| cx.debug_bounds("diff-file-80").is_some());
-    let last = cx.debug_bounds("diff-file-80").unwrap();
+    until(cx, |cx| {
+        cx.update(|window, _| window.try_find(("diff-file", 80_usize)).is_some())
+    });
+    let last = cx.update(|window, _| window.find(("diff-file", 80_usize)).bounds());
     cx.simulate_click(last.center(), Modifiers::default());
     until(cx, |cx| {
         cx.update(|_, cx| {
@@ -149,9 +151,7 @@ fn file_click_and_copy_use_the_full_diff_not_just_visible_rows(cx: &mut TestAppC
         })
     });
     assert_eq!(cx.update(|_, cx| pane.read(cx).selected_file), Some(0));
-    let bounds = cx
-        .debug_bounds("diff-file-2")
-        .expect("second file rendered");
+    let bounds = cx.update(|window, _| window.find(("diff-file", 2_usize)).bounds());
     cx.simulate_click(bounds.center(), Modifiers::default());
     until(cx, |cx| {
         cx.update(|_, cx| {
@@ -196,7 +196,7 @@ fn file_click_and_copy_use_the_full_diff_not_just_visible_rows(cx: &mut TestAppC
         cx.run_until_parked();
         assert_eq!(cx.update(|_, cx| pane.read(cx).selected_file), Some(2));
     }
-    let bounds = cx.debug_bounds("diff-file-0").unwrap();
+    let bounds = cx.update(|window, _| window.find(("diff-file", 0_usize)).bounds());
     cx.simulate_click(bounds.center(), Modifiers::default());
     until(cx, |cx| {
         cx.update(|_, cx| pane.read(cx).viewport.start == 0)

@@ -675,9 +675,7 @@ impl Render for DiffPane {
                                                         });
                                                     div()
                                                         .id(("diff-file", i))
-                                                        .debug_selector(move || {
-                                                            format!("diff-file-{i}")
-                                                        })
+                                                        .test_support()
                                                         .h(px((this.font_size * 1.9).max(24.)))
                                                         .w_full()
                                                         .px_2()
@@ -741,7 +739,8 @@ impl Render for DiffPane {
                                         .top_0()
                                         .left_0()
                                         .size_full()
-                                        .debug_selector(|| "files-scrollbar".into())
+                                        .id("files-scrollbar-viewport")
+                                        .test_support()
                                         .child(
                                             Scrollbar::vertical(&self.files_scroll)
                                                 .mode(ScrollbarMode::Always)

@@ -1,5 +1,5 @@
 use super::*;
-use gpui_kit::{TestAppContext, VisualTestContext};
+use gpui_kit::{TestAppContext, VisualTestContext, test::TestWindowExt};
 #[path = "../test_support.rs"]
 mod test_support;
 pub(super) use test_support::Fixture;
@@ -164,7 +164,7 @@ fn history_pages_settle_after_scrolling_beyond_the_first_page(cx: &mut TestAppCo
                 .is_some_and(|s| s.loaded == 1000)
         })
     });
-    let scrollbar = cx.debug_bounds("history-scrollbar").unwrap();
+    let scrollbar = cx.update(|window, _| window.find("history-scrollbar-viewport").bounds());
     assert!(scrollbar.size.height > px(50.));
     cx.simulate_click(
         point(scrollbar.right() - px(8.), scrollbar.bottom() - px(2.)),
@@ -462,7 +462,7 @@ fn graph_column_can_be_resized_without_changing_selection(cx: &mut TestAppContex
     let tip = fixture.commit("tip");
     let (app, cx) = open(&fixture, cx);
     until(cx, |cx| selected(&app.view, cx).as_deref() == Some(&tip));
-    let divider = cx.debug_bounds("graph-divider").unwrap();
+    let divider = cx.update(|window, _| window.find("graph-divider").bounds());
     let origin = divider.center();
     cx.simulate_mouse_down(
         origin,
@@ -481,7 +481,12 @@ fn graph_column_can_be_resized_without_changing_selection(cx: &mut TestAppContex
     );
     assert_eq!(cx.update(|_, cx| app.view.read(cx).graph_width), 420.);
     assert_eq!(selected(&app.view, cx).as_deref(), Some(tip.as_str()));
-    assert!(cx.debug_bounds("graph-divider").unwrap().center().x > origin.x);
+    assert!(
+        cx.update(|window, _| window.find("graph-divider").bounds())
+            .center()
+            .x
+            > origin.x
+    );
 }
 
 #[gpui_kit::test]
@@ -493,7 +498,7 @@ fn reload_control_toggles_watching_and_refreshes_history(cx: &mut TestAppContext
         selected(&app.view, cx).as_deref() == Some(head.as_str())
     });
     assert!(!cx.update(|_, cx| app.view.read(cx).config.watch));
-    let button = cx.debug_bounds("reload-control").unwrap();
+    let button = cx.update(|window, _| window.find("reload").bounds());
     cx.simulate_click(button.center(), gpui_kit::Modifiers::default());
     assert!(cx.update(|_, cx| app.view.read(cx).config.watch));
     until(cx, |cx| {
@@ -503,7 +508,7 @@ fn reload_control_toggles_watching_and_refreshes_history(cx: &mut TestAppContext
     until(cx, |cx| {
         cx.update(|_, cx| !app.view.read(cx).local_rows.is_empty())
     });
-    let button = cx.debug_bounds("reload-control").unwrap();
+    let button = cx.update(|window, _| window.find("reload").bounds());
     cx.simulate_click(button.center(), gpui_kit::Modifiers::default());
     assert!(!cx.update(|_, cx| app.view.read(cx).config.watch));
     until(cx, |cx| {

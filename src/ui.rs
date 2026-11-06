@@ -29,9 +29,9 @@ use gpui_kit::component::{
 };
 use gpui_kit::{
     AnyElement, App, Bounds, Context, Entity, FocusHandle, KeyBinding, PathBuilder, ScrollStrategy,
-    SharedString, Subscription, Task, UniformListDecoration, UniformListScrollHandle, Window,
-    WindowBounds, WindowOptions, actions, canvas, div, fill, point, prelude::*, px, rgb, size,
-    uniform_list,
+    SharedString, Subscription, Task, TestSupportExt, UniformListDecoration,
+    UniformListScrollHandle, Window, WindowBounds, WindowOptions, actions, canvas, div, fill,
+    point, prelude::*, px, rgb, size, uniform_list,
 };
 use std::{
     ops::Range,
@@ -1243,7 +1243,7 @@ impl Render for HistoryWindow {
                     .child(
                         div()
                             .id("reload")
-                            .debug_selector(|| "reload-control".into())
+                            .test_support()
                             .px_3()
                             .py_2()
                             .bg(rgb(panel))
@@ -1281,7 +1281,7 @@ impl Render for HistoryWindow {
                                                     .flex_shrink_0()
                                                     .px_2()
                                                     .child(if self.graph_layout.has_collapsed() { "Graph · … idle lanes" } else { "Graph" })
-                                                    .child(div().id("graph-divider").debug_selector(|| "graph-divider".into())
+                                                    .child(div().id("graph-divider").test_support()
                                                         .absolute().right_0().top_0().bottom_0().w(px(7.))
                                                         .cursor_col_resize()
                                                         .on_mouse_down(gpui_kit::MouseButton::Left, cx.listener(|this, event: &gpui_kit::MouseDownEvent, _, cx| {
@@ -1333,7 +1333,8 @@ impl Render for HistoryWindow {
                                                     .top_0()
                                                     .left_0()
                                                     .size_full()
-                                                    .debug_selector(|| "history-scrollbar".into())
+                                                    .id("history-scrollbar-viewport")
+                                                    .test_support()
                                                     .child(
                                                         Scrollbar::vertical(&self.scroll)
                                                             .mode(ScrollbarMode::Always)
