@@ -1541,6 +1541,10 @@ pub fn run(config: Config, launched: Instant) {
     gpui_kit::application()
         .with_assets(gpui_kit::assets::Assets)
         .run(move |cx: &mut App| {
+            #[cfg(target_os = "macos")]
+            if let Err(error) = crate::macos::set_application_icon() {
+                eprintln!("gitk-rs: unable to set application icon: {error:#}");
+            }
             gpui_kit::init(cx);
             gpui_kit::component::Theme::change(
                 match config.theme {

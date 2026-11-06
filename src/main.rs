@@ -1,3 +1,5 @@
+#[cfg(target_os = "macos")]
+mod macos;
 mod ui;
 
 use gitk_rs::cli;

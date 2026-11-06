@@ -21,6 +21,11 @@ notify = "7"
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.29", features = ["signal", "process"] }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSImage"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSData"] }
+
 [dev-dependencies]
 gpui-kit = { version = "=0.9.0", features = ["test-support"] }
 
@@ -28,4 +33,4 @@ gpui-kit = { version = "=0.9.0", features = ["test-support"] }
 debug = "line-tables-only"
 
 [lints.rust]
-unsafe_code = "forbid"
+unsafe_code = "deny"
