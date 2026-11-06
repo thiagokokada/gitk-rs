@@ -1,4 +1,14 @@
 use super::*;
+use gpui_kit::component::checkbox::Checkbox;
+
+#[derive(Clone, Copy)]
+enum PreferenceToggle {
+    LightTheme,
+    Syntax,
+    Watch,
+    TextGraph,
+    OnDemand,
+}
 
 pub(super) type FontChoices = SearchableVec<SharedString>;
 
@@ -25,6 +35,91 @@ pub(super) fn preview_size(size: f32, fallback: f32) -> f32 {
 }
 
 impl HistoryWindow {
+    pub(super) fn preference_options(&self, cx: &mut Context<Self>) -> AnyElement {
+        let draft = &self.preferences_draft;
+        let mut form = div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child("Application settings")
+            .child("Apply updates this window and saves defaults for future launches.");
+        for (id, label, checked, setting) in [
+            (
+                "light-theme-setting",
+                "Light theme",
+                draft.theme == Theme::Light,
+                PreferenceToggle::LightTheme,
+            ),
+            (
+                "syntax-setting",
+                "Syntax highlighting",
+                draft.syntax,
+                PreferenceToggle::Syntax,
+            ),
+            (
+                "watch-setting",
+                "Automatically reload repository changes",
+                draft.watch,
+                PreferenceToggle::Watch,
+            ),
+            (
+                "text-graph-setting",
+                "Use a text graph",
+                draft.text_graph,
+                PreferenceToggle::TextGraph,
+            ),
+            (
+                "on-demand-setting",
+                "Load history on demand",
+                draft.batch.is_some(),
+                PreferenceToggle::OnDemand,
+            ),
+        ] {
+            form = form.child(Checkbox::new(id).label(label).checked(checked).on_click(
+                cx.listener(move |this, checked: &bool, _, cx| {
+                    this.toggle_preference(setting, *checked);
+                    cx.notify();
+                }),
+            ));
+        }
+        form = form
+            .child("History batch size (when loading on demand)")
+            .child(
+                div()
+                    .id("history-batch-input")
+                    .test_support()
+                    .h_8()
+                    .flex_shrink_0()
+                    .child(
+                        Input::new(&self.batch_input)
+                            .disabled(draft.batch.is_none())
+                            .size_full(),
+                    ),
+            )
+            .child(format!("Logical graph columns (1–{MAX_GRAPH_LANES})"))
+            .child(
+                div()
+                    .id("graph-columns-input")
+                    .test_support()
+                    .h_8()
+                    .flex_shrink_0()
+                    .child(Input::new(&self.graph_columns_input).size_full()),
+            );
+        form.into_any_element()
+    }
+
+    fn toggle_preference(&mut self, setting: PreferenceToggle, checked: bool) {
+        match setting {
+            PreferenceToggle::LightTheme => {
+                self.preferences_draft.theme = if checked { Theme::Light } else { Theme::Dark }
+            }
+            PreferenceToggle::Syntax => self.preferences_draft.syntax = checked,
+            PreferenceToggle::Watch => self.preferences_draft.watch = checked,
+            PreferenceToggle::TextGraph => self.preferences_draft.text_graph = checked,
+            PreferenceToggle::OnDemand => self.preferences_draft.batch = checked.then_some(1000),
+        }
+    }
+
     pub(super) fn draft_preferences(&self, cx: &App) -> Preferences {
         Preferences {
             ui_font: self
@@ -43,6 +138,17 @@ impl HistoryWindow {
                 .value()
                 .parse()
                 .unwrap_or(f32::NAN),
+            graph_columns: self
+                .graph_columns_input
+                .read(cx)
+                .value()
+                .parse()
+                .unwrap_or(0),
+            batch: self
+                .preferences_draft
+                .batch
+                .map(|_| self.batch_input.read(cx).value().parse().unwrap_or(0)),
+            ..self.preferences_draft.clone()
         }
     }
 
@@ -77,7 +183,14 @@ impl HistoryWindow {
         cx.notify();
     }
 
-    pub(super) fn open_font_preferences(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn open_preferences(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.preferences_draft = self.preferences.with_config(&self.config);
+        self.graph_columns_input.update(cx, |input, cx| {
+            input.set_value(self.config.graph_columns.to_string(), window, cx)
+        });
+        self.batch_input.update(cx, |input, cx| {
+            input.set_value(self.config.batch.unwrap_or(1000).to_string(), window, cx)
+        });
         self.dialog = Some(DialogKind::Preferences);
         self.operation_message.clear();
         self.font_catalog_generation.0 += 1;

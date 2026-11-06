@@ -43,7 +43,7 @@ Use the arrow keys or j/k to select commits, gg/G to jump to the first/last
 loaded commit, / to filter, and Space/Backspace to page through a diff.
 Ctrl+O opens a repository, Ctrl+B switches branches, and F5 reloads. On macOS,
 Cmd also works for repository commands, history paging, copying, diff selection,
-font preferences, and quitting. Press F1 or ? for all shortcuts.
+preferences, and quitting. Press F1 or ? for all shortcuts.
 Alt+J/K selects the next/previous commit from the commit list, diff, or search box
 without changing focus. In the branch filter, it selects the next/previous branch.
 
@@ -59,15 +59,30 @@ For command-line options:
 ./gitk-rs --help
 ```
 
-Font preferences are saved as `gitk-rs/preferences.toml` in the OS
+Preferences are saved as `gitk-rs/preferences.toml` in the OS
 configuration directory (`~/.config` on Linux or `~/Library/Application
-Support` on macOS). For example:
+Support` on macOS). Open Preferences with Ctrl+, (Cmd+, on macOS) to edit fonts,
+appearance, history loading, graph columns, syntax highlighting, and automatic
+reload. Apply updates the running window and saves the settings.
+Explicit command-line flags override saved settings at startup; applying new
+preferences can replace those flag values during the session. For example:
 
 ```toml
 ui_font = "DejaVu Sans"
 fixed_font = "DejaVu Sans Mono"
 font_size = 13.0
+theme = "dark"
+graph_columns = 256
+text_graph = false
+syntax = true
+watch = true
+# batch = 1000 # Omit to stream all history; set to load on demand.
 ```
+
+Boolean flags also accept `=false`, such as `--text-graph=false`,
+`--nosyntax=false`, or `--nowatch=false`. Use `--no-limit` to stream all history
+when the saved preferences specify a batch size. `--help` and `--version` remain
+standalone commands. Timing and verbose diagnostics are CLI-only options.
 
 ## Development
 

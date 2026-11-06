@@ -1,4 +1,8 @@
-//! Small UI preferences, separate from repository/history data.
+//! Saved application defaults, separate from repository/history data.
+use crate::{
+    cli::{Config, Theme},
+    graph::MAX_GRAPH_LANES,
+};
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -13,9 +17,16 @@ pub struct Preferences {
     pub ui_font: String,
     pub fixed_font: String,
     pub font_size: f32,
+    pub theme: Theme,
+    pub batch: Option<usize>,
+    pub graph_columns: usize,
+    pub text_graph: bool,
+    pub syntax: bool,
+    pub watch: bool,
 }
 impl Default for Preferences {
     fn default() -> Self {
+        let config = Config::default();
         Self {
             ui_font: if cfg!(target_os = "macos") {
                 ".SystemUIFont"
@@ -30,11 +41,40 @@ impl Default for Preferences {
             }
             .into(),
             font_size: 13.,
+            theme: config.theme,
+            batch: config.batch,
+            graph_columns: config.graph_columns,
+            text_graph: config.text_graph,
+            syntax: config.syntax,
+            watch: config.watch,
         }
     }
 }
 impl Preferences {
+    pub fn with_config(&self, config: &Config) -> Self {
+        Self {
+            theme: config.theme,
+            batch: config.batch,
+            graph_columns: config.graph_columns,
+            text_graph: config.text_graph,
+            syntax: config.syntax,
+            watch: config.watch,
+            ..self.clone()
+        }
+    }
     pub fn validate(&self) -> Result<()> {
+        ensure!(
+            self.batch.is_none_or(|batch| batch > 0),
+            "history batch size must be positive"
+        );
+        ensure!(
+            self.batch.is_none_or(|batch| i64::try_from(batch).is_ok()),
+            "history batch size exceeds TOML's signed 64-bit integer range"
+        );
+        ensure!(
+            (1..=MAX_GRAPH_LANES).contains(&self.graph_columns),
+            "graph columns must be between 1 and {MAX_GRAPH_LANES}"
+        );
         ensure!(
             (8.0..=24.0).contains(&self.font_size),
             "font size must be between 8 and 24 pixels"
@@ -58,7 +98,7 @@ impl Preferences {
     pub fn save(&self) -> Result<()> {
         self.save_to(&Self::path()?)
     }
-    fn load_from(path: &Path) -> Result<Self> {
+    pub fn load_from(path: &Path) -> Result<Self> {
         let file = match fs::File::open(path) {
             Ok(file) => file,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -73,7 +113,7 @@ impl Preferences {
         preferences.validate()?;
         Ok(preferences)
     }
-    fn save_to(&self, path: &Path) -> Result<()> {
+    pub fn save_to(&self, path: &Path) -> Result<()> {
         self.validate()?;
         let parent = path.parent().context("preferences directory is missing")?;
         fs::create_dir_all(parent)?;
@@ -134,6 +174,32 @@ mod tests {
     }
 
     #[test]
+    fn all_persistent_options_roundtrip_and_feed_startup_defaults() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("preferences.toml");
+        let preferences = Preferences {
+            theme: Theme::Light,
+            batch: Some(73),
+            graph_columns: 1024,
+            text_graph: true,
+            syntax: false,
+            watch: false,
+            ..Preferences::default()
+        };
+        preferences.save_to(&path).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("timings") && !text.contains("verbose"));
+        let loaded = Preferences::load_from(&path).unwrap();
+        assert_eq!(loaded, preferences);
+        let config = crate::cli::parse_with_preferences([], &loaded).unwrap();
+        assert_eq!(loaded.with_config(&config), preferences);
+        let mut unlimited = preferences;
+        unlimited.batch = None;
+        unlimited.save_to(&path).unwrap();
+        assert_eq!(Preferences::load_from(&path).unwrap().batch, None);
+    }
+
+    #[test]
     fn toml_preferences_reject_invalid_values_and_encoding() {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("preferences.toml");
@@ -141,6 +207,11 @@ mod tests {
             b"font_size = 100.0".as_slice(),
             b"font_size = 'large'",
             b"ui_font = ''",
+            b"batch = 0",
+            b"batch = -1",
+            b"graph_columns = 0",
+            b"graph_columns = 1025",
+            b"theme = 'blue'",
             b"\xff",
         ] {
             fs::write(&path, contents).unwrap();
@@ -148,5 +219,14 @@ mod tests {
         }
         fs::write(&path, vec![b' '; 65537]).unwrap();
         assert!(Preferences::load_from(&path).is_err());
+        #[cfg(target_pointer_width = "64")]
+        assert!(
+            Preferences {
+                batch: Some(usize::MAX),
+                ..Preferences::default()
+            }
+            .validate()
+            .is_err()
+        );
     }
 }

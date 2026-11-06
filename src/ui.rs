@@ -4,10 +4,9 @@ mod tests;
 mod colors;
 mod dialogs;
 mod diff_view;
-mod font_preferences;
+mod preference_dialog;
 
 use colors::Palette;
-use font_preferences::{FontCatalogGeneration, FontChoices};
 use gitk_rs::{
     cli::{Config, Theme},
     diff::{DiffEngine, DiffHandle, DiffSettings},
@@ -39,6 +38,7 @@ use gpui_kit::{
     UniformListDecoration, UniformListScrollHandle, Window, WindowBounds, WindowOptions, actions,
     canvas, div, fill, point, prelude::*, px, rgb, size, uniform_list,
 };
+use preference_dialog::{FontCatalogGeneration, FontChoices};
 use std::{
     ops::Range,
     sync::Arc,
@@ -74,7 +74,7 @@ actions!(
         BranchUp,
         BranchDown,
         BranchAccept,
-        FontPreferences,
+        OpenPreferences,
         ApplyPreferences,
         ToggleTheme,
         CopyCommit
@@ -122,6 +122,12 @@ enum DialogKind {
 struct HistoryWindow {
     config: Config,
     preferences: Preferences,
+    preferences_draft: Preferences,
+    graph_columns_input: Entity<InputState>,
+    batch_input: Entity<InputState>,
+    preferences_path: Option<std::path::PathBuf>,
+    preferences_save_generation: u64,
+    preferences_save_pending: bool,
     ui_font_select: Entity<SelectState<FontChoices>>,
     fixed_font_select: Entity<SelectState<FontChoices>>,
     _font_subscriptions: Vec<Subscription>,
@@ -214,6 +220,8 @@ impl HistoryWindow {
                 .min(8.)
                 .max(24.)
         });
+        let graph_columns_input = cx.new(|cx| InputState::new(window, cx));
+        let batch_input = cx.new(|cx| InputState::new(window, cx));
         let mut font_subscriptions = Vec::new();
         for selector in [&ui_font_select, &fixed_font_select] {
             font_subscriptions.push(
@@ -229,6 +237,9 @@ impl HistoryWindow {
                 }
             }),
         );
+        for input in [&graph_columns_input, &batch_input] {
+            font_subscriptions.push(cx.subscribe(input, |_, _, _: &InputEvent, cx| cx.notify()));
+        }
         let branch_filter =
             cx.new(|cx| InputState::new(window, cx).placeholder("Filter local branches"));
         let branch_subscription = cx.subscribe_in(
@@ -312,6 +323,12 @@ impl HistoryWindow {
             )
         });
         Self {
+            preferences_draft: preferences.clone(),
+            graph_columns_input,
+            batch_input,
+            preferences_path: None,
+            preferences_save_generation: 0,
+            preferences_save_pending: false,
             preferences,
             ui_font_select,
             fixed_font_select,
@@ -1184,8 +1201,8 @@ impl Render for HistoryWindow {
             .on_action(cx.listener(|this, _: &diff_view::LinesUp, _, cx| {
                 this.diff.update(cx, |diff, cx| diff.scroll_lines(-18, cx))
             }))
-            .on_action(cx.listener(|this, _: &FontPreferences, window, cx| {
-                this.open_font_preferences(window, cx);
+            .on_action(cx.listener(|this, _: &OpenPreferences, window, cx| {
+                this.open_preferences(window, cx);
             }))
             .on_action(cx.listener(|this, _: &ApplyPreferences, window, cx| {
                 this.apply_preferences(window, cx)
@@ -1327,7 +1344,7 @@ impl Render for HistoryWindow {
                             .dropdown_menu({
                                 let focus = self.focus.clone();
                                 let watch = self.config.watch;
-                                let dark = self.config.theme == Theme::Dark;
+                                let light = self.config.theme == Theme::Light;
                                 move |menu, _, _| {
                                     menu.action_context(focus.clone())
                                         .menu("Open repository…", Box::new(OpenRepository))
@@ -1340,8 +1357,8 @@ impl Render for HistoryWindow {
                                         )
                                         .separator()
                                         .menu("Copy commit reference", Box::new(CopyCommit))
-                                        .menu("Font preferences…", Box::new(FontPreferences))
-                                        .menu_with_check("Dark theme", dark, Box::new(ToggleTheme))
+                                        .menu("Preferences…", Box::new(OpenPreferences))
+                                        .menu_with_check("Light theme", light, Box::new(ToggleTheme))
                                         .separator()
                                         .menu("Keyboard shortcuts", Box::new(Help))
                                         .menu("About", Box::new(About))
@@ -1533,7 +1550,7 @@ fn bind_keys(cx: &mut App) {
             Some("GitHistory && !Input && !Diff && !Dialog"),
         ),
         KeyBinding::new("ctrl-q", Quit, None),
-        KeyBinding::new("ctrl-,", FontPreferences, Some("GitHistory && !Dialog")),
+        KeyBinding::new("ctrl-,", OpenPreferences, Some("GitHistory && !Dialog")),
         KeyBinding::new("ctrl-enter", ApplyPreferences, Some("Dialog")),
         KeyBinding::new(
             "alt-t",
@@ -1643,7 +1660,7 @@ fn bind_keys(cx: &mut App) {
             Some("GitHistory && !Input && !Diff && !Dialog"),
         ),
         KeyBinding::new("cmd-q", Quit, None),
-        KeyBinding::new("cmd-,", FontPreferences, Some("GitHistory && !Dialog")),
+        KeyBinding::new("cmd-,", OpenPreferences, Some("GitHistory && !Dialog")),
         KeyBinding::new("cmd-enter", ApplyPreferences, Some("Dialog")),
         KeyBinding::new("cmd-o", OpenRepository, Some("GitHistory && !Dialog")),
         KeyBinding::new(
@@ -1669,11 +1686,7 @@ fn bind_keys(cx: &mut App) {
     ]);
 }
 
-pub fn run(config: Config, launched: Instant) {
-    let preferences = Preferences::load().unwrap_or_else(|error| {
-        eprintln!("gitk-rs: preferences: {error:#}");
-        Preferences::default()
-    });
+pub fn run(config: Config, preferences: Preferences, launched: Instant) {
     let guard = TimingGuard::start(config.timings, launched);
     let timing = guard.timing();
     let request = Request {
