@@ -80,7 +80,7 @@ fn removing_the_selected_local_row_returns_to_a_commit(cx: &mut TestAppContext) 
                 && view
                     .selected
                     .as_ref()
-                    .is_some_and(|s| s.1.commit.id.as_str() == head)
+                    .is_some_and(|s| s.1.commit.id.to_hex() == head)
         })
     });
 }
@@ -237,7 +237,7 @@ fn file_click_and_copy_use_the_full_diff_not_just_visible_rows(cx: &mut TestAppC
                 .read(cx)
                 .snapshot
                 .as_ref()
-                .is_some_and(|s| s.rows.first().is_some_and(|e| e.commit.id.as_str() == next))
+                .is_some_and(|s| s.rows.first().is_some_and(|e| e.commit.id.to_hex() == next))
         })
     });
     cx.simulate_keystrokes("home");

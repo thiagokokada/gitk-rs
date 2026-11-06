@@ -650,7 +650,7 @@ impl HistoryWindow {
             eprintln!(
                 "gitk-rs: selection generation={} commit={}",
                 self.request.generation.0,
-                entry.commit.id.as_str()
+                entry.commit.id.to_hex()
             );
         }
         self.diff.update(cx, |diff, cx| {
@@ -934,7 +934,7 @@ impl HistoryWindow {
                             .w(px(self.preferences.font_size * 5.))
                             .flex_shrink_0()
                             .font_family(SharedString::from(self.preferences.fixed_font.clone()))
-                            .child(entry.commit.id.as_str()[..7].to_owned()),
+                            .child(entry.commit.id.to_hex()[..7].to_owned()),
                     )
                     .child(
                         div()
@@ -968,7 +968,7 @@ impl HistoryWindow {
                 ),
             )
             .context_menu({
-                let reference = format!("{} {}", entry.commit.id.as_str(), entry.commit.summary());
+                let reference = format!("{} {}", entry.commit.id, entry.commit.summary());
                 move |menu, _, _| {
                     menu.item(PopupMenuItem::new("Copy commit reference").on_click({
                         let reference = reference.clone();
@@ -1215,7 +1215,7 @@ impl Render for HistoryWindow {
                 if let Some((_, entry)) = &this.selected {
                     cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(format!(
                         "{} {}",
-                        entry.commit.id.as_str(),
+                        entry.commit.id,
                         entry.commit.summary()
                     )));
                 }

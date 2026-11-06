@@ -44,7 +44,7 @@ fn restoration_uses_commit_ids_and_handles_unreachable_branch_commits() {
     });
     let (position, entry) = restored.selected.unwrap();
     assert_eq!(position, 1);
-    assert_eq!(entry.commit.id.as_str(), root);
+    assert_eq!(entry.commit.id.to_hex(), root);
     assert_eq!(restored.top, Some(0));
     request.id += 1;
     request.restore.as_mut().unwrap().selected =

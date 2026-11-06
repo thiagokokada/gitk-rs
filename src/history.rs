@@ -6,7 +6,7 @@ use crate::{
 };
 use anyhow::{Result, ensure};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     ops::Range,
     path::PathBuf,
     sync::{Arc, Condvar, Mutex, atomic::Ordering},
@@ -276,6 +276,7 @@ struct Session {
     stream: Option<GitStream>,
     cancellation: Cancellation,
     entries: Vec<Arc<Entry>>,
+    strings: HashSet<Arc<str>>,
     graph: GraphBuilder,
     refs: Arc<Refs>,
     refs_loaded: bool,
@@ -303,6 +304,7 @@ impl Session {
             stream,
             cancellation,
             entries: Vec::new(),
+            strings: HashSet::new(),
             graph: GraphBuilder::new(request.graph_columns),
             refs: Arc::new(Refs::new()),
             refs_loaded: false,
@@ -332,14 +334,14 @@ impl Session {
                         self.restore_reachable[index] = self.restore_ordinals[index].is_some()
                             || run_bytes(
                                 &self.repository.root,
-                                &["merge-base", "--all", target.as_str(), "HEAD"],
+                                &["merge-base", "--all", &target.to_hex(), "HEAD"],
                                 &self.cancellation,
                                 &[0, 1, 128],
                             )
                             .is_ok_and(|bytes| {
                                 bytes
                                     .split(|b| *b == b'\n')
-                                    .any(|id| id == target.as_str().as_bytes())
+                                    .any(|id| id == target.to_hex().as_bytes())
                             });
                     }
                 }
@@ -412,12 +414,23 @@ impl Session {
             if self.cancellation.load(Ordering::Acquire) {
                 break;
             }
-            let Some(commit) = self.stream.as_mut().unwrap().next_commit()? else {
+            let Some(mut commit) = self.stream.as_mut().unwrap().next_commit()? else {
                 self.eof = true;
                 self.stream = None;
                 break;
             };
             bytes += commit.memory_bytes();
+            // Share repeated identities within this history generation. Full
+            // messages and exact timestamps remain available for search/details.
+            for signature in [&mut commit.author, &mut commit.committer] {
+                for value in [&mut signature.name, &mut signature.email] {
+                    if let Some(shared) = self.strings.get(value.as_ref()) {
+                        *value = shared.clone();
+                    } else {
+                        self.strings.insert(value.clone());
+                    }
+                }
+            }
             let graph = self.graph.push(&commit);
             let ordinal = self.entries.len();
             if let Some(restore) = &self.restore {
@@ -616,23 +629,21 @@ mod tests {
         for entry in &session.entries {
             records += size_of::<Entry>() + 2 * size_of::<usize>();
             let commit = &entry.commit;
-            metadata += commit.id.as_str().len()
-                + size_of_val(commit.parents.as_ref())
-                + commit
-                    .parents
-                    .iter()
-                    .map(|p| p.as_str().len())
-                    .sum::<usize>();
+            metadata += size_of_val(commit.parents.as_ref());
             for signature in [&commit.author, &commit.committer] {
-                metadata += signature.name.capacity()
-                    + signature.email.capacity()
-                    + signature.time.capacity();
+                metadata += signature.time.len();
             }
-            messages += commit.message.capacity();
+            messages += commit.message.len();
             graph += entry.graph.edges.memory_bytes();
         }
+        metadata += session
+            .strings
+            .iter()
+            .map(|value| value.len() + 2 * size_of::<usize>())
+            .sum::<usize>();
         let index = session.entries.capacity() * size_of::<Arc<Entry>>()
-            + session.matches.capacity() * size_of::<usize>();
+            + session.matches.capacity() * size_of::<usize>()
+            + session.strings.capacity() * (size_of::<Arc<str>>() + 1);
         eprintln!(
             "history_probe loaded={} eof={} elapsed_ms={} records_bytes={records} metadata_bytes={metadata} messages_bytes={messages} graph_bytes={graph} index_bytes={index} accounted_bytes={}",
             session.entries.len(),
@@ -663,6 +674,40 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn retained_history_shares_exact_identities_and_preserves_distinct_case() {
+        let fixture = Fixture::new();
+        fixture.commit("oldest\n\nBody é");
+        fixture.commit("middle");
+        fixture.git(&[
+            "-c",
+            "user.name=fixture",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "newest",
+        ]);
+        let request = request(&fixture);
+        let mut session = Session::open(&request, Cancellation::default()).unwrap();
+        while session.step(&request).unwrap() {}
+        let commits: Vec<_> = session.entries.iter().map(|entry| &entry.commit).collect();
+        assert!(Arc::ptr_eq(
+            &commits[1].author.name,
+            &commits[2].committer.name
+        ));
+        assert!(!Arc::ptr_eq(
+            &commits[0].author.name,
+            &commits[1].author.name
+        ));
+        assert!(Arc::ptr_eq(
+            &commits[0].author.email,
+            &commits[2].committer.email
+        ));
+        assert_eq!(commits[0].author.name.as_ref(), "fixture");
+        assert_eq!(commits[1].author.name.as_ref(), "Fixture");
+        assert_eq!(commits[2].message.as_ref(), "oldest\n\nBody é\n");
     }
 
     #[test]

@@ -106,7 +106,7 @@ pub(super) fn selected(view: &Entity<HistoryWindow>, cx: &mut VisualTestContext)
         view.read(cx)
             .selected
             .as_ref()
-            .map(|(_, entry)| entry.commit.id.as_str().to_owned())
+            .map(|(_, entry)| entry.commit.id.to_hex())
     })
 }
 
