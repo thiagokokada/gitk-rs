@@ -526,6 +526,22 @@ impl HistoryWindow {
                 Some(DialogKind::Help) => "Dialog HelpDialog",
                 _ => "Dialog",
             })
+            // Select handles Ctrl/Cmd+Enter as secondary Confirm before the
+            // window's Apply action can bubble. Capture it at the preferences
+            // boundary while preserving plain Enter for selecting a font.
+            .when(
+                matches!(self.dialog, Some(DialogKind::Preferences)),
+                |dialog| {
+                    dialog.capture_action(cx.listener(
+                        |this, confirm: &gpui_kit::base::actions::Confirm, window, cx| {
+                            if confirm.secondary {
+                                this.apply_preferences(window, cx);
+                                cx.stop_propagation();
+                            }
+                        },
+                    ))
+                },
+            )
             .child(body)
             .into_any_element()
     }
