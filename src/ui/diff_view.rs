@@ -185,7 +185,20 @@ impl DiffPane {
         cx.notify();
     }
     pub(super) fn set_theme(&mut self, dark: bool, cx: &mut Context<Self>) {
-        self.settings.dark = dark;
+        self.set_settings(
+            DiffSettings {
+                dark,
+                ..self.settings
+            },
+            cx,
+        );
+    }
+
+    pub(super) fn set_settings(&mut self, settings: DiffSettings, cx: &mut Context<Self>) {
+        if self.settings == settings {
+            return;
+        }
+        self.settings = settings;
         self.page.settings = self.settings;
         self.page.id += 1;
         if let Some(snapshot) = &mut self.snapshot {

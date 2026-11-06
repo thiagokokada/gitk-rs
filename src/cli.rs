@@ -1,8 +1,9 @@
 use crate::graph::{DEFAULT_GRAPH_LANES, MAX_GRAPH_LANES};
-use clap::{Parser, ValueEnum};
+use clap::{CommandFactory, FromArgMatches, Parser, ValueEnum, parser::ValueSource};
 use std::{ffi::OsString, num::NonZeroUsize, path::PathBuf};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Theme {
     Dark,
     Light,
@@ -37,8 +38,20 @@ impl Default for Config {
     }
 }
 
+impl Config {
+    /// Apply a complete set of defaults, including explicit edits made in Preferences.
+    pub fn apply_preferences(&mut self, preferences: &crate::preferences::Preferences) {
+        self.theme = preferences.theme;
+        self.batch = preferences.batch;
+        self.graph_columns = preferences.graph_columns;
+        self.text_graph = preferences.text_graph;
+        self.syntax = preferences.syntax;
+        self.watch = preferences.watch;
+    }
+}
+
 #[derive(Debug, Parser)]
-#[command(name = "gitk-rs", version = crate::VERSION, about)]
+#[command(name = "gitk-rs", version = crate::VERSION, about, after_help = "Saved preferences override the built-in defaults shown here. Explicit options override saved preferences. Boolean options accept =false.")]
 struct Args {
     /// Git repository to browse
     #[arg(default_value = ".")]
@@ -49,49 +62,82 @@ struct Args {
     mode: Theme,
 
     /// Report startup paint callbacks and bounded CPU frame samples
-    #[arg(long)]
+    #[arg(long, action = clap::ArgAction::Set, num_args = 0..=1, default_missing_value = "true", default_value = "false", require_equals = true)]
     timings: bool,
 
     /// Opt into batches of N instead of streaming all history (browsing loads more)
-    #[arg(long, value_name = "N")]
+    #[arg(long, value_name = "N", conflicts_with = "no_limit")]
     limit: Option<NonZeroUsize>,
+
+    /// Stream all history, overriding a saved prefetch batch size
+    #[arg(long)]
+    no_limit: bool,
 
     /// Logical graph lane cap before idle columns are folded (1..1024)
     #[arg(long, value_name = "N", default_value_t = DEFAULT_GRAPH_LANES as u16, value_parser = clap::value_parser!(u16).range(1..=MAX_GRAPH_LANES as i64))]
     graph_cols: u16,
 
     /// Use a text graph instead of canvas geometry
-    #[arg(long)]
+    #[arg(long, action = clap::ArgAction::Set, num_args = 0..=1, default_missing_value = "true", default_value = "false", require_equals = true)]
     text_graph: bool,
 
     /// Disable syntax highlighting
-    #[arg(long)]
+    #[arg(long, action = clap::ArgAction::Set, num_args = 0..=1, default_missing_value = "true", default_value = "false", require_equals = true)]
     nosyntax: bool,
 
     /// Disable automatic repository refresh
-    #[arg(long)]
+    #[arg(long, action = clap::ArgAction::Set, num_args = 0..=1, default_missing_value = "true", default_value = "false", require_equals = true)]
     nowatch: bool,
 
     /// Report repository refreshes and operations
-    #[arg(long)]
+    #[arg(long, action = clap::ArgAction::Set, num_args = 0..=1, default_missing_value = "true", default_value = "false", require_equals = true)]
     verbose: bool,
 }
 
 /// Parse arguments without argv[0], preserving non-UTF8 repository paths.
 /// Clap returns help and version output as successful-exit errors.
 pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Config, clap::Error> {
-    let args = Args::try_parse_from(std::iter::once(OsString::from("gitk-rs")).chain(args))?;
-    Ok(Config {
+    parse_with_preferences(args, &crate::preferences::Preferences::default())
+}
+
+pub fn parse_with_preferences(
+    args: impl IntoIterator<Item = OsString>,
+    preferences: &crate::preferences::Preferences,
+) -> Result<Config, clap::Error> {
+    let matches = Args::command()
+        .try_get_matches_from(std::iter::once(OsString::from("gitk-rs")).chain(args))?;
+    let args = Args::from_arg_matches(&matches)?;
+    let explicit = |name| matches.value_source(name) == Some(ValueSource::CommandLine);
+    let mut config = Config {
         repository: args.repository,
-        theme: args.mode,
-        timings: args.timings,
-        batch: args.limit.map(NonZeroUsize::get),
-        graph_columns: usize::from(args.graph_cols),
-        text_graph: args.text_graph,
-        syntax: !args.nosyntax,
-        watch: !args.nowatch,
-        verbose: args.verbose,
-    })
+        ..Config::default()
+    };
+    config.apply_preferences(preferences);
+    if explicit("mode") {
+        config.theme = args.mode;
+    }
+    if explicit("timings") {
+        config.timings = args.timings;
+    }
+    if explicit("limit") || explicit("no_limit") {
+        config.batch = args.limit.map(NonZeroUsize::get);
+    }
+    if explicit("graph_cols") {
+        config.graph_columns = usize::from(args.graph_cols);
+    }
+    if explicit("text_graph") {
+        config.text_graph = args.text_graph;
+    }
+    if explicit("nosyntax") {
+        config.syntax = !args.nosyntax;
+    }
+    if explicit("nowatch") {
+        config.watch = !args.nowatch;
+    }
+    if explicit("verbose") {
+        config.verbose = args.verbose;
+    }
+    Ok(config)
 }
 
 #[cfg(test)]
@@ -134,6 +180,43 @@ mod tests {
     fn syntax_can_be_disabled() {
         let config = command(&["--nosyntax"]).unwrap();
         assert!(!config.syntax);
+    }
+
+    #[test]
+    fn explicit_flags_override_saved_settings_including_default_and_false_values() {
+        let preferences = crate::preferences::Preferences {
+            theme: Theme::Light,
+            batch: Some(73),
+            graph_columns: 1024,
+            text_graph: true,
+            syntax: false,
+            watch: false,
+            ..crate::preferences::Preferences::default()
+        };
+        let args = [
+            "--mode=dark",
+            "--timings=false",
+            "--no-limit",
+            "--graph-cols=256",
+            "--text-graph=false",
+            "--nosyntax=false",
+            "--nowatch=false",
+            "--verbose=false",
+        ];
+        assert_eq!(
+            parse_with_preferences(args.map(OsString::from), &preferences).unwrap(),
+            Config::default()
+        );
+        let partial = parse_with_preferences(["--mode=dark".into()], &preferences).unwrap();
+        assert_eq!(partial.theme, Theme::Dark);
+        assert_eq!(partial.batch, Some(73));
+        assert!(!partial.syntax && !partial.watch);
+        assert!(!partial.timings && !partial.verbose);
+        assert_eq!(partial.graph_columns, 1024);
+        let mut diagnostics = parse(["--timings".into(), "--verbose".into()]).unwrap();
+        diagnostics.apply_preferences(&preferences);
+        assert!(diagnostics.timings && diagnostics.verbose);
+        assert!(parse(["--limit=5".into(), "--no-limit".into()]).is_err());
     }
 
     #[test]

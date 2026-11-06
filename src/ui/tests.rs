@@ -57,6 +57,7 @@ fn open_with_batch<'a>(
     let mut view = None;
     let (_, cx) = cx.add_window_view(|window, cx| {
         let entity = cx.new(|cx| {
+            let preferences = Preferences::default().with_config(&config);
             HistoryWindow::new(
                 config,
                 TimingGuard::start(false, Instant::now()).timing(),
@@ -65,7 +66,7 @@ fn open_with_batch<'a>(
                     workspace: workspace.handle(),
                     diff: diff.handle(),
                 },
-                Preferences::default(),
+                preferences,
                 request,
                 window,
                 cx,
@@ -118,6 +119,20 @@ pub(super) fn selected(view: &Entity<HistoryWindow>, cx: &mut VisualTestContext)
             .as_ref()
             .map(|(_, entry)| entry.commit.id.to_hex())
     })
+}
+
+fn scroll_preferences_to(id: &'static str, cx: &mut VisualTestContext) {
+    cx.refresh().unwrap();
+    cx.update(|window, cx| {
+        let form = window.find("preferences-scroll-viewport").bounds();
+        let target = window.find(id).bounds();
+        window.scroll(
+            "preferences-scroll-viewport",
+            gpui_kit::ScrollDelta::Pixels(point(px(0.), form.center().y - target.center().y)),
+            cx,
+        );
+    });
+    cx.refresh().unwrap();
 }
 
 fn history_fixture(count: usize) -> Fixture {
@@ -1337,6 +1352,151 @@ fn alt_list_navigation_preserves_filter_focus_and_emacs_editing(cx: &mut TestApp
 }
 
 #[gpui_kit::test]
+fn application_preferences_replace_flags_apply_and_persist(cx: &mut TestAppContext) {
+    let settings = tempfile::tempdir().unwrap();
+    let path = settings.path().join("preferences.toml");
+    let fixture = Fixture::new();
+    fixture.commit("older");
+    let tip = fixture.commit("tip");
+    let (app, cx) = open(&fixture, cx);
+    until(cx, |cx| selected(&app.view, cx).as_deref() == Some(&tip));
+    let config = gitk_rs::cli::parse([
+        fixture.root().as_os_str().to_owned(),
+        "--mode=light".into(),
+        "--graph-cols=128".into(),
+        "--nosyntax".into(),
+        "--text-graph".into(),
+        "--nowatch".into(),
+    ])
+    .unwrap();
+    app.view.update(cx, |view, _| {
+        view.config = config;
+        view.preferences_path = Some(path.clone());
+    });
+    let generation = cx.update(|_, cx| app.view.read(cx).request.generation);
+    cx.simulate_keystrokes("ctrl-,");
+    for id in [
+        "light-theme-setting",
+        "syntax-setting",
+        "watch-setting",
+        "text-graph-setting",
+        "on-demand-setting",
+    ] {
+        scroll_preferences_to(id, cx);
+        cx.update(|window, cx| window.click(id, cx));
+    }
+    scroll_preferences_to("history-batch-input", cx);
+    cx.update(|window, cx| window.click("history-batch-input", cx));
+    cx.simulate_keystrokes("ctrl-a ctrl-k");
+    cx.simulate_input("73");
+    scroll_preferences_to("graph-columns-input", cx);
+    cx.update(|window, cx| window.click("graph-columns-input", cx));
+    cx.simulate_keystrokes("ctrl-a ctrl-k");
+    cx.simulate_input("1025");
+    cx.update(|window, cx| window.click("apply-preferences", cx));
+    assert!(cx.update(|_, cx| {
+        let view = app.view.read(cx);
+        matches!(view.dialog, Some(DialogKind::Preferences))
+            && view.operation_message.contains("graph columns")
+            && view.config.graph_columns == 128
+            && view.request.generation == generation
+    }));
+    assert!(!path.exists());
+    scroll_preferences_to("graph-columns-input", cx);
+    cx.update(|window, cx| window.click("graph-columns-input", cx));
+    cx.simulate_keystrokes("ctrl-a ctrl-k");
+    cx.simulate_input("512");
+    cx.update(|window, cx| window.click("apply-preferences", cx));
+    until(cx, |cx| {
+        cx.update(|_, cx| !app.view.read(cx).preferences_save_pending)
+            && selected(&app.view, cx).as_deref() == Some(&tip)
+    });
+    let saved = Preferences::load_from(&path).unwrap();
+    assert_eq!(saved.theme, Theme::Dark);
+    assert_eq!(saved.batch, Some(73));
+    assert_eq!(saved.graph_columns, 512);
+    assert!(saved.syntax && saved.watch);
+    assert!(!saved.text_graph);
+    cx.update(|_, cx| {
+        let view = app.view.read(cx);
+        assert_eq!(view.preferences, saved);
+        assert_eq!(saved.with_config(&view.config), saved);
+        assert_eq!(view.request.batch, Some(73));
+        assert_eq!(view.request.graph_columns, 512);
+        assert!(view.request.generation.0 > generation.0);
+    });
+    let restarted = gitk_rs::cli::parse_with_preferences([], &saved).unwrap();
+    assert_eq!(saved.with_config(&restarted), saved);
+
+    cx.simulate_keystrokes("ctrl-,");
+    scroll_preferences_to("on-demand-setting", cx);
+    cx.update(|window, cx| window.click("on-demand-setting", cx));
+    cx.update(|window, cx| window.click("apply-preferences", cx));
+    until(cx, |cx| {
+        cx.update(|_, cx| !app.view.read(cx).preferences_save_pending)
+    });
+    assert_eq!(Preferences::load_from(&path).unwrap().batch, None);
+    assert!(cx.update(|_, cx| app.view.read(cx).request.batch.is_none()));
+}
+
+#[gpui_kit::test]
+fn application_preferences_cancel_invalid_values_and_report_save_failure(cx: &mut TestAppContext) {
+    let settings = tempfile::tempdir().unwrap();
+    let path = settings.path().join("preferences.toml");
+    let fixture = Fixture::new();
+    let older = fixture.commit("older");
+    let tip = fixture.commit("tip");
+    let (app, cx) = open(&fixture, cx);
+    until(cx, |cx| selected(&app.view, cx).as_deref() == Some(&tip));
+    let original = cx.update(|_, cx| app.view.read(cx).preferences.clone());
+    original.save_to(&path).unwrap();
+    let bytes = std::fs::read(&path).unwrap();
+    app.view
+        .update(cx, |view, _| view.preferences_path = Some(path.clone()));
+    let generation = cx.update(|_, cx| app.view.read(cx).request.generation);
+    cx.simulate_keystrokes("ctrl-,");
+    scroll_preferences_to("syntax-setting", cx);
+    cx.update(|window, cx| window.click("syntax-setting", cx));
+    scroll_preferences_to("history-batch-input", cx);
+    cx.update(|window, cx| window.click("history-batch-input", cx));
+    cx.simulate_keystrokes("ctrl-a ctrl-k");
+    cx.simulate_input("0");
+    cx.update(|window, cx| window.click("apply-preferences", cx));
+    cx.update(|_, cx| {
+        let view = app.view.read(cx);
+        assert!(view.operation_message.contains("batch size"));
+        assert!(view.config.syntax);
+        assert_eq!(view.preferences, original);
+        assert_eq!(view.request.generation, generation);
+    });
+    assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    cx.simulate_keystrokes("escape ctrl-,");
+    assert_eq!(
+        cx.update(|_, cx| app.view.read(cx).draft_preferences(cx)),
+        original
+    );
+    // A directory is a deterministic failed destination, even when running as root.
+    app.view.update(cx, |view, _| {
+        view.preferences_path = Some(settings.path().into())
+    });
+    scroll_preferences_to("text-graph-setting", cx);
+    cx.update(|window, cx| window.click("text-graph-setting", cx));
+    cx.update(|window, cx| window.click("apply-preferences", cx));
+    until(cx, |cx| {
+        cx.update(|_, cx| !app.view.read(cx).preferences_save_pending)
+    });
+    assert!(cx.update(|_, cx| {
+        let view = app.view.read(cx);
+        view.dialog.is_none()
+            && view.config.text_graph
+            && view.operation_message.contains("save preferences:")
+    }));
+    assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    cx.simulate_keystrokes("alt-j");
+    assert_eq!(selected(&app.view, cx).as_deref(), Some(older.as_str()));
+}
+
+#[gpui_kit::test]
 fn searchable_font_selectors_preview_drafts_and_cancel_restores_preferences(
     cx: &mut TestAppContext,
 ) {
@@ -1574,6 +1734,13 @@ fn font_preferences_keep_actions_visible_with_large_fonts_in_a_small_window(
         )
     });
     cx.refresh().unwrap();
+    cx.update(|window, _| {
+        assert!(window.find("apply-preferences").visible());
+        assert!(window.find("close-dialog").visible());
+    });
+    scroll_preferences_to("graph-columns-input", cx);
+    cx.update(|window, _| assert!(window.find("graph-columns-input").visible()));
+    scroll_preferences_to("fixed-font-preview", cx);
     cx.update(|window, _| {
         assert!(window.find("fixed-font-preview").visible());
         assert!(

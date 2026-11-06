@@ -159,7 +159,7 @@ impl HistoryWindow {
         let title = match self.dialog {
             Some(DialogKind::Branches) => "Switch local branch",
             Some(DialogKind::Help) => "Keyboard shortcuts",
-            Some(DialogKind::Preferences) => "Font preferences",
+            Some(DialogKind::Preferences) => "Preferences",
             Some(DialogKind::OpenRepository) => "Open repository by path",
             _ => "About gitk-rs",
         };
@@ -250,12 +250,15 @@ impl HistoryWindow {
             }
             Some(DialogKind::Preferences) => {
                 let draft = self.draft_preferences(cx);
+                let options = self.preference_options(cx);
                 let preview_size =
-                    font_preferences::preview_size(draft.font_size, self.preferences.font_size);
+                    preference_dialog::preview_size(draft.font_size, self.preferences.font_size);
                 body = body
                     .h(px(640.))
                     .overflow_hidden()
                     .child(
+                        div().id("preferences-scroll-viewport").test_support()
+                            .flex_1().min_h_0().flex().flex_col().child(
                         div()
                             .flex_1()
                             .min_h_0()
@@ -382,9 +385,11 @@ impl HistoryWindow {
                                             .child("0123456789  []{}()  != ->"),
                                     ),
                             )
+                            .child(options)
                             .overflow_y_scrollbar()
                             .id("font-preferences-fields")
                             .scroll_bounce(false),
+                        ),
                     )
                     .when(!self.operation_message.is_empty(), |body| {
                         body.child(self.operation_message.clone())
@@ -398,7 +403,11 @@ impl HistoryWindow {
                             .py_2()
                             .bg(rgb(palette.dialog_button))
                             .cursor_pointer()
-                            .child("Apply and save")
+                            .child(if self.preferences_save_pending {
+                                "Saving…"
+                            } else {
+                                "Apply and save"
+                            })
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.apply_preferences(window, cx)
                             })),
@@ -524,13 +533,42 @@ impl HistoryWindow {
         if !matches!(self.dialog, Some(DialogKind::Preferences)) {
             return;
         }
+        if self.preferences_save_pending {
+            return;
+        }
         let preferences = self.draft_preferences(cx);
         if let Err(error) = preferences.validate() {
             self.operation_message = error.to_string();
             cx.notify();
             return;
         }
+        let previous = self.config.clone();
+        self.config.apply_preferences(&preferences);
+        self.request.batch = self.config.batch;
+        self.request.graph_columns = self.config.graph_columns;
+        if previous.watch != self.config.watch {
+            self.workspace_generation.0 += 1;
+            self.refresh_workspace();
+        }
+        if previous.theme != self.config.theme {
+            gpui_kit::component::Theme::change(
+                if self.config.theme == Theme::Dark {
+                    ThemeMode::Dark
+                } else {
+                    ThemeMode::Light
+                },
+                Some(window),
+                cx,
+            );
+        }
         self.diff.update(cx, |diff, cx| {
+            diff.set_settings(
+                DiffSettings {
+                    syntax: self.config.syntax,
+                    dark: self.config.theme == Theme::Dark,
+                },
+                cx,
+            );
             diff.set_font(
                 preferences.fixed_font.clone().into(),
                 preferences.font_size,
@@ -540,14 +578,29 @@ impl HistoryWindow {
         apply_fonts(&preferences, cx);
         window.refresh();
         self.preferences = preferences.clone();
+        if previous.graph_columns != self.config.graph_columns {
+            self.reload(cx);
+        } else if previous.batch != self.config.batch {
+            self.submit();
+        }
         self.dialog = None;
         self.focus.focus(window, cx);
-        let save = cx
-            .background_executor()
-            .spawn(async move { preferences.save().map_err(|e| format!("{e:#}")) });
+        self.preferences_save_pending = true;
+        self.preferences_save_generation += 1;
+        let generation = self.preferences_save_generation;
+        let path = self.preferences_path.clone();
+        let save = cx.background_executor().spawn(async move {
+            path.as_ref()
+                .map_or_else(|| preferences.save(), |path| preferences.save_to(path))
+                .map_err(|e| format!("{e:#}"))
+        });
         cx.spawn(async move |this, cx| {
             let result = save.await;
             let _ = this.update(cx, |this, cx| {
+                if this.preferences_save_generation != generation {
+                    return;
+                }
+                this.preferences_save_pending = false;
                 this.operation_message = result.err().map_or_else(
                     || "preferences saved".into(),
                     |error| format!("save preferences: {error}"),
@@ -622,7 +675,7 @@ const SHORTCUT_GROUPS: &[ShortcutGroup] = &[
                 command_shortcut!("B"),
                 "Switch local branch (outside text inputs)",
             ),
-            (command_shortcut!(","), "Open font preferences"),
+            (command_shortcut!(","), "Open preferences"),
             ("Alt+T", "Toggle theme (outside text inputs)"),
             ("Alt+R", "Toggle automatic reload (outside text inputs)"),
             (command_shortcut!("Q"), "Quit gitk-rs"),
@@ -661,10 +714,7 @@ const SHORTCUT_GROUPS: &[ShortcutGroup] = &[
         shortcuts: &[
             ("Escape", "Close the dialog"),
             ("Enter", "Open repository in the path input"),
-            (
-                command_shortcut!("Enter"),
-                "Apply and save font preferences",
-            ),
+            (command_shortcut!("Enter"), "Apply and save preferences"),
         ],
     },
     ShortcutGroup {
