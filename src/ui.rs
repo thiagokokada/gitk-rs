@@ -700,8 +700,7 @@ impl HistoryWindow {
     }
 
     fn move_selection(&mut self, delta: isize, window: &mut Window, cx: &mut Context<Self>) {
-        let filter_focus = self.filter.read(cx).focus_handle(cx);
-        let keep_filter_focus = filter_focus.is_focused(window);
+        let previous_focus = window.focused(cx);
         let Some(snapshot) = &self.snapshot else {
             return;
         };
@@ -718,8 +717,8 @@ impl HistoryWindow {
             .saturating_add_signed(delta)
             .min(maximum);
         self.select(index, window, cx);
-        if keep_filter_focus {
-            filter_focus.focus(window, cx);
+        if let Some(focus) = previous_focus {
+            focus.focus(window, cx);
         }
     }
 
@@ -1606,8 +1605,8 @@ fn bind_keys(cx: &mut App) {
         KeyBinding::new("up", BranchUp, Some("BranchDialog > Input")),
         KeyBinding::new("alt-j", BranchDown, Some("BranchDialog > Input")),
         KeyBinding::new("alt-k", BranchUp, Some("BranchDialog > Input")),
-        KeyBinding::new("alt-j", Next, Some("HistoryFilter > Input")),
-        KeyBinding::new("alt-k", Previous, Some("HistoryFilter > Input")),
+        KeyBinding::new("alt-j", Next, Some("GitHistory && !Dialog")),
+        KeyBinding::new("alt-k", Previous, Some("GitHistory && !Dialog")),
         KeyBinding::new("ctrl-n", BranchDown, Some("BranchDialog > Input")),
         KeyBinding::new("ctrl-p", BranchUp, Some("BranchDialog > Input")),
         KeyBinding::new("enter", BranchAccept, Some("BranchDialog")),

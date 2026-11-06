@@ -44,8 +44,8 @@ loaded commit, / to filter, and Space/Backspace to page through a diff.
 Ctrl+O opens a repository, Ctrl+B switches branches, and F5 reloads. On macOS,
 Cmd also works for repository commands, history paging, copying, diff selection,
 font preferences, and quitting. Press F1 or ? for all shortcuts.
-While filtering commits or branches, Alt+J/K selects the next/previous item
-without leaving the input.
+Alt+J/K selects the next/previous commit from the commit list, diff, or search box
+without changing focus. In the branch filter, it selects the next/previous branch.
 
 For command-line options:
 

@@ -101,7 +101,7 @@ pub(super) fn until(
     }
 }
 
-fn selected(view: &Entity<HistoryWindow>, cx: &mut VisualTestContext) -> Option<String> {
+pub(super) fn selected(view: &Entity<HistoryWindow>, cx: &mut VisualTestContext) -> Option<String> {
     cx.update(|_, cx| {
         view.read(cx)
             .selected

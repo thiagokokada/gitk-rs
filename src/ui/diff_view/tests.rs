@@ -1,4 +1,4 @@
-use crate::ui::tests::{Fixture, open, until};
+use crate::ui::tests::{Fixture, open, selected, until};
 use gpui_kit::{Modifiers, TestAppContext, point, px, test::TestWindowExt};
 
 #[gpui_kit::test]
@@ -306,5 +306,26 @@ fn staged_and_unstaged_diff_pages_settle_after_scrolling(cx: &mut TestAppContext
             cx.run_until_parked();
             assert_eq!(cx.update(|_, cx| pane.read(cx).page.id), request);
         }
+    }
+}
+
+#[gpui_kit::test]
+fn alt_commit_navigation_works_with_history_and_diff_focus(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let older = fixture.commit("older");
+    let newer = fixture.commit("newer");
+    let (app, cx) = open(&fixture, cx);
+    until(cx, |cx| selected(&app.view, cx).as_deref() == Some(&newer));
+    let pane = cx.update(|_, cx| app.view.read(cx).diff.clone());
+    for focus_diff in [false, true] {
+        if focus_diff {
+            cx.update(|window, cx| pane.read(cx).focus.clone().focus(window, cx));
+        }
+        let focus = cx.update(|window, cx| window.focused(cx).unwrap());
+        cx.simulate_keystrokes("alt-j");
+        assert_eq!(selected(&app.view, cx).as_deref(), Some(older.as_str()));
+        cx.simulate_keystrokes("alt-k");
+        assert_eq!(selected(&app.view, cx).as_deref(), Some(newer.as_str()));
+        assert!(cx.update(|window, _| focus.is_focused(window)));
     }
 }
