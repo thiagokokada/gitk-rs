@@ -654,6 +654,18 @@ fn repository_path_dialog_replaces_history_and_restores_navigation(cx: &mut Test
     let (app, cx) = open(&first, cx);
     until(cx, |cx| selected(&app.view, cx).as_deref() == Some(&old));
     cx.simulate_keystrokes("ctrl-shift-o ctrl-a ctrl-k");
+    cx.simulate_keystrokes("enter");
+    assert!(
+        cx.update(|_, cx| matches!(app.view.read(cx).dialog, Some(DialogKind::OpenRepository)))
+    );
+    cx.simulate_keystrokes("escape");
+    assert!(cx.update(|_, cx| {
+        app.view
+            .read(cx)
+            .status_text()
+            .ends_with("enter a repository directory")
+    }));
+    cx.simulate_keystrokes("ctrl-shift-o ctrl-a ctrl-k");
     cx.simulate_input(second.root().to_str().unwrap());
     cx.simulate_keystrokes("enter");
     until(cx, |cx| selected(&app.view, cx).as_deref() == Some(&tip));

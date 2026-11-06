@@ -25,14 +25,14 @@ impl HistoryWindow {
                     Ok(Ok(None)) => {}
                     Ok(Err(error)) => {
                         this.operation_message = format!(
-                            "Desktop picker unavailable: {error:#}. Enter a repository path below."
+                            "desktop picker unavailable: {error:#}; enter a repository path below"
                         );
                         this.dialog = Some(DialogKind::OpenRepository);
                         this.restore_repository_focus = true;
                     }
                     Err(error) => {
                         this.operation_message = format!(
-                            "Desktop picker unavailable: {error}. Enter a repository path below."
+                            "desktop picker unavailable: {error}; enter a repository path below"
                         );
                         this.dialog = Some(DialogKind::OpenRepository);
                         this.restore_repository_focus = true;
@@ -75,7 +75,7 @@ impl HistoryWindow {
     pub(super) fn apply_repository_path(&mut self, cx: &mut Context<Self>) {
         let path = self.repository_input.read(cx).value().to_string();
         if path.is_empty() {
-            self.operation_message = "Enter a repository directory.".into();
+            self.operation_message = "enter a repository directory".into();
             cx.notify();
             return;
         }
