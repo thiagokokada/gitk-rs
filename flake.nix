@@ -30,6 +30,12 @@
             craneLib = crane.mkLib pkgs;
           };
         }
+        // pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+          gui-smoke = import ./gui-smoke.nix {
+            inherit pkgs;
+            gitk-rs = self.packages.${system}.gitk-rs;
+          };
+        }
       );
 
       devShells = eachSystem (system: {

@@ -112,6 +112,10 @@ Run `nix flake check` for Rust and Nix formatting, Clippy, Ruff linting and
 formatting, and Python script tests. Run `nix build` to build the package and
 run its Rust tests.
 
+For the optional GUI test in an isolated NixOS VM with IceWM, run
+`nix build .#gui-smoke --print-build-logs` on a Linux builder with KVM. See
+[the smoke test instructions](scripts/README.md) for requirements and artifacts.
+
 ## License
 
 [MIT](LICENSE).
