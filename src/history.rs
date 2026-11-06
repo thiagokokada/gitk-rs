@@ -629,7 +629,7 @@ mod tests {
                     + signature.time.capacity();
             }
             messages += commit.message.capacity();
-            graph += size_of_val(entry.graph.edges.as_ref());
+            graph += entry.graph.edges.memory_bytes();
         }
         let index = session.entries.capacity() * size_of::<Arc<Entry>>()
             + session.matches.capacity() * size_of::<usize>();

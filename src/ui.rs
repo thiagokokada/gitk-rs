@@ -1056,7 +1056,7 @@ fn paint_graph(
     let middle = bounds.top() + bounds.size.height / 2.;
     if !filtered {
         let mut folded = [false; 200];
-        for edge in &graph.edges {
+        for edge in graph.edges.iter() {
             if layout.is_collapsed(edge.from) && layout.is_collapsed(edge.to) {
                 let column = layout.column(edge.from);
                 if !folded[column] {

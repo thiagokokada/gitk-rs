@@ -1,7 +1,7 @@
 //! Incremental graph geometry, bounded by the configured visible lane count.
 use crate::git::{Commit, CommitId};
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Edge {
     pub from: u16,
     pub to: u16,
@@ -10,12 +10,87 @@ pub struct Edge {
     pub color: u8,
 }
 
+/// Store the ordered vertical suffix in four bits per lane (zero means absent,
+/// one through six encode colors). Parent/routed edges retain their exact order.
+/// This avoids retaining one Edge per idle lane for every loaded history row.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct GraphEdges {
+    explicit: Box<[Edge]>,
+    continuations: Box<[u8]>,
+}
+
+impl GraphEdges {
+    pub fn iter(&self) -> impl Iterator<Item = Edge> + '_ {
+        self.explicit.iter().copied().chain(
+            self.continuations
+                .iter()
+                .enumerate()
+                .flat_map(|(index, byte)| [(*byte & 15, index * 2), (*byte >> 4, index * 2 + 1)])
+                .filter(|(color, _)| *color != 0)
+                .map(|(color, lane)| Edge {
+                    from: lane as u16,
+                    to: lane as u16,
+                    parent: false,
+                    color: color - 1,
+                }),
+        )
+    }
+
+    pub fn len(&self) -> usize {
+        self.iter().count()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.explicit.is_empty() && self.continuations.is_empty()
+    }
+
+    pub fn memory_bytes(&self) -> usize {
+        size_of_val(self.explicit.as_ref()) + self.continuations.len()
+    }
+}
+
+impl From<Vec<Edge>> for GraphEdges {
+    fn from(mut edges: Vec<Edge>) -> Self {
+        let start = edges
+            .iter()
+            .rposition(|e| e.parent || e.from != e.to)
+            .map_or(0, |i| i + 1);
+        let suffix = &edges[start..];
+        // Fall back to explicit storage if a caller supplies noncanonical edges.
+        // Never reorder duplicates, change colors, or lose an out-of-range lane.
+        let pack = suffix.iter().all(|e| e.from < 200 && e.color < 6)
+            && suffix.windows(2).all(|pair| pair[0].from < pair[1].from);
+        let continuations = if pack {
+            let count = suffix.last().map_or(0, |e| usize::from(e.from) / 2 + 1);
+            let mut packed = vec![0; count];
+            for edge in suffix {
+                let lane = usize::from(edge.from);
+                packed[lane / 2] |= (edge.color + 1) << ((lane % 2) * 4);
+            }
+            edges.truncate(start);
+            packed.into_boxed_slice()
+        } else {
+            Box::default()
+        };
+        Self {
+            explicit: edges.into_boxed_slice(),
+            continuations,
+        }
+    }
+}
+
+impl FromIterator<Edge> for GraphEdges {
+    fn from_iter<T: IntoIterator<Item = Edge>>(iter: T) -> Self {
+        Self::from(iter.into_iter().collect::<Vec<_>>())
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct GraphRow {
     pub node: Option<u16>,
     pub incoming: bool,
     pub color: u8,
-    pub edges: Box<[Edge]>,
+    pub edges: GraphEdges,
     pub width: u16,
     pub overflow: bool,
 }
@@ -71,7 +146,7 @@ impl GraphLayout {
                 occupied[node as usize] = true;
                 active[node as usize] = true;
             }
-            for edge in &row.edges {
+            for edge in row.edges.iter() {
                 occupied[edge.from as usize] = true;
                 occupied[edge.to as usize] = true;
                 if edge.parent || edge.from != edge.to {
@@ -189,7 +264,7 @@ impl GraphBuilder {
             color,
             width: before_width.max(self.lanes.len()).max(1) as u16,
             overflow,
-            edges: Box::default(),
+            edges: GraphEdges::default(),
         };
         let mut edges = Vec::with_capacity(occupied + commit.parents.len());
         for (index, parent) in commit.parents.iter().enumerate() {
@@ -248,7 +323,7 @@ impl GraphBuilder {
                 });
             }
         }
-        row.edges = edges.into_boxed_slice();
+        row.edges = edges.into();
         while self.lanes.last().is_some_and(Option::is_none) {
             self.lanes.pop();
         }
@@ -268,6 +343,70 @@ mod tests {
             .collect::<Vec<_>>()
             .join(" ");
         crate::git::parse_commit(format!("{id:040x}\n{parents}\nA\na@b\n2026-01-01T00:00:00Z\nA\na@b\n2026-01-01T00:00:00Z\nMessage\n").as_bytes()).unwrap()
+    }
+
+    #[test]
+    fn packed_continuations_preserve_sparse_lanes_colors_and_edge_order() {
+        let mut expected = vec![Edge {
+            from: 150,
+            to: 199,
+            parent: true,
+            color: 5,
+        }];
+        expected.extend(
+            [0, 1, 21, 63, 127, 199]
+                .into_iter()
+                .enumerate()
+                .map(|(color, lane)| Edge {
+                    from: lane,
+                    to: lane,
+                    parent: false,
+                    color: color as u8,
+                }),
+        );
+        let edges = GraphEdges::from(expected.clone());
+        assert_eq!(edges.iter().collect::<Vec<_>>(), expected);
+        assert_eq!(edges.continuations.len(), 100);
+
+        // At a frontier overflow a nonvertical continuation can follow a
+        // vertical one. Preserve that prefix and pack only the remaining suffix.
+        expected[3].to = 150;
+        let edges = GraphEdges::from(expected.clone());
+        assert_eq!(edges.iter().collect::<Vec<_>>(), expected);
+        for edge in [
+            Edge {
+                color: 8,
+                ..expected[1]
+            },
+            Edge {
+                from: 250,
+                to: 250,
+                ..expected[1]
+            },
+            expected[1],
+        ] {
+            let expected = vec![expected[1], edge];
+            assert_eq!(
+                GraphEdges::from(expected.clone())
+                    .iter()
+                    .collect::<Vec<_>>(),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn wide_vertical_frontier_uses_half_a_byte_per_lane() {
+        let edges: GraphEdges = (0..200)
+            .map(|lane| Edge {
+                from: lane,
+                to: lane,
+                parent: false,
+                color: (lane % 6) as u8,
+            })
+            .collect();
+        assert_eq!(edges.len(), 200);
+        assert_eq!(edges.memory_bytes(), 100);
     }
 
     #[test]
@@ -340,7 +479,7 @@ mod tests {
         assert_eq!(row.node, Some(1));
         assert_eq!(row.color, 2);
         assert_eq!(
-            row.edges.as_ref(),
+            row.edges.iter().collect::<Vec<_>>().as_slice(),
             &[
                 Edge {
                     from: 1,
@@ -466,7 +605,7 @@ mod tests {
                 parent: true,
                 color: 1,
             }]
-            .into_boxed_slice(),
+            .into(),
             ..GraphRow::default()
         };
         let layout = GraphLayout::new([&first, &next], 280.);
