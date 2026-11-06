@@ -1,5 +1,30 @@
 The optional X11 smoke test exercises a real window. Routine regression tests run
-headlessly with `cargo test`; running this tool is a separate desktop check.
+headlessly with `cargo test`; running this tool is a separate GUI check.
+
+Run the complete smoke script inside a NixOS VM with:
+
+```sh
+nix build .#gui-smoke --print-build-logs
+```
+
+The guest uses IceWM with an X11 session and Mesa's software Vulkan driver
+(Lavapipe). No host display, desktop environment, or GPU is needed. The test runs
+the packaged application as an unprivileged user and copies screenshots,
+`application.log`, and `driver.log` to `result/artifacts/gui-smoke/`. On failure,
+logs are also printed and the driver attempts to copy artifacts before exiting;
+use `--keep-failed` to retain the failed build directory.
+
+This opt-in package is available on `x86_64-linux` and `aarch64-linux`; it is not
+part of `nix flake check`. NixOS VM tests require a Linux builder with KVM
+(`/dev/kvm`, the `kvm` and `nixos-test` Nix system features). Other hosts, including
+macOS, can use a configured remote Linux builder; select its architecture
+explicitly, for example:
+
+```sh
+nix build .#packages.x86_64-linux.gui-smoke --max-jobs 0 --print-build-logs
+```
+
+To run against your existing X11 session instead:
 
 ```sh
 python scripts/gui_smoke.py [BINARY] [OUTPUT_DIRECTORY]

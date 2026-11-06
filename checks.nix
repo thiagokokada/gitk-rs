@@ -34,7 +34,7 @@
       '';
 
   nixfmt = pkgs.runCommand "gitk-rs-nixfmt" { nativeBuildInputs = [ pkgs.nixfmt ]; } ''
-    nixfmt --check ${./flake.nix} ${./gitk-rs.nix} ${./shell.nix} ${./checks.nix}
+    nixfmt --check ${./flake.nix} ${./gitk-rs.nix} ${./shell.nix} ${./checks.nix} ${./gui-smoke.nix}
     touch $out
   '';
 }
