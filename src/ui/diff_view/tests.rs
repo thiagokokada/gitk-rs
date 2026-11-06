@@ -168,26 +168,37 @@ fn file_click_and_copy_use_the_full_diff_not_just_visible_rows(cx: &mut TestAppC
     assert_eq!(cx.update(|_, cx| pane.read(cx).selected_file), Some(2));
     // Focus the real diff context, then dispatch its production key bindings.
     cx.update(|window, cx| pane.read(cx).focus.clone().focus(window, cx));
-    cx.simulate_keystrokes("ctrl-a ctrl-c");
-    until(cx, |cx| {
-        cx.read_from_clipboard()
-            .and_then(|item| item.text())
-            .is_some_and(|s| s.contains("+\tlet value_399 = 399;"))
-    });
-    cx.simulate_keystrokes("ctrl-shift-c");
-    until(cx, |cx| {
-        cx.read_from_clipboard()
-            .and_then(|item| item.text())
-            .is_some_and(|s| {
-                s.contains("\n\tlet value_399 = 399;") && !s.contains("+\tlet value_399")
-            })
-    });
-    let copied = cx.read_from_clipboard().unwrap().text().unwrap();
-    assert!(
-        copied.contains(&source),
-        "copy preserves tabs and crosses unloaded pages"
-    );
-    assert!(copied.contains("{ answer = 42; }"));
+    let modifiers: &[&str] = if cfg!(target_os = "macos") {
+        &["ctrl", "cmd"]
+    } else {
+        &["ctrl"]
+    };
+    for modifier in modifiers {
+        pane.update(cx, |pane, cx| {
+            pane.selection = None;
+            cx.notify();
+        });
+        cx.simulate_keystrokes(&format!("{modifier}-a {modifier}-c"));
+        until(cx, |cx| {
+            cx.read_from_clipboard()
+                .and_then(|item| item.text())
+                .is_some_and(|s| s.contains("+\tlet value_399 = 399;"))
+        });
+        cx.simulate_keystrokes(&format!("{modifier}-shift-c"));
+        until(cx, |cx| {
+            cx.read_from_clipboard()
+                .and_then(|item| item.text())
+                .is_some_and(|s| {
+                    s.contains("\n\tlet value_399 = 399;") && !s.contains("+\tlet value_399")
+                })
+        });
+        let copied = cx.read_from_clipboard().unwrap().text().unwrap();
+        assert!(
+            copied.contains(&source),
+            "copy preserves tabs and crosses unloaded pages"
+        );
+        assert!(copied.contains("{ answer = 42; }"));
+    }
 
     // The last file is short: its header cannot stay at the viewport top.
     // Painting must preserve the explicitly clicked file until scrolling moves.

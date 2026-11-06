@@ -787,3 +787,96 @@ fn shortcuts_are_grouped_scrollable_and_restore_focus(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("j");
     assert_eq!(selected(&app.view, cx).as_deref(), Some(older.as_str()));
 }
+
+#[cfg(target_os = "macos")]
+#[gpui_kit::test]
+fn command_aliases_copy_commits_and_page_history(cx: &mut TestAppContext) {
+    let fixture = history_fixture(300);
+    let (app, cx) = open(&fixture, cx);
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            app.view
+                .read(cx)
+                .snapshot
+                .as_ref()
+                .is_some_and(|s| s.loaded == 300)
+                && app.view.read(cx).selected.is_some()
+        })
+    });
+    for modifier in ["ctrl", "cmd"] {
+        let commit = selected(&app.view, cx).unwrap();
+        cx.update(|_, cx| {
+            cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string("sentinel".into()))
+        });
+        cx.simulate_keystrokes(&format!("{modifier}-c"));
+        assert!(
+            cx.read_from_clipboard()
+                .unwrap()
+                .text()
+                .unwrap()
+                .starts_with(&commit)
+        );
+        cx.simulate_keystrokes(&format!("{modifier}-pagedown"));
+        until(cx, |cx| {
+            cx.update(|_, cx| app.view.read(cx).viewport.start > 0)
+        });
+        assert_eq!(selected(&app.view, cx).as_deref(), Some(commit.as_str()));
+        cx.simulate_keystrokes(&format!("{modifier}-pageup"));
+        until(cx, |cx| {
+            cx.update(|_, cx| app.view.read(cx).viewport.start == 0)
+        });
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[gpui_kit::test]
+fn command_aliases_open_repositories_and_respect_input_and_dialog_focus(cx: &mut TestAppContext) {
+    let first = Fixture::new();
+    let old = first.commit("old");
+    let second = Fixture::new();
+    let new = second.commit("new");
+    let (app, cx) = open(&first, cx);
+    until(cx, |cx| selected(&app.view, cx).as_deref() == Some(&old));
+
+    cx.simulate_keystrokes("cmd-o");
+    assert!(cx.update(|_, cx| app.view.read(cx).repository_prompt_pending));
+    cx.simulate_path_prompt_response(|_| Some(vec![second.root().into()]));
+    until(cx, |cx| selected(&app.view, cx).as_deref() == Some(&new));
+
+    cx.simulate_keystrokes("cmd-shift-o");
+    assert!(
+        cx.update(|_, cx| matches!(app.view.read(cx).dialog, Some(DialogKind::OpenRepository)))
+    );
+    cx.simulate_keystrokes("cmd-a cmd-c");
+    assert_eq!(
+        cx.read_from_clipboard().unwrap().text().unwrap(),
+        second.root().to_str().unwrap()
+    );
+    cx.simulate_keystrokes("cmd-b cmd-o");
+    assert!(
+        cx.update(|_, cx| matches!(app.view.read(cx).dialog, Some(DialogKind::OpenRepository)))
+    );
+    assert!(!cx.update(|_, cx| app.view.read(cx).repository_prompt_pending));
+    cx.simulate_keystrokes("ctrl-a ctrl-k");
+    cx.simulate_input(first.root().to_str().unwrap());
+    cx.simulate_keystrokes("enter");
+    until(cx, |cx| selected(&app.view, cx).as_deref() == Some(&old));
+
+    cx.simulate_keystrokes("/ ctrl-b cmd-b");
+    assert!(cx.update(|_, cx| app.view.read(cx).dialog.is_none()));
+    cx.simulate_keystrokes("escape cmd-b");
+    until(cx, |cx| {
+        cx.update(|_, cx| !app.view.read(cx).branches.is_empty())
+    });
+    assert!(cx.update(|_, cx| matches!(app.view.read(cx).dialog, Some(DialogKind::Branches))));
+    cx.simulate_keystrokes("escape cmd-,");
+    assert!(cx.update(|_, cx| matches!(app.view.read(cx).dialog, Some(DialogKind::Preferences))));
+    // Invalid preferences exercise Cmd+Enter without writing user preferences.
+    cx.simulate_keystrokes("ctrl-a ctrl-k cmd-enter");
+    assert!(cx.update(|_, cx| {
+        let view = app.view.read(cx);
+        matches!(view.dialog, Some(DialogKind::Preferences)) && !view.operation_message.is_empty()
+    }));
+    cx.simulate_keystrokes("escape");
+    assert!(cx.update(|_, cx| app.view.read(cx).dialog.is_none()));
+}

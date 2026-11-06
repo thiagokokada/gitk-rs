@@ -351,6 +351,17 @@ struct ShortcutGroup {
     shortcuts: &'static [(&'static str, &'static str)],
 }
 
+// Only application shortcuts gain Command aliases; Control input editing stays literal.
+macro_rules! command_shortcut {
+    ($key:literal) => {
+        if cfg!(target_os = "macos") {
+            concat!("Ctrl/Cmd+", $key)
+        } else {
+            concat!("Ctrl+", $key)
+        }
+    };
+}
+
 const SHORTCUT_GROUPS: &[ShortcutGroup] = &[
     ShortcutGroup {
         title: "Commit list",
@@ -359,9 +370,12 @@ const SHORTCUT_GROUPS: &[ShortcutGroup] = &[
             ("Down / n / j", "Move down one commit"),
             ("Home", "Jump to the first commit"),
             ("End", "Jump to the last loaded commit"),
-            ("Ctrl+PageUp / PageDown", "Scroll history up / down a page"),
             (
-                "Ctrl+C",
+                command_shortcut!("PageUp / PageDown"),
+                "Scroll history up / down a page",
+            ),
+            (
+                command_shortcut!("C"),
                 "Copy selected commit hash and summary (history focused)",
             ),
         ],
@@ -375,9 +389,12 @@ const SHORTCUT_GROUPS: &[ShortcutGroup] = &[
             ("d / D", "Scroll diff down 18 lines"),
             ("Drag / Shift-click", "Select text / extend selection"),
             ("Double-click", "Select a word"),
-            ("Ctrl+A", "Select all (diff focused)"),
-            ("Ctrl+C", "Copy selection (diff focused)"),
-            ("Ctrl+Shift+C", "Copy without +/- markers (diff focused)"),
+            (command_shortcut!("A"), "Select all (diff focused)"),
+            (command_shortcut!("C"), "Copy selection (diff focused)"),
+            (
+                command_shortcut!("Shift+C"),
+                "Copy without +/- markers (diff focused)",
+            ),
         ],
     },
     ShortcutGroup {
@@ -387,13 +404,16 @@ const SHORTCUT_GROUPS: &[ShortcutGroup] = &[
             ("Escape", "Leave the filter box"),
             ("F5", "Reload commits"),
             ("F1", "Show keyboard shortcuts"),
-            ("Ctrl+O", "Open repository"),
-            ("Ctrl+Shift+O", "Open repository by path"),
-            ("Ctrl+B", "Switch local branch (outside text inputs)"),
-            ("Ctrl+,", "Open font preferences"),
+            (command_shortcut!("O"), "Open repository"),
+            (command_shortcut!("Shift+O"), "Open repository by path"),
+            (
+                command_shortcut!("B"),
+                "Switch local branch (outside text inputs)",
+            ),
+            (command_shortcut!(","), "Open font preferences"),
             ("Alt+T", "Toggle theme (outside text inputs)"),
             ("Alt+R", "Toggle automatic reload (outside text inputs)"),
-            ("Ctrl+Q", "Quit gitk-rs"),
+            (command_shortcut!("Q"), "Quit gitk-rs"),
         ],
     },
     ShortcutGroup {
@@ -421,7 +441,10 @@ const SHORTCUT_GROUPS: &[ShortcutGroup] = &[
         shortcuts: &[
             ("Escape", "Close the dialog"),
             ("Enter", "Open repository in the path input"),
-            ("Ctrl+Enter", "Apply and save font preferences"),
+            (
+                command_shortcut!("Enter"),
+                "Apply and save font preferences",
+            ),
         ],
     },
     ShortcutGroup {

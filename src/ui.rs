@@ -1505,6 +1505,39 @@ fn bind_keys(cx: &mut App) {
         KeyBinding::new("home", First, Some("GitHistory && !Input && !Dialog")),
         KeyBinding::new("end", Last, Some("GitHistory && !Input && !Dialog")),
     ]);
+    // Keep Control bindings available on macOS, including Emacs input editing.
+    #[cfg(target_os = "macos")]
+    cx.bind_keys([
+        KeyBinding::new(
+            "cmd-c",
+            CopyCommit,
+            Some("GitHistory && !Input && !Diff && !Dialog"),
+        ),
+        KeyBinding::new("cmd-q", Quit, None),
+        KeyBinding::new("cmd-,", FontPreferences, Some("GitHistory && !Dialog")),
+        KeyBinding::new("cmd-enter", ApplyPreferences, Some("Dialog")),
+        KeyBinding::new("cmd-o", OpenRepository, Some("GitHistory && !Dialog")),
+        KeyBinding::new(
+            "cmd-shift-o",
+            OpenRepositoryPath,
+            Some("GitHistory && !Dialog"),
+        ),
+        KeyBinding::new(
+            "cmd-b",
+            OpenBranches,
+            Some("GitHistory && !Input && !Dialog"),
+        ),
+        KeyBinding::new(
+            "cmd-pageup",
+            HistoryPageUp,
+            Some("GitHistory && !Input && !Dialog"),
+        ),
+        KeyBinding::new(
+            "cmd-pagedown",
+            HistoryPageDown,
+            Some("GitHistory && !Input && !Dialog"),
+        ),
+    ]);
 }
 
 pub fn run(config: Config, launched: Instant) {

@@ -775,4 +775,10 @@ pub(super) fn bind_keys(cx: &mut App) {
         KeyBinding::new("u", LinesUp, Some("GitHistory && !Input && !Dialog")),
         KeyBinding::new("d", LinesDown, Some("GitHistory && !Input && !Dialog")),
     ]);
+    #[cfg(target_os = "macos")]
+    cx.bind_keys([
+        KeyBinding::new("cmd-c", Copy, Some("Diff")),
+        KeyBinding::new("cmd-shift-c", CopyCode, Some("Diff")),
+        KeyBinding::new("cmd-a", SelectAll, Some("Diff")),
+    ]);
 }

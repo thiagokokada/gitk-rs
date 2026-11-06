@@ -41,7 +41,9 @@ You can also build and run the executable directly:
 
 Use the arrow keys or j/k to select commits, / to filter, and Space/Backspace
 to page through a diff. Ctrl+O opens a repository, Ctrl+B switches branches,
-and F5 reloads. Press F1 for all shortcuts.
+and F5 reloads. On macOS, Cmd also works for repository commands, history
+paging, copying, diff selection, font preferences, and quitting. Press F1 for
+all shortcuts.
 
 For command-line options:
 
