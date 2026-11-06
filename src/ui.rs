@@ -950,6 +950,8 @@ pub(crate) fn fixed_font() -> &'static str {
     }
 }
 
+const IDLE_LANES_TOOLTIP: &str = "Idle lanes are history lines with no commit, branch, or merge junction in the visible rows. They are grouped into a dashed column to save space; commit dots and junctions stay separate.";
+
 // Give tooltip text a concrete wrapping width; max-width on a flex popup alone
 // does not constrain its content. Leave room for popup padding and viewport edges.
 fn wrapped_tooltip(
@@ -1349,7 +1351,7 @@ impl Render for HistoryWindow {
                                                     .child(if self.graph_layout.has_collapsed() { "Graph · … idle lanes" } else { "Graph" })
                                                     .when(self.graph_layout.has_collapsed(), |heading| {
                                                         heading.hoverable_tooltip(|window, cx| {
-                                                            wrapped_tooltip("Idle lanes are history lines with no commit, branch, or merge junction in the visible rows. They are grouped into a dashed column to save space; commit dots and junctions stay separate.", window, cx)
+                                                            wrapped_tooltip(IDLE_LANES_TOOLTIP, window, cx)
                                                         })
                                                     })
                                                     .child(div().id("graph-divider").test_support()

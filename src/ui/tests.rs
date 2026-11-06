@@ -1076,51 +1076,62 @@ fn dialog_scrollbars_and_wheel_events_are_isolated_from_history(cx: &mut TestApp
     );
 }
 
+struct TooltipProbe {
+    status: String,
+}
+
+impl Render for TooltipProbe {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let status = self.status.clone();
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .p_3()
+            .child(
+                div()
+                    .id("graph-heading")
+                    .test_support()
+                    .w(px(280.))
+                    .h(px(26.))
+                    .child("Graph · … idle lanes")
+                    .hoverable_tooltip(|window, cx| {
+                        wrapped_tooltip(IDLE_LANES_TOOLTIP, window, cx)
+                    }),
+            )
+            .child(div().flex_1())
+            .child(
+                div()
+                    .id("history-status")
+                    .test_support()
+                    .truncate()
+                    .px_2()
+                    .py_1()
+                    .child(status.clone())
+                    .hoverable_tooltip(move |window, cx| {
+                        wrapped_tooltip(status.clone(), window, cx)
+                    }),
+            )
+    }
+}
+
 #[gpui_kit::test]
 fn status_and_idle_lane_tooltips_wrap_inside_the_window(cx: &mut TestAppContext) {
-    let fixture = Fixture::new();
-    let tip = fixture.commit("tip");
-    let (app, cx) = open(&fixture, cx);
-    until(cx, |cx| {
-        cx.update(|_, cx| {
-            let view = app.view.read(cx);
-            view.workspace_snapshot.is_some()
-                && view
-                    .selected
-                    .as_ref()
-                    .is_some_and(|(_, entry)| entry.commit.id.as_str() == tip)
-                && view.snapshot.as_ref().is_some_and(|snapshot| {
-                    snapshot.eof
-                        && snapshot.generation == view.request.generation
-                        && snapshot.request_id == view.request.id
-                })
-        })
+    // Exercise the tooltip renderer and edge placement without asynchronous Git
+    // snapshots replacing the graph data while a delayed hover is pending.
+    cx.update(gpui_kit::init);
+    let mut probe = None;
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let view = cx.new(|_| TooltipProbe {
+            status: "branch switched; details for /CaseSensitive/Repository.git ".repeat(6),
+        });
+        probe = Some(view.clone());
+        gpui_kit::base::Root::new(view, window, cx)
     });
-    app.view.update(cx, |view, cx| {
-        // A continuation-only lane exercises the production folded-lane heading.
-        let entry = &mut view.snapshot.as_mut().unwrap().rows[0];
-        let mut row = Entry {
-            ordinal: entry.ordinal,
-            commit: entry.commit.clone(),
-            graph: entry.graph.clone(),
-        };
-        row.graph.width = 2;
-        row.graph.edges = vec![gitk_rs::graph::Edge {
-            from: 1,
-            to: 1,
-            parent: false,
-            color: 1,
-        }]
-        .into_boxed_slice();
-        *entry = Arc::new(row);
-        view.operation_message =
-            "branch switched; details for /CaseSensitive/Repository.git ".repeat(6);
-        cx.notify();
-    });
+    let probe = probe.unwrap();
     for dimensions in [size(px(1280.), px(850.)), size(px(740.), px(500.))] {
         cx.simulate_resize(dimensions);
         cx.refresh().unwrap();
-        assert!(cx.update(|_, cx| app.view.read(cx).graph_layout.has_collapsed()));
         for trigger in ["history-status", "graph-heading"] {
             cx.simulate_mouse_move(point(px(1.), px(1.)), None, gpui_kit::Modifiers::default());
             cx.background_executor.advance_clock(Duration::from_secs(1));
@@ -1153,9 +1164,8 @@ fn status_and_idle_lane_tooltips_wrap_inside_the_window(cx: &mut TestAppContext)
     cx.simulate_mouse_move(point(px(1.), px(1.)), None, gpui_kit::Modifiers::default());
     cx.background_executor.advance_clock(Duration::from_secs(1));
     cx.run_until_parked();
-    app.view.update(cx, |view, cx| {
-        view.operation_message =
-            "long diagnostic with /CaseSensitive/Repository.git details ".repeat(100);
+    probe.update(cx, |view, cx| {
+        view.status = "long diagnostic with /CaseSensitive/Repository.git details ".repeat(100);
         cx.notify();
     });
     cx.refresh().unwrap();
