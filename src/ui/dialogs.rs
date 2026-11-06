@@ -153,11 +153,7 @@ impl HistoryWindow {
             Some(DialogKind::OpenRepository) => "Open repository by path",
             _ => "About gitk-rs",
         };
-        let (panel, foreground, button) = if self.config.theme == Theme::Dark {
-            (0x292d35, 0xe0e4eb, 0x454b57)
-        } else {
-            (0xffffff, 0x202329, 0xdde2e8)
-        };
+        let palette = Palette::for_theme(self.config.theme);
         let mut body = div()
             .id("dialog-card")
             .max_h(gpui_kit::relative(0.9))
@@ -167,8 +163,8 @@ impl HistoryWindow {
             .gap_2()
             .w(px(620.))
             .p_4()
-            .bg(rgb(panel))
-            .text_color(rgb(foreground));
+            .bg(rgb(palette.panel))
+            .text_color(rgb(palette.foreground));
         body = body.child(div().text_size(px(18.)).child(title));
         match self.dialog {
             Some(DialogKind::Branches) => {
@@ -186,14 +182,12 @@ impl HistoryWindow {
                                             .h(px((this.preferences.font_size * 2.).max(26.)))
                                             .px_2()
                                             .bg(rgb(if i == this.branch_index {
-                                                0x285b8e
-                                            } else if this.config.theme == Theme::Dark {
-                                                0x292d35
+                                                colors::SOLID_SELECTION
                                             } else {
-                                                0xffffff
+                                                Palette::for_theme(this.config.theme).panel
                                             }))
                                             .when(i == this.branch_index, |row| {
-                                                row.text_color(rgb(0xffffff))
+                                                row.text_color(rgb(colors::ON_SOLID))
                                             })
                                             .child(this.branches[this.filtered_branches[i]].clone())
                                             .cursor_pointer()
@@ -283,7 +277,7 @@ impl HistoryWindow {
                 .test_support()
                 .px_3()
                 .py_2()
-                .bg(rgb(button))
+                .bg(rgb(palette.dialog_button))
                 .cursor_pointer()
                 .child("Close (Escape)")
                 .on_click(cx.listener(|this, _, window, cx| {
@@ -295,7 +289,7 @@ impl HistoryWindow {
         div()
             .absolute()
             .inset_0()
-            .bg(gpui_kit::rgba(0x00000099))
+            .bg(gpui_kit::rgba(colors::DIALOG_OVERLAY))
             .flex()
             .items_center()
             .justify_center()

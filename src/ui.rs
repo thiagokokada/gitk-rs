@@ -1,9 +1,11 @@
 #[cfg(test)]
 mod tests;
 
+mod colors;
 mod dialogs;
 mod diff_view;
 
+use colors::Palette;
 use gitk_rs::{
     cli::{Config, Theme},
     diff::{DiffEngine, DiffHandle, DiffSettings},
@@ -702,6 +704,7 @@ impl HistoryWindow {
     }
 
     fn row(&mut self, index: usize, cx: &mut Context<Self>) -> AnyElement {
+        let palette = Palette::for_theme(self.config.theme);
         if let Some(staged) = self.local_rows.get(index).copied() {
             let selected = self.local_selection == Some(staged);
             let unmerged = self
@@ -715,19 +718,14 @@ impl HistoryWindow {
                 .flex()
                 .items_center()
                 .px_2()
-                .bg(rgb(match (self.config.theme, selected, staged) {
-                    (Theme::Dark, true, _) => 0x285b8e,
-                    (Theme::Light, true, _) => 0xcfe7ff,
-                    (Theme::Dark, false, false) => 0x4a1f23,
-                    (Theme::Light, false, false) => 0xfde2e1,
-                    (Theme::Dark, false, true) => 0x1f3b2a,
-                    (Theme::Light, false, true) => 0xe2f7e1,
-                }))
-                .text_color(rgb(if self.config.theme == Theme::Dark {
-                    0xffffff
+                .bg(rgb(if selected {
+                    palette.selection
+                } else if staged {
+                    palette.staged
                 } else {
-                    0x202329
+                    palette.unstaged
                 }))
+                .text_color(rgb(palette.local_foreground))
                 .cursor_pointer()
                 .child(if staged {
                     "●  Local changes checked into index but not committed"
@@ -752,11 +750,9 @@ impl HistoryWindow {
             .as_ref()
             .is_some_and(|s| s.1.commit.id == entry.commit.id);
         let background = if is_selected {
-            0x285b8e
-        } else if self.config.theme == Theme::Dark {
-            0x252930
+            colors::SOLID_SELECTION
         } else {
-            0xffffff
+            palette.row
         };
         let labels = self
             .snapshot
@@ -800,16 +796,16 @@ impl HistoryWindow {
             .gap_1()
             .children(labels.into_iter().map(|label| {
                 let color = match label.kind {
-                    RefKind::Head => 0x735a12,
-                    RefKind::Branch => 0x24643a,
-                    RefKind::Remote => 0x2e527c,
-                    RefKind::Tag => 0x654b7e,
+                    RefKind::Head => colors::HEAD_BADGE,
+                    RefKind::Branch => colors::BRANCH_BADGE,
+                    RefKind::Remote => colors::REMOTE_BADGE,
+                    RefKind::Tag => colors::TAG_BADGE,
                 };
                 div()
                     .px_1()
                     .text_size(px(11.))
                     .bg(rgb(color))
-                    .text_color(rgb(0xffffff))
+                    .text_color(rgb(colors::ON_SOLID))
                     .child(label.name)
             }));
         div()
@@ -819,7 +815,7 @@ impl HistoryWindow {
             .flex()
             .items_center()
             .bg(rgb(background))
-            .when(is_selected, |row| row.text_color(rgb(0xffffff)))
+            .when(is_selected, |row| row.text_color(rgb(colors::ON_SOLID)))
             .cursor_pointer()
             .on_click(cx.listener(move |this, _, window, cx| this.select(index, window, cx)))
             .child(
@@ -918,7 +914,7 @@ fn paint_graph(
     bounds: Bounds<gpui_kit::Pixels>,
     window: &mut Window,
 ) {
-    let colors = [0x80bfff, 0x83d49b, 0xe5b978, 0xd49fe8, 0x73d5d1, 0xef9090];
+    let colors = colors::GRAPH_LANES;
     let x = |lane: u16| bounds.left() + px(layout.x(lane));
     let radius = (layout.spacing * 0.4).clamp(2., 3.5);
     let stroke = 1.5;
@@ -937,7 +933,7 @@ fn paint_graph(
                                 point(x(edge.from), top),
                                 size(px(1.), bounds.size.height / 6.),
                             ),
-                            rgb(0x9298a3),
+                            rgb(colors::GRAPH_FOLDED),
                         ));
                     }
                 }
@@ -981,7 +977,7 @@ fn paint_graph(
                 point(bounds.right() - px(6.), middle - px(2.)),
                 size(px(5.), px(4.)),
             ),
-            rgb(0xe5b978),
+            rgb(colors::GRAPH_OVERFLOW),
         ));
     }
 }
@@ -1001,11 +997,13 @@ impl Render for HistoryWindow {
         let timing = self.timing.clone();
         let history_ready = self.snapshot.as_ref().is_some_and(|s| !s.rows.is_empty());
         let selection_ready = self.selected.is_some();
-        let (background, foreground, panel, border) = match self.config.theme {
-            Theme::Dark => (0x202329, 0xe0e4eb, 0x292d35, 0x454b57),
-            Theme::Light => (0xf5f6f8, 0x202329, 0xffffff, 0xc4c9d2),
+        let palette = Palette::for_theme(self.config.theme);
+        let section = || {
+            div()
+                .bg(rgb(palette.panel))
+                .border_1()
+                .border_color(rgb(palette.border))
         };
-        let section = || div().bg(rgb(panel)).border_1().border_color(rgb(border));
         let mut status = self.snapshot.as_ref().map_or_else(
             || "Loading commits…".into(),
             |s| {
@@ -1191,8 +1189,8 @@ impl Render for HistoryWindow {
             .p_3()
             .text_size(px(self.preferences.font_size))
             .font_family(gpui_kit::SharedString::from(self.preferences.ui_font.clone()))
-            .bg(rgb(background))
-            .text_color(rgb(foreground))
+            .bg(rgb(palette.background))
+            .text_color(rgb(palette.foreground))
             .child(
                 div()
                     .flex()
@@ -1245,7 +1243,7 @@ impl Render for HistoryWindow {
                             .id("clear-filter")
                             .px_3()
                             .py_2()
-                            .bg(rgb(panel))
+                            .bg(rgb(palette.panel))
                             .cursor_pointer()
                             .child("Clear")
                             .on_click(cx.listener(|this, _, window, cx| {
@@ -1259,7 +1257,7 @@ impl Render for HistoryWindow {
                             .test_support()
                             .px_3()
                             .py_2()
-                            .bg(rgb(panel))
+                            .bg(rgb(palette.panel))
                             .cursor_pointer()
                             .child(if self.config.watch {
                                 "Reload (Auto On)"
@@ -1286,7 +1284,7 @@ impl Render for HistoryWindow {
                                             .flex()
                                             .h(px((self.preferences.font_size * 2.).max(26.)))
                                             .items_center()
-                                            .bg(rgb(border))
+                                            .bg(rgb(palette.border))
                                             .child(
                                                 div()
                                                     .id("graph-heading")

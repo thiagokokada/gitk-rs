@@ -1,7 +1,10 @@
 #[cfg(test)]
 mod tests;
 
-use super::fixed_font;
+use super::{
+    colors::{self, Palette},
+    fixed_font,
+};
 use gitk_rs::{
     diff::{
         CopyRequest, DiffHandle, DiffPage, DiffSelection, DiffSettings, DiffSnapshot, DiffSource,
@@ -39,6 +42,7 @@ fn file_label(path: String, counts: Option<(u64, u64)>, dark: bool) -> StyledTex
     let Some((added, removed)) = counts else {
         return StyledText::new(format!("{path} (binary)"));
     };
+    let palette = Palette::for_dark(dark);
     let add = format!("+{added}");
     let remove = format!("-{removed}");
     let add_start = path.len() + 2;
@@ -47,14 +51,14 @@ fn file_label(path: String, counts: Option<(u64, u64)>, dark: bool) -> StyledTex
         (
             add_start..add_start + add.len(),
             HighlightStyle {
-                color: Some(rgb(if dark { 0x6ddf6d } else { 0x1f7a1f }).into()),
+                color: Some(rgb(palette.added_text).into()),
                 ..Default::default()
             },
         ),
         (
             remove_start..remove_start + remove.len(),
             HighlightStyle {
-                color: Some(rgb(if dark { 0xff7b72 } else { 0xb42318 }).into()),
+                color: Some(rgb(palette.removed_text).into()),
                 ..Default::default()
             },
         ),
@@ -354,18 +358,13 @@ impl DiffPane {
                 .child("Loading…")
                 .into_any_element();
         };
-        let dark = self.settings.dark;
-        let background = match (dark, line.kind) {
-            (true, LineKind::Added) => 0x184b32,
-            (true, LineKind::Removed) => 0x5f2639,
-            (true, LineKind::Hunk) => 0x26384c,
-            (true, LineKind::Header) => 0x343a44,
-            (false, LineKind::Added) => 0xd9f5e0,
-            (false, LineKind::Removed) => 0xffdddd,
-            (false, LineKind::Hunk) => 0xddeafa,
-            (false, LineKind::Header) => 0xe6e9ed,
-            (true, _) => 0x252930,
-            (false, _) => 0xffffff,
+        let palette = Palette::for_dark(self.settings.dark);
+        let background = match line.kind {
+            LineKind::Added => palette.added_line,
+            LineKind::Removed => palette.removed_line,
+            LineKind::Hunk => palette.hunk_line,
+            LineKind::Header => palette.header_line,
+            _ => palette.row,
         };
         let display = DisplayText::new(&line.text);
         let spans = line.spans.clone();
@@ -456,7 +455,7 @@ impl DiffPane {
                         let mut runs = Vec::new();
                         let mut offset = 0;
                         let font = window.text_style().font();
-                        let default = if dark { 0xe0e4eb } else { 0x202329 };
+                        let default = palette.foreground;
                         let mut push = |start: usize, end: usize, color| {
                             if end > start {
                                 runs.push(TextRun {
@@ -504,7 +503,7 @@ impl DiffPane {
                                     point(bounds.left() + start, bounds.top()),
                                     size(end - start, line_height),
                                 ),
-                                rgba(0x4285f4aa),
+                                rgba(colors::DIFF_TEXT_SELECTION),
                             ));
                         }
                         let _ = layout.shaped.paint(
@@ -532,11 +531,7 @@ impl Render for DiffPane {
             .as_ref()
             .map(|s| s.files.clone())
             .unwrap_or_default();
-        let border = if self.settings.dark {
-            0x454b57
-        } else {
-            0xc4c9d2
-        };
+        let palette = Palette::for_dark(self.settings.dark);
         div()
             .size_full()
             .flex()
@@ -580,7 +575,7 @@ impl Render for DiffPane {
                                 .flex()
                                 .flex_col()
                                 .border_1()
-                                .border_color(rgb(border))
+                                .border_color(rgb(palette.border))
                                 .font_family(self.font.clone())
                                 .child(
                                     div()
@@ -626,7 +621,7 @@ impl Render for DiffPane {
                                 .h_full()
                                 .flex_shrink_0()
                                 .border_1()
-                                .border_color(rgb(border))
+                                .border_color(rgb(palette.border))
                                 .relative()
                                 .child(
                                     uniform_list(
@@ -685,11 +680,10 @@ impl Render for DiffPane {
                                                         .when(
                                                             this.selected_file == Some(i),
                                                             |row| {
-                                                                row.bg(rgb(if this.settings.dark {
-                                                                    0x285b8e
-                                                                } else {
-                                                                    0xcfe7ff
-                                                                }))
+                                                                row.bg(rgb(Palette::for_dark(
+                                                                    this.settings.dark,
+                                                                )
+                                                                .selection))
                                                             },
                                                         )
                                                         .child(
