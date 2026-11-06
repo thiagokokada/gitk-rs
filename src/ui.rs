@@ -26,7 +26,7 @@ use gitk_rs::{
 use gpui_kit::component::{
     ThemeMode,
     button::Button,
-    input::{Input, InputEvent, InputState, NumberInput},
+    input::{Input, InputEvent, InputState},
     menu::{ContextMenuExt, DropdownMenu, PopupMenuItem},
     resizable::{resizable_panel, v_resizable},
     scroll::{ScrollableElement, Scrollbar, ScrollbarMode},

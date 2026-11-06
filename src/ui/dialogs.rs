@@ -297,10 +297,53 @@ impl HistoryWindow {
                                     .test_support()
                                     .h_8()
                                     .flex_shrink_0()
+                                    .track_focus(&self.font_size_input.read(cx).focus_handle(cx))
+                                    .rounded_md()
+                                    .border_1()
+                                    .border_color(rgb(palette.border))
+                                    .focus(|input| input.border_color(rgb(colors::SOLID_SELECTION)))
+                                    .bg(rgb(palette.row))
+                                    .text_color(rgb(palette.foreground))
                                     .child(
-                                        NumberInput::new(&self.font_size_input)
+                                        gpui_kit::base::NumberInput::new(&self.font_size_input)
                                             .accessibility_label("Font size in pixels")
-                                            .w_full(),
+                                            .controls_right()
+                                            .size_full()
+                                            .input(
+                                                Input::new(&self.font_size_input)
+                                                    .appearance(false)
+                                                    .h_full()
+                                                    .w_full()
+                                                    .text_align(gpui_kit::TextAlign::Left),
+                                            )
+                                            .increment_button(move |button| {
+                                                button
+                                                    .accessibility_label("Increase font size")
+                                                    .w_8()
+                                                    .text_size(px(12.))
+                                                    .line_height(px(12.))
+                                                    .flex()
+                                                    .items_center()
+                                                    .justify_center()
+                                                    .hover(move |button| {
+                                                        button.bg(rgb(palette.dialog_button))
+                                                    })
+                                                    .child("+")
+                                            })
+                                            .decrement_button(move |button| {
+                                                button
+                                                    .accessibility_label("Decrease font size")
+                                                    .w_8()
+                                                    .text_size(px(12.))
+                                                    .line_height(px(12.))
+                                                    .flex()
+                                                    .items_center()
+                                                    .justify_center()
+                                                    .hover(move |button| {
+                                                        button.bg(rgb(palette.dialog_button))
+                                                    })
+                                                    .child("−")
+                                            }),
                                     ),
                             )
                             .child(
