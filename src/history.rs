@@ -6,7 +6,7 @@ use crate::{
 };
 use anyhow::{Result, ensure};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     ops::Range,
     path::PathBuf,
     sync::{Arc, Condvar, Mutex, atomic::Ordering},
@@ -27,7 +27,9 @@ pub struct Request {
     pub repository: PathBuf,
     pub range: Range<usize>,
     pub query: String,
-    pub batch: usize,
+    /// None streams to EOF; Some(N) pauses after satisfying browsing demand in
+    /// batches of N. Worker steps and the snapshot mailbox stay bounded either way.
+    pub batch: Option<usize>,
     pub graph_columns: usize,
     pub anchor: Option<usize>,
     pub restore: Option<Restore>,
@@ -276,6 +278,7 @@ struct Session {
     stream: Option<GitStream>,
     cancellation: Cancellation,
     entries: Vec<Arc<Entry>>,
+    strings: HashSet<Arc<str>>,
     graph: GraphBuilder,
     refs: Arc<Refs>,
     refs_loaded: bool,
@@ -303,6 +306,7 @@ impl Session {
             stream,
             cancellation,
             entries: Vec::new(),
+            strings: HashSet::new(),
             graph: GraphBuilder::new(request.graph_columns),
             refs: Arc::new(Refs::new()),
             refs_loaded: false,
@@ -332,14 +336,14 @@ impl Session {
                         self.restore_reachable[index] = self.restore_ordinals[index].is_some()
                             || run_bytes(
                                 &self.repository.root,
-                                &["merge-base", "--all", target.as_str(), "HEAD"],
+                                &["merge-base", "--all", &target.to_hex(), "HEAD"],
                                 &self.cancellation,
                                 &[0, 1, 128],
                             )
                             .is_ok_and(|bytes| {
                                 bytes
                                     .split(|b| *b == b'\n')
-                                    .any(|id| id == target.as_str().as_bytes())
+                                    .any(|id| id == target.to_hex().as_bytes())
                             });
                     }
                 }
@@ -367,7 +371,7 @@ impl Session {
         }
         // Publish a small first viewport before ref discovery or further batches.
         if self.entries.is_empty() && !self.eof {
-            self.load(request.batch.clamp(1, 64), 64)?;
+            self.load(request.batch.unwrap_or(1000).clamp(1, 64), 64)?;
             return Ok(true);
         }
         if !self.refs_loaded || self.refs_revision != request.refs_revision {
@@ -376,20 +380,27 @@ impl Session {
             self.refs_revision = request.refs_revision;
             return Ok(true);
         }
-        let batch = request.batch.clamp(1, 10000);
-        let needed = request
-            .range
-            .end
-            .saturating_add(64)
-            .div_ceil(batch)
-            .saturating_mul(batch);
+        // The requested batch controls prefetch demand, not the size of one
+        // worker step. Publish bounded chunks even when --limit is very large.
+        let batch = request.batch.unwrap_or(1000).max(1);
+        let step = batch.min(10000);
+        let needed = if request.batch.is_none() {
+            usize::MAX
+        } else {
+            request
+                .range
+                .end
+                .saturating_add(64)
+                .div_ceil(batch)
+                .saturating_mul(batch)
+        };
         let visible = self.visible_count();
         if self.restore_pending() {
-            self.load(batch, usize::MAX)?;
+            self.load(step, usize::MAX)?;
             return Ok(true);
         }
         if !self.eof && visible < needed {
-            self.load(batch, needed)?;
+            self.load(step, needed)?;
             return Ok(true);
         }
         Ok(false)
@@ -409,12 +420,23 @@ impl Session {
             if self.cancellation.load(Ordering::Acquire) {
                 break;
             }
-            let Some(commit) = self.stream.as_mut().unwrap().next_commit()? else {
+            let Some(mut commit) = self.stream.as_mut().unwrap().next_commit()? else {
                 self.eof = true;
                 self.stream = None;
                 break;
             };
             bytes += commit.memory_bytes();
+            // Share repeated identities within this history generation. Full
+            // messages and exact timestamps remain available for search/details.
+            for signature in [&mut commit.author, &mut commit.committer] {
+                for value in [&mut signature.name, &mut signature.email] {
+                    if let Some(shared) = self.strings.get(value.as_ref()) {
+                        *value = shared.clone();
+                    } else {
+                        self.strings.insert(value.clone());
+                    }
+                }
+            }
             let graph = self.graph.push(&commit);
             let ordinal = self.entries.len();
             if let Some(restore) = &self.restore {
@@ -571,11 +593,128 @@ mod tests {
             repository: fixture.root().to_owned(),
             range: 0..10,
             query: String::new(),
-            batch: 1000,
-            graph_columns: 200,
+            batch: Some(1000),
+            graph_columns: crate::graph::DEFAULT_GRAPH_LANES,
             anchor: None,
             restore: None,
         }
+    }
+
+    /// Opt-in, history-only memory probe. Does not modify the repository.
+    #[test]
+    #[ignore = "requires GITK_PROFILE_REPOSITORY; reads real history"]
+    fn profile_retained_history() {
+        use std::mem::size_of;
+
+        let repository =
+            std::env::var_os("GITK_PROFILE_REPOSITORY").expect("set GITK_PROFILE_REPOSITORY");
+        let count: usize = std::env::var("GITK_PROFILE_COMMITS")
+            .unwrap_or_else(|_| "100000".into())
+            .parse()
+            .unwrap();
+        assert!(count > 64);
+        let request = Request {
+            generation: Generation(1),
+            id: 1,
+            refs_revision: 0,
+            repository: repository.into(),
+            range: 0..1,
+            query: String::new(),
+            batch: Some(count),
+            graph_columns: crate::graph::DEFAULT_GRAPH_LANES,
+            anchor: None,
+            restore: None,
+        };
+        let started = Instant::now();
+        let mut session = Session::open(&request, Cancellation::default()).unwrap();
+        while session.step(&request).unwrap() {}
+        let mut records = 0;
+        let mut metadata = 0;
+        let mut messages = 0;
+        let mut graph = 0;
+        for entry in &session.entries {
+            records += size_of::<Entry>() + 2 * size_of::<usize>();
+            let commit = &entry.commit;
+            metadata += size_of_val(commit.parents.as_ref());
+            for signature in [&commit.author, &commit.committer] {
+                metadata += signature.time.len();
+            }
+            messages += commit.message.len();
+            graph += entry.graph.edges.memory_bytes();
+        }
+        metadata += session
+            .strings
+            .iter()
+            .map(|value| value.len() + 2 * size_of::<usize>())
+            .sum::<usize>();
+        let index = session.entries.capacity() * size_of::<Arc<Entry>>()
+            + session.matches.capacity() * size_of::<usize>()
+            + session.strings.capacity() * (size_of::<Arc<str>>() + 1);
+        eprintln!(
+            "history_probe graph_lanes={} loaded={} eof={} elapsed_ms={} records_bytes={records} metadata_bytes={metadata} messages_bytes={messages} graph_bytes={graph} index_bytes={index} accounted_bytes={}",
+            request.graph_columns,
+            session.entries.len(),
+            session.eof,
+            started.elapsed().as_millis(),
+            records + metadata + messages + graph + index,
+        );
+        // RSS includes allocator overhead and the test harness. Keep the probe
+        // separate from desktop measurements; never combine Git RSS with ours.
+        #[cfg(target_os = "linux")]
+        {
+            fn rss(pid: &str) -> String {
+                std::fs::read_to_string(format!("/proc/{pid}/status"))
+                    .unwrap_or_default()
+                    .lines()
+                    .find(|line| line.starts_with("VmRSS:"))
+                    .unwrap_or("VmRSS: unavailable (process exited)")
+                    .to_owned()
+            }
+            let pid = std::process::id().to_string();
+            eprintln!("history_probe process_pid={pid} {}", rss(&pid));
+            // Git is spawned on this test thread, which need not be the main thread.
+            for task in std::fs::read_dir(format!("/proc/{pid}/task")).unwrap() {
+                let children = std::fs::read_to_string(task.unwrap().path().join("children"))
+                    .unwrap_or_default();
+                for child in children.split_whitespace() {
+                    eprintln!("history_probe child_pid={child} {}", rss(child));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn retained_history_shares_exact_identities_and_preserves_distinct_case() {
+        let fixture = Fixture::new();
+        fixture.commit("oldest\n\nBody é");
+        fixture.commit("middle");
+        fixture.git(&[
+            "-c",
+            "user.name=fixture",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "newest",
+        ]);
+        let request = request(&fixture);
+        let mut session = Session::open(&request, Cancellation::default()).unwrap();
+        while session.step(&request).unwrap() {}
+        let commits: Vec<_> = session.entries.iter().map(|entry| &entry.commit).collect();
+        assert!(Arc::ptr_eq(
+            &commits[1].author.name,
+            &commits[2].committer.name
+        ));
+        assert!(!Arc::ptr_eq(
+            &commits[0].author.name,
+            &commits[1].author.name
+        ));
+        assert!(Arc::ptr_eq(
+            &commits[0].author.email,
+            &commits[2].committer.email
+        ));
+        assert_eq!(commits[0].author.name.as_ref(), "fixture");
+        assert_eq!(commits[1].author.name.as_ref(), "Fixture");
+        assert_eq!(commits[2].message.as_ref(), "oldest\n\nBody é\n");
     }
 
     #[test]

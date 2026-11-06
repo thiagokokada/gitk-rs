@@ -15,9 +15,19 @@ pub(super) fn open<'a>(
     fixture: &Fixture,
     cx: &'a mut TestAppContext,
 ) -> (Harness, &'a mut VisualTestContext) {
+    // Preserve partial-loading fixtures for scrolling/restoration tests.
+    open_with_batch(fixture, Some(1000), cx)
+}
+
+fn open_with_batch<'a>(
+    fixture: &Fixture,
+    batch: Option<usize>,
+    cx: &'a mut TestAppContext,
+) -> (Harness, &'a mut VisualTestContext) {
     let config = Config {
         repository: fixture.root().into(),
         watch: false,
+        batch,
         ..Config::default()
     };
     let request = Request {
@@ -101,12 +111,12 @@ pub(super) fn until(
     }
 }
 
-fn selected(view: &Entity<HistoryWindow>, cx: &mut VisualTestContext) -> Option<String> {
+pub(super) fn selected(view: &Entity<HistoryWindow>, cx: &mut VisualTestContext) -> Option<String> {
     cx.update(|_, cx| {
         view.read(cx)
             .selected
             .as_ref()
-            .map(|(_, entry)| entry.commit.id.as_str().to_owned())
+            .map(|(_, entry)| entry.commit.id.to_hex())
     })
 }
 
@@ -149,6 +159,38 @@ fn history_fixture(count: usize) -> Fixture {
         String::from_utf8_lossy(&result.stderr)
     );
     fixture
+}
+
+#[gpui_kit::test]
+fn default_streaming_loads_history_and_keeps_navigation_and_search_working(
+    cx: &mut TestAppContext,
+) {
+    let fixture = history_fixture(2500);
+    let tip = fixture.git(&["rev-parse", "HEAD"]);
+    let (app, cx) = open_with_batch(&fixture, Config::default().batch, cx);
+    until(cx, |cx| {
+        cx.update(|_, cx| app.view.read(cx).snapshot.as_ref().is_some_and(|s| s.eof))
+    });
+    assert_eq!(
+        cx.update(|_, cx| app.view.read(cx).snapshot.as_ref().unwrap().loaded),
+        2500
+    );
+    assert_eq!(selected(&app.view, cx).as_deref(), Some(tip.as_str()));
+    cx.simulate_keystrokes("alt-j");
+    assert_ne!(selected(&app.view, cx).as_deref(), Some(tip.as_str()));
+    cx.simulate_keystrokes("alt-k");
+    assert_eq!(selected(&app.view, cx).as_deref(), Some(tip.as_str()));
+    cx.simulate_keystrokes("/");
+    cx.simulate_input("commit 1234");
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            app.view
+                .read(cx)
+                .snapshot
+                .as_ref()
+                .is_some_and(|s| s.visible == 1 && s.rows[0].commit.summary() == "commit 1234")
+        })
+    });
 }
 
 #[gpui_kit::test]
@@ -1653,4 +1695,50 @@ fn shortcuts_keyboard_scrolls_lines_pages_and_boundaries_without_moving_history(
         commit,
         "arrow keys must return to history navigation after closing help"
     );
+}
+
+#[gpui_kit::test]
+fn graph_paints_a_folded_column_at_the_maximum_lane_limit(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    fixture.commit("wide graph");
+    let (app, cx) = open(&fixture, cx);
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            let view = app.view.read(cx);
+            view.snapshot
+                .as_ref()
+                .is_some_and(|s| s.eof && s.request_id == view.request.id)
+        })
+    });
+    let last = MAX_GRAPH_LANES as u16 - 1;
+    app.view.update(cx, |view, cx| {
+        let snapshot = view.snapshot.as_mut().unwrap();
+        let entry = &snapshot.rows[0];
+        let graph = GraphRow {
+            node: Some(0),
+            width: MAX_GRAPH_LANES as u16,
+            edges: (0..=last)
+                .map(|lane| gitk_rs::graph::Edge {
+                    from: if lane == last { lane } else { 0 },
+                    to: lane,
+                    parent: lane != last,
+                    color: (lane % 6) as u8,
+                })
+                .collect(),
+            ..GraphRow::default()
+        };
+        snapshot.rows[0] = Arc::new(Entry {
+            ordinal: entry.ordinal,
+            commit: entry.commit.clone(),
+            graph,
+        });
+        view.graph_layout = GraphLayout::new([&snapshot.rows[0].graph], view.graph_width);
+        cx.notify();
+    });
+    cx.refresh().unwrap();
+    cx.update(|_, cx| {
+        let layout = &app.view.read(cx).graph_layout;
+        assert_eq!(layout.column(last), last as usize);
+        assert!(layout.is_collapsed(last));
+    });
 }

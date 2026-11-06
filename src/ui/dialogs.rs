@@ -582,6 +582,10 @@ const SHORTCUT_GROUPS: &[ShortcutGroup] = &[
         shortcuts: &[
             ("Up / p / k", "Move up one commit"),
             ("Down / n / j", "Move down one commit"),
+            (
+                "Alt+J / Alt+K",
+                "Select next / previous commit (including while filtering)",
+            ),
             ("Home / gg", "Jump to the first commit"),
             ("End / G", "Jump to the last loaded commit"),
             (
@@ -627,10 +631,6 @@ const SHORTCUT_GROUPS: &[ShortcutGroup] = &[
     ShortcutGroup {
         title: "Filter box and text inputs",
         shortcuts: &[
-            (
-                "Alt+J / Alt+K",
-                "Select next / previous commit (history filter)",
-            ),
             ("Ctrl+A / Ctrl+E", "Move to start / end of line"),
             ("Ctrl+B / Ctrl+F", "Move back / forward one character"),
             ("Ctrl+W", "Delete word before cursor"),

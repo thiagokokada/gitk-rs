@@ -1,7 +1,11 @@
-//! Incremental graph geometry, bounded by the configured visible lane count.
+//! Incremental graph geometry, bounded by an internal logical lane guard.
 use crate::git::{Commit, CommitId};
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// Bound pathological graph frontiers independently of folded display columns.
+pub const DEFAULT_GRAPH_LANES: usize = 256;
+pub const MAX_GRAPH_LANES: usize = 1024;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Edge {
     pub from: u16,
     pub to: u16,
@@ -10,12 +14,89 @@ pub struct Edge {
     pub color: u8,
 }
 
+/// Store the ordered vertical suffix in four bits per lane (zero means absent,
+/// one through six encode colors). Parent/routed edges retain their exact order.
+/// This avoids retaining one Edge per idle lane for every loaded history row.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct GraphEdges {
+    explicit: Box<[Edge]>,
+    continuations: Box<[u8]>,
+}
+
+impl GraphEdges {
+    pub fn iter(&self) -> impl Iterator<Item = Edge> + '_ {
+        self.explicit.iter().copied().chain(
+            self.continuations
+                .iter()
+                .enumerate()
+                .flat_map(|(index, byte)| [(*byte & 15, index * 2), (*byte >> 4, index * 2 + 1)])
+                .filter(|(color, _)| *color != 0)
+                .map(|(color, lane)| Edge {
+                    from: lane as u16,
+                    to: lane as u16,
+                    parent: false,
+                    color: color - 1,
+                }),
+        )
+    }
+
+    pub fn len(&self) -> usize {
+        self.iter().count()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.explicit.is_empty() && self.continuations.is_empty()
+    }
+
+    pub fn memory_bytes(&self) -> usize {
+        size_of_val(self.explicit.as_ref()) + self.continuations.len()
+    }
+}
+
+impl From<Vec<Edge>> for GraphEdges {
+    fn from(mut edges: Vec<Edge>) -> Self {
+        let start = edges
+            .iter()
+            .rposition(|e| e.parent || e.from != e.to)
+            .map_or(0, |i| i + 1);
+        let suffix = &edges[start..];
+        // Fall back to explicit storage if a caller supplies noncanonical edges.
+        // Never reorder duplicates, change colors, or lose an out-of-range lane.
+        let pack = suffix
+            .iter()
+            .all(|e| usize::from(e.from) < MAX_GRAPH_LANES && e.color < 6)
+            && suffix.windows(2).all(|pair| pair[0].from < pair[1].from);
+        let continuations = if pack {
+            let count = suffix.last().map_or(0, |e| usize::from(e.from) / 2 + 1);
+            let mut packed = vec![0; count];
+            for edge in suffix {
+                let lane = usize::from(edge.from);
+                packed[lane / 2] |= (edge.color + 1) << ((lane % 2) * 4);
+            }
+            edges.truncate(start);
+            packed.into_boxed_slice()
+        } else {
+            Box::default()
+        };
+        Self {
+            explicit: edges.into_boxed_slice(),
+            continuations,
+        }
+    }
+}
+
+impl FromIterator<Edge> for GraphEdges {
+    fn from_iter<T: IntoIterator<Item = Edge>>(iter: T) -> Self {
+        Self::from(iter.into_iter().collect::<Vec<_>>())
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct GraphRow {
     pub node: Option<u16>,
     pub incoming: bool,
     pub color: u8,
-    pub edges: Box<[Edge]>,
+    pub edges: GraphEdges,
     pub width: u16,
     pub overflow: bool,
 }
@@ -64,14 +145,14 @@ pub struct GraphLayout {
 }
 impl GraphLayout {
     pub fn new<'a>(rows: impl IntoIterator<Item = &'a GraphRow>, width: f32) -> Self {
-        let mut occupied = [false; 200];
-        let mut active = [false; 200];
+        let mut occupied = [false; MAX_GRAPH_LANES];
+        let mut active = [false; MAX_GRAPH_LANES];
         for row in rows {
             if let Some(node) = row.node {
                 occupied[node as usize] = true;
                 active[node as usize] = true;
             }
-            for edge in &row.edges {
+            for edge in row.edges.iter() {
                 occupied[edge.from as usize] = true;
                 occupied[edge.to as usize] = true;
                 if edge.parent || edge.from != edge.to {
@@ -80,10 +161,10 @@ impl GraphLayout {
                 }
             }
         }
-        let mut columns = vec![0; 200];
+        let mut columns = vec![0; MAX_GRAPH_LANES];
         let mut collapsed = Vec::new();
         let mut in_run = false;
-        for lane in 0..200 {
+        for lane in 0..MAX_GRAPH_LANES {
             if !occupied[lane] {
                 continue;
             }
@@ -134,7 +215,7 @@ impl GraphBuilder {
     pub fn new(limit: usize) -> Self {
         Self {
             lanes: Vec::new(),
-            limit: limit.clamp(1, 200),
+            limit: limit.clamp(1, MAX_GRAPH_LANES),
             next_color: 0,
         }
     }
@@ -152,7 +233,7 @@ impl GraphBuilder {
         let before_width = self.lanes.len();
         // Lanes never shift. Remember only colors for unchanged continuation
         // edges; moving the replaced node below preserves its one displaced ID.
-        let mut before = [None; 200];
+        let mut before = [None; MAX_GRAPH_LANES];
         let mut occupied = 0;
         for (color, lane) in before.iter_mut().zip(&self.lanes) {
             *color = lane.as_ref().map(|lane| lane.color);
@@ -189,7 +270,7 @@ impl GraphBuilder {
             color,
             width: before_width.max(self.lanes.len()).max(1) as u16,
             overflow,
-            edges: Box::default(),
+            edges: GraphEdges::default(),
         };
         let mut edges = Vec::with_capacity(occupied + commit.parents.len());
         for (index, parent) in commit.parents.iter().enumerate() {
@@ -248,7 +329,7 @@ impl GraphBuilder {
                 });
             }
         }
-        row.edges = edges.into_boxed_slice();
+        row.edges = edges.into();
         while self.lanes.last().is_some_and(Option::is_none) {
             self.lanes.pop();
         }
@@ -271,8 +352,74 @@ mod tests {
     }
 
     #[test]
+    fn packed_continuations_preserve_sparse_lanes_colors_and_edge_order() {
+        let mut expected = vec![Edge {
+            from: 150,
+            to: 199,
+            parent: true,
+            color: 5,
+        }];
+        expected.extend(
+            [0, 1, 21, 63, 127, MAX_GRAPH_LANES as u16 - 1]
+                .into_iter()
+                .enumerate()
+                .map(|(color, lane)| Edge {
+                    from: lane,
+                    to: lane,
+                    parent: false,
+                    color: color as u8,
+                }),
+        );
+        let edges = GraphEdges::from(expected.clone());
+        assert_eq!(edges.iter().collect::<Vec<_>>(), expected);
+        assert_eq!(edges.continuations.len(), MAX_GRAPH_LANES / 2);
+
+        // At a frontier overflow a nonvertical continuation can follow a
+        // vertical one. Preserve that prefix and pack only the remaining suffix.
+        expected[3].to = 150;
+        let edges = GraphEdges::from(expected.clone());
+        assert_eq!(edges.iter().collect::<Vec<_>>(), expected);
+        for edge in [
+            Edge {
+                color: 8,
+                ..expected[1]
+            },
+            Edge {
+                from: MAX_GRAPH_LANES as u16,
+                to: MAX_GRAPH_LANES as u16,
+                ..expected[1]
+            },
+            expected[1],
+        ] {
+            let expected = vec![expected[1], edge];
+            assert_eq!(
+                GraphEdges::from(expected.clone())
+                    .iter()
+                    .collect::<Vec<_>>(),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn wide_vertical_frontier_uses_half_a_byte_per_lane() {
+        for count in [200, MAX_GRAPH_LANES] {
+            let edges: GraphEdges = (0..count as u16)
+                .map(|lane| Edge {
+                    from: lane,
+                    to: lane,
+                    parent: false,
+                    color: (lane % 6) as u8,
+                })
+                .collect();
+            assert_eq!(edges.len(), count);
+            assert_eq!(edges.memory_bytes(), count / 2);
+        }
+    }
+
+    #[test]
     fn generated_dags_keep_geometry_within_the_frontier() {
-        for cap in [1, 2, 3, 8, 32, 200] {
+        for cap in [1, 2, 3, 8, 32, 200, MAX_GRAPH_LANES] {
             let mut graph = GraphBuilder::new(cap);
             let mut state = 0x23456789_u64;
             for id in (1..=512_u64).rev() {
@@ -306,14 +453,19 @@ mod tests {
 
     #[test]
     fn full_width_octopus_merges_and_sparse_roots_respect_the_cap() {
-        for cap in [1, 2, 8, 32, 200] {
-            let mut builder = GraphBuilder::new(cap);
-            let merge = commit(1000, &(1..=256).collect::<Vec<_>>());
+        for cap in [1, 2, 8, 32, 200, MAX_GRAPH_LANES] {
+            let mut builder = GraphBuilder::new(if cap == MAX_GRAPH_LANES {
+                usize::MAX
+            } else {
+                cap
+            });
+            let parents = cap as u64 + 1;
+            let merge = commit(10_000, &(1..=parents).collect::<Vec<_>>());
             let merged = builder.push(&merge);
             assert_eq!(merged.edges.iter().filter(|edge| edge.parent).count(), cap);
             assert!(merged.overflow);
             assert_eq!(usize::from(merged.width), cap);
-            for id in (1..=256).rev() {
+            for id in (1..=parents).rev() {
                 let parents = if id % 3 == 0 { vec![] } else { vec![id / 2] };
                 let commit = commit(id, &parents);
                 let row = builder.push(&commit);
@@ -340,7 +492,7 @@ mod tests {
         assert_eq!(row.node, Some(1));
         assert_eq!(row.color, 2);
         assert_eq!(
-            row.edges.as_ref(),
+            row.edges.iter().collect::<Vec<_>>().as_slice(),
             &[
                 Edge {
                     from: 1,
@@ -444,45 +596,51 @@ mod tests {
 
     #[test]
     fn folded_context_preserves_distinct_nodes_and_merge_endpoints() {
-        let mut first = GraphRow {
-            node: Some(150),
-            width: 200,
-            ..GraphRow::default()
-        };
-        first.edges = (0..200)
-            .map(|lane| Edge {
-                from: lane,
-                to: lane,
-                parent: false,
-                color: 0,
-            })
-            .collect();
-        let next = GraphRow {
-            node: Some(151),
-            width: 200,
-            edges: vec![Edge {
-                from: 151,
-                to: 196,
-                parent: true,
-                color: 1,
-            }]
-            .into_boxed_slice(),
-            ..GraphRow::default()
-        };
-        let layout = GraphLayout::new([&first, &next], 280.);
-        assert!(layout.has_collapsed());
-        assert_eq!(layout.spacing, 12.);
-        assert!(layout.width() < 100.);
-        assert!(layout.x(150) < layout.x(151) && layout.x(151) < layout.x(196));
-        for lane in [150, 151, 196] {
-            assert!(!layout.is_collapsed(lane));
+        for width in [200, MAX_GRAPH_LANES as u16] {
+            let node = width - 50;
+            let next_node = node + 1;
+            let target = width - 4;
+            let first = GraphRow {
+                node: Some(node),
+                width,
+                edges: (0..width)
+                    .map(|lane| Edge {
+                        from: lane,
+                        to: lane,
+                        parent: false,
+                        color: 0,
+                    })
+                    .collect(),
+                ..GraphRow::default()
+            };
+            let next = GraphRow {
+                node: Some(next_node),
+                width,
+                edges: vec![Edge {
+                    from: next_node,
+                    to: target,
+                    parent: true,
+                    color: 1,
+                }]
+                .into(),
+                ..GraphRow::default()
+            };
+            let layout = GraphLayout::new([&first, &next], 280.);
+            assert!(layout.has_collapsed());
+            assert_eq!(layout.spacing, 12.);
+            assert!(layout.width() < 100.);
+            assert!(layout.x(node) < layout.x(next_node) && layout.x(next_node) < layout.x(target));
+            for lane in [node, next_node, target] {
+                assert!(!layout.is_collapsed(lane));
+            }
+            assert!(layout.is_collapsed(0) && layout.is_collapsed(width - 1));
         }
-        assert!(layout.is_collapsed(0) && layout.is_collapsed(199));
     }
+
     #[test]
     fn wide_frontiers_fit_and_small_frontiers_keep_normal_spacing() {
         assert_eq!(lane_spacing(280., 3), 12.);
-        for lanes in [24, 100, 200] {
+        for lanes in [24, 100, 200, MAX_GRAPH_LANES as u16] {
             let spacing = lane_spacing(280., lanes);
             assert!(9. + (lanes - 1) as f32 * spacing + 3.5 < 280.);
         }

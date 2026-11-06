@@ -11,7 +11,7 @@ use font_preferences::{FontCatalogGeneration, FontChoices};
 use gitk_rs::{
     cli::{Config, Theme},
     diff::{DiffEngine, DiffHandle, DiffSettings},
-    graph::{GraphLayout, GraphRow, text_graph},
+    graph::{GraphLayout, GraphRow, MAX_GRAPH_LANES, text_graph},
     history::{
         Entry, Generation, HistoryEngine, HistoryHandle, RefKind, Request,
         Restore as HistoryRestore, Snapshot,
@@ -650,7 +650,7 @@ impl HistoryWindow {
             eprintln!(
                 "gitk-rs: selection generation={} commit={}",
                 self.request.generation.0,
-                entry.commit.id.as_str()
+                entry.commit.id.to_hex()
             );
         }
         self.diff.update(cx, |diff, cx| {
@@ -700,8 +700,7 @@ impl HistoryWindow {
     }
 
     fn move_selection(&mut self, delta: isize, window: &mut Window, cx: &mut Context<Self>) {
-        let filter_focus = self.filter.read(cx).focus_handle(cx);
-        let keep_filter_focus = filter_focus.is_focused(window);
+        let previous_focus = window.focused(cx);
         let Some(snapshot) = &self.snapshot else {
             return;
         };
@@ -718,8 +717,8 @@ impl HistoryWindow {
             .saturating_add_signed(delta)
             .min(maximum);
         self.select(index, window, cx);
-        if keep_filter_focus {
-            filter_focus.focus(window, cx);
+        if let Some(focus) = previous_focus {
+            focus.focus(window, cx);
         }
     }
 
@@ -935,7 +934,7 @@ impl HistoryWindow {
                             .w(px(self.preferences.font_size * 5.))
                             .flex_shrink_0()
                             .font_family(SharedString::from(self.preferences.fixed_font.clone()))
-                            .child(entry.commit.id.as_str()[..7].to_owned()),
+                            .child(entry.commit.id.to_hex()[..7].to_owned()),
                     )
                     .child(
                         div()
@@ -969,7 +968,7 @@ impl HistoryWindow {
                 ),
             )
             .context_menu({
-                let reference = format!("{} {}", entry.commit.id.as_str(), entry.commit.summary());
+                let reference = format!("{} {}", entry.commit.id, entry.commit.summary());
                 move |menu, _, _| {
                     menu.item(PopupMenuItem::new("Copy commit reference").on_click({
                         let reference = reference.clone();
@@ -1056,8 +1055,8 @@ fn paint_graph(
     let stroke = 1.5;
     let middle = bounds.top() + bounds.size.height / 2.;
     if !filtered {
-        let mut folded = [false; 200];
-        for edge in &graph.edges {
+        let mut folded = [false; MAX_GRAPH_LANES];
+        for edge in graph.edges.iter() {
             if layout.is_collapsed(edge.from) && layout.is_collapsed(edge.to) {
                 let column = layout.column(edge.from);
                 if !folded[column] {
@@ -1216,7 +1215,7 @@ impl Render for HistoryWindow {
                 if let Some((_, entry)) = &this.selected {
                     cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(format!(
                         "{} {}",
-                        entry.commit.id.as_str(),
+                        entry.commit.id,
                         entry.commit.summary()
                     )));
                 }
@@ -1606,8 +1605,8 @@ fn bind_keys(cx: &mut App) {
         KeyBinding::new("up", BranchUp, Some("BranchDialog > Input")),
         KeyBinding::new("alt-j", BranchDown, Some("BranchDialog > Input")),
         KeyBinding::new("alt-k", BranchUp, Some("BranchDialog > Input")),
-        KeyBinding::new("alt-j", Next, Some("HistoryFilter > Input")),
-        KeyBinding::new("alt-k", Previous, Some("HistoryFilter > Input")),
+        KeyBinding::new("alt-j", Next, Some("GitHistory && !Dialog")),
+        KeyBinding::new("alt-k", Previous, Some("GitHistory && !Dialog")),
         KeyBinding::new("ctrl-n", BranchDown, Some("BranchDialog > Input")),
         KeyBinding::new("ctrl-p", BranchUp, Some("BranchDialog > Input")),
         KeyBinding::new("enter", BranchAccept, Some("BranchDialog")),

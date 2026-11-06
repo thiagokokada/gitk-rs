@@ -1,3 +1,4 @@
+use crate::graph::{DEFAULT_GRAPH_LANES, MAX_GRAPH_LANES};
 use clap::{Parser, ValueEnum};
 use std::{ffi::OsString, num::NonZeroUsize, path::PathBuf};
 
@@ -12,7 +13,7 @@ pub struct Config {
     pub repository: PathBuf,
     pub theme: Theme,
     pub timings: bool,
-    pub batch: usize,
+    pub batch: Option<usize>,
     pub graph_columns: usize,
     pub text_graph: bool,
     pub syntax: bool,
@@ -26,8 +27,8 @@ impl Default for Config {
             repository: PathBuf::from("."),
             theme: Theme::Dark,
             timings: false,
-            batch: 1000,
-            graph_columns: 200,
+            batch: None,
+            graph_columns: DEFAULT_GRAPH_LANES,
             text_graph: false,
             syntax: true,
             watch: true,
@@ -51,12 +52,12 @@ struct Args {
     #[arg(long)]
     timings: bool,
 
-    /// Maximum commits per background batch
-    #[arg(long, value_name = "N", default_value = "1000")]
-    limit: NonZeroUsize,
+    /// Opt into batches of N instead of streaming all history (browsing loads more)
+    #[arg(long, value_name = "N")]
+    limit: Option<NonZeroUsize>,
 
-    /// Visible graph lane cap (1..200)
-    #[arg(long, value_name = "N", default_value = "200", value_parser = clap::value_parser!(u16).range(1..=200))]
+    /// Logical graph lane cap before idle columns are folded (1..1024)
+    #[arg(long, value_name = "N", default_value_t = DEFAULT_GRAPH_LANES as u16, value_parser = clap::value_parser!(u16).range(1..=MAX_GRAPH_LANES as i64))]
     graph_cols: u16,
 
     /// Use a text graph instead of canvas geometry
@@ -84,7 +85,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Config, clap::E
         repository: args.repository,
         theme: args.mode,
         timings: args.timings,
-        batch: args.limit.get(),
+        batch: args.limit.map(NonZeroUsize::get),
         graph_columns: usize::from(args.graph_cols),
         text_graph: args.text_graph,
         syntax: !args.nosyntax,
@@ -153,7 +154,7 @@ mod tests {
                 repository: "repo with spaces".into(),
                 theme: Theme::Light,
                 timings: true,
-                batch: 42,
+                batch: Some(42),
                 graph_columns: 1,
                 text_graph: true,
                 syntax: false,
@@ -173,7 +174,7 @@ mod tests {
             &["--limit", "999999999999999999999999999999"],
             &["--graph-cols"],
             &["--graph-cols", "0"],
-            &["--graph-cols", "201"],
+            &["--graph-cols", "1025"],
             &["--graph-cols", "65536"],
         ] {
             assert!(
@@ -181,7 +182,13 @@ mod tests {
                 "accepted invalid arguments: {args:?}"
             );
         }
-        assert!(command(&["--limit", "1", "--graph-cols", "200"]).is_ok());
+        for value in ["1", "256", "512", "1024"] {
+            assert_eq!(
+                command(&["--graph-cols", value]).unwrap().graph_columns,
+                value.parse::<usize>().unwrap()
+            );
+        }
+        assert_eq!(command(&[]).unwrap().graph_columns, 256);
     }
 
     #[test]

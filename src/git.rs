@@ -58,7 +58,10 @@ impl Cancellation {
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub struct CommitId(String);
+pub enum CommitId {
+    Sha1([u8; 20]),
+    Sha256([u8; 32]),
+}
 
 impl CommitId {
     pub fn parse(value: &str) -> Result<Self> {
@@ -66,19 +69,48 @@ impl CommitId {
             matches!(value.len(), 40 | 64) && value.bytes().all(|b| b.is_ascii_hexdigit()),
             "invalid Git object ID"
         );
-        Ok(Self(value.to_ascii_lowercase()))
+        let mut bytes = [0; 32];
+        for (target, pair) in bytes.iter_mut().zip(value.as_bytes().as_chunks::<2>().0) {
+            let digit = |byte: u8| match byte {
+                b'0'..=b'9' => byte - b'0',
+                b'a'..=b'f' => byte - b'a' + 10,
+                b'A'..=b'F' => byte - b'A' + 10,
+                _ => unreachable!("validated hexadecimal digit"),
+            };
+            *target = digit(pair[0]) << 4 | digit(pair[1]);
+        }
+        Ok(if value.len() == 40 {
+            Self::Sha1(bytes[..20].try_into().unwrap())
+        } else {
+            Self::Sha256(bytes)
+        })
     }
 
-    pub fn as_str(&self) -> &str {
-        &self.0
+    pub fn to_hex(&self) -> String {
+        self.to_string()
+    }
+}
+
+impl std::fmt::Display for CommitId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let bytes: &[u8] = match self {
+            Self::Sha1(bytes) => bytes,
+            Self::Sha256(bytes) => bytes,
+        };
+        let mut hex = [0; 64];
+        for (byte, pair) in bytes.iter().zip(hex.as_chunks_mut::<2>().0.iter_mut()) {
+            pair[0] = b"0123456789abcdef"[(byte >> 4) as usize];
+            pair[1] = b"0123456789abcdef"[(byte & 15) as usize];
+        }
+        f.write_str(std::str::from_utf8(&hex[..bytes.len() * 2]).unwrap())
     }
 }
 
 #[derive(Clone, Debug)]
 pub struct Signature {
-    pub name: String,
-    pub email: String,
-    pub time: String,
+    pub name: Arc<str>,
+    pub email: Arc<str>,
+    pub time: Box<str>,
 }
 
 #[derive(Clone, Debug)]
@@ -87,7 +119,7 @@ pub struct Commit {
     pub parents: Box<[CommitId]>,
     pub author: Signature,
     pub committer: Signature,
-    pub message: String,
+    pub message: Box<str>,
 }
 
 impl Commit {
@@ -105,10 +137,7 @@ impl Commit {
     pub fn searchable_text(&self) -> String {
         format!(
             "{} {} {} {}",
-            self.id.as_str(),
-            self.author.name,
-            self.author.email,
-            self.message
+            self.id, self.author.name, self.author.email, self.message
         )
         .to_lowercase()
     }
@@ -119,8 +148,10 @@ impl Commit {
             + self.author.email.len()
             + self.committer.name.len()
             + self.committer.email.len()
-            + self.parents.len() * 64
-            + 256
+            + self.author.time.len()
+            + self.committer.time.len()
+            + size_of_val(self.parents.as_ref())
+            + size_of::<Self>()
     }
 }
 
@@ -188,7 +219,7 @@ impl Repository {
                 "--no-decorate",
                 "--no-patch",
                 "--pretty=tformat:%H%n%P%n%an%n%ae%n%aI%n%cn%n%ce%n%cI%n%B%x00",
-                head.as_str(),
+                &head.to_hex(),
             ],
             cancel,
             &[0],
@@ -461,16 +492,16 @@ pub fn parse_commit(record: &[u8]) -> Result<Commit> {
         .collect::<Result<Vec<_>>>()?
         .into_boxed_slice();
     let author = Signature {
-        name: next()?,
-        email: next()?,
-        time: next()?,
+        name: next()?.into(),
+        email: next()?.into(),
+        time: next()?.into_boxed_str(),
     };
     let committer = Signature {
-        name: next()?,
-        email: next()?,
-        time: next()?,
+        name: next()?.into(),
+        email: next()?.into(),
+        time: next()?.into_boxed_str(),
     };
-    let message = next()?;
+    let message = next()?.into_boxed_str();
     Ok(Commit {
         id,
         parents,
@@ -493,11 +524,67 @@ mod tests {
         );
         let commit = parse_commit(record.as_bytes()).unwrap();
         assert_eq!(commit.summary(), "Subject é");
-        assert_eq!(commit.message, "Subject é\n\nBody\n");
+        assert_eq!(commit.message.as_ref(), "Subject é\n\nBody\n");
         assert!(commit.parents.is_empty());
         assert!(parse_commit(b"short\n").is_err());
         assert!(CommitId::parse(&"g".repeat(40)).is_err());
         assert!(CommitId::parse(&"a".repeat(64)).is_ok());
+    }
+
+    #[test]
+    fn binary_ids_preserve_hash_format_case_normalization_and_identity() {
+        for hex in [
+            "0123456789aBcDeF".repeat(4),
+            "0123456789aBcDeF".repeat(4)[..40].to_owned(),
+        ] {
+            let id = CommitId::parse(&hex).unwrap();
+            assert_eq!(id.to_hex(), hex.to_ascii_lowercase());
+            assert_eq!(id, CommitId::parse(&hex.to_ascii_lowercase()).unwrap());
+        }
+        let sha1 = CommitId::parse(&"a".repeat(40)).unwrap();
+        let sha256 = CommitId::parse(&format!("{}{}", "a".repeat(40), "0".repeat(24))).unwrap();
+        assert_ne!(sha1, sha256);
+        for invalid in [
+            "é".repeat(20),
+            "a".repeat(39),
+            "a".repeat(41),
+            "a".repeat(65),
+        ] {
+            assert!(CommitId::parse(&invalid).is_err());
+        }
+    }
+
+    #[test]
+    fn sha256_repository_streams_binary_ids_and_parents() {
+        let fixture = Fixture::new();
+        fixture.git(&["init", "--quiet", "--object-format=sha256", "sha256"]);
+        fixture.git(&[
+            "-C",
+            "sha256",
+            "commit",
+            "--quiet",
+            "--allow-empty",
+            "-m",
+            "root",
+        ]);
+        let root = fixture.git(&["-C", "sha256", "rev-parse", "HEAD"]);
+        fixture.git(&[
+            "-C",
+            "sha256",
+            "commit",
+            "--quiet",
+            "--allow-empty",
+            "-m",
+            "tip",
+        ]);
+        let cancellation = Cancellation::default();
+        let repository = Repository::open(&fixture.root().join("sha256"), &cancellation).unwrap();
+        let mut stream = repository.log(cancellation).unwrap();
+        let tip = stream.next_commit().unwrap().unwrap();
+        assert_eq!(tip.id.to_hex().len(), 64);
+        assert_eq!(tip.parents[0].to_hex(), root);
+        assert_eq!(stream.next_commit().unwrap().unwrap().id.to_hex(), root);
+        assert!(stream.next_commit().unwrap().is_none());
     }
 
     #[test]
@@ -515,8 +602,8 @@ mod tests {
         let repo = Repository::open(fixture.root(), &cancel).unwrap();
         assert_eq!(repo.branch, "main");
         let mut log = repo.log(cancel.clone()).unwrap();
-        assert_eq!(log.next_commit().unwrap().unwrap().id.as_str(), second);
-        assert_eq!(log.next_commit().unwrap().unwrap().id.as_str(), first);
+        assert_eq!(log.next_commit().unwrap().unwrap().id.to_hex(), second);
+        assert_eq!(log.next_commit().unwrap().unwrap().id.to_hex(), first);
         assert!(log.next_commit().unwrap().is_none());
         fixture.git(&["checkout", "--quiet", "--detach"]);
         assert_eq!(

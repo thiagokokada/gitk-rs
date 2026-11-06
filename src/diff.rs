@@ -419,7 +419,7 @@ fn write_line(
 pub fn commit_header(commit: &Commit) -> String {
     let mut header = format!(
         "commit {}\nAuthor: {} <{}>  {}\nCommitter: {} <{}>  {}\n\n",
-        commit.id.as_str(),
+        commit.id,
         commit.author.name,
         commit.author.email,
         commit.author.time,
@@ -450,9 +450,9 @@ fn diff_args(source: &DiffSource, numstat: bool) -> Vec<OsString> {
     match source {
         DiffSource::Commit(commit) => {
             if let Some(parent) = commit.parents.first() {
-                args.push(parent.as_str().into());
+                args.push(parent.to_hex().into());
             }
-            args.push(commit.id.as_str().into());
+            args.push(commit.id.to_hex().into());
         }
         DiffSource::Local { staged: true } => args.push("--cached".into()),
         DiffSource::Local { staged: false } => args.push("--ours".into()),

@@ -44,7 +44,7 @@ fn restoration_uses_commit_ids_and_handles_unreachable_branch_commits() {
     });
     let (position, entry) = restored.selected.unwrap();
     assert_eq!(position, 1);
-    assert_eq!(entry.commit.id.as_str(), root);
+    assert_eq!(entry.commit.id.to_hex(), root);
     assert_eq!(restored.top, Some(0));
     request.id += 1;
     request.restore.as_mut().unwrap().selected =
@@ -83,7 +83,7 @@ fn history_request(fixture: &Fixture) -> Request {
         repository: fixture.root().into(),
         range: 0..8,
         query: String::new(),
-        batch: 7,
+        batch: Some(7),
         graph_columns: 200,
         anchor: None,
         restore: None,
@@ -163,12 +163,11 @@ fn history_selection_highlighting_and_copy_across_unloaded_lines() {
     assert_eq!(copied, source.trim_end_matches('\n'));
 }
 
-#[test]
-fn demand_pauses_history_then_filter_streams_further_and_generation_switches() {
+fn history_fixture(count: usize) -> Fixture {
     let fixture = Fixture::new();
-    // One deterministic fast-import builds history without running 96 Git commits.
+    // One deterministic fast-import avoids spawning Git once per commit.
     let mut input = String::new();
-    for i in 1..=96 {
+    for i in 1..=count {
         let message = if i == 1 {
             "root-only needle".into()
         } else {
@@ -203,6 +202,70 @@ fn demand_pauses_history_then_filter_streams_further_and_generation_switches() {
         "{}",
         String::from_utf8_lossy(&imported.stderr)
     );
+    fixture
+}
+
+#[test]
+fn default_history_streams_to_eof_without_more_viewport_requests() {
+    let fixture = history_fixture(2500);
+    let config = gitk_rs::cli::parse([]).unwrap();
+    assert_eq!(config.batch, None);
+    let mut request = history_request(&fixture);
+    request.batch = config.batch;
+    let engine = HistoryEngine::spawn(request);
+    let handle = engine.handle();
+    let snapshot = wait(|| handle.take_snapshot().filter(|s| s.eof));
+    assert!(snapshot.error.is_none());
+    assert_eq!(snapshot.loaded, 2500);
+    assert_eq!(snapshot.visible, 2500);
+    assert_eq!(snapshot.rows.len(), 8);
+    assert_eq!(snapshot.rows[0].commit.summary(), "commit 2500");
+}
+
+#[test]
+fn large_cli_limit_prefetches_beyond_worker_chunk_size_and_pauses() {
+    let fixture = history_fixture(12_050);
+    let config = gitk_rs::cli::parse(["--limit".into(), "10001".into()]).unwrap();
+    let mut request = history_request(&fixture);
+    request.batch = config.batch;
+    let engine = HistoryEngine::spawn(request.clone());
+    let handle = engine.handle();
+    let snapshot = wait(|| handle.take_snapshot().filter(|s| s.loaded >= 10_001));
+    assert!(snapshot.error.is_none());
+    assert_eq!(snapshot.loaded, 10_001);
+    assert!(!snapshot.eof);
+    thread::sleep(Duration::from_millis(100));
+    if let Some(paused) = handle.take_snapshot() {
+        assert_eq!(paused.loaded, 10_001);
+    }
+
+    // A million-commit request on a smaller repository must reach real Git EOF.
+    let config = gitk_rs::cli::parse(["--limit".into(), "1000000".into()]).unwrap();
+    request.id += 1;
+    request.batch = config.batch;
+    handle.request(request.clone());
+    let snapshot = wait(|| {
+        handle
+            .take_snapshot()
+            .filter(|s| s.request_id == request.id && s.eof)
+    });
+    assert!(snapshot.error.is_none());
+    assert_eq!(snapshot.loaded, 12_050);
+    assert_eq!(snapshot.visible, 12_050);
+    request.id += 1;
+    request.range = 12_049..12_050;
+    handle.request(request.clone());
+    let snapshot = wait(|| {
+        handle
+            .take_snapshot()
+            .filter(|s| s.request_id == request.id)
+    });
+    assert_eq!(snapshot.rows[0].commit.summary(), "root-only needle");
+}
+
+#[test]
+fn demand_pauses_history_then_filter_streams_further_and_generation_switches() {
+    let fixture = history_fixture(96);
     let mut request = history_request(&fixture);
     let engine = HistoryEngine::spawn(request.clone());
     let handle = engine.handle();

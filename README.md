@@ -44,8 +44,14 @@ loaded commit, / to filter, and Space/Backspace to page through a diff.
 Ctrl+O opens a repository, Ctrl+B switches branches, and F5 reloads. On macOS,
 Cmd also works for repository commands, history paging, copying, diff selection,
 font preferences, and quitting. Press F1 or ? for all shortcuts.
-While filtering commits or branches, Alt+J/K selects the next/previous item
-without leaving the input.
+Alt+J/K selects the next/previous commit from the commit list, diff, or search box
+without changing focus. In the branch filter, it selects the next/previous branch.
+
+History streams in the background until the whole repository history is loaded.
+For lower memory use, `--limit N` opts into loading history on demand in batches
+of N commits. For example, `gitk-rs --limit 1000 ~/Projects/nixpkgs` initially
+prefetches 1000 commits; browsing further loads more. Filtering can scan the full
+history, and loaded commits remain in memory, so this is not a hard memory cap.
 
 For command-line options:
 
