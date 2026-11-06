@@ -27,7 +27,7 @@ use gpui_kit::component::{
     input::{Input, InputEvent, InputState},
     menu::{ContextMenuExt, DropdownMenu, PopupMenuItem},
     resizable::{resizable_panel, v_resizable},
-    scroll::{Scrollbar, ScrollbarMode},
+    scroll::{ScrollableElement, Scrollbar, ScrollbarMode},
     tooltip::Tooltip,
 };
 use gpui_kit::{
@@ -945,6 +945,46 @@ pub(crate) fn fixed_font() -> &'static str {
     }
 }
 
+// Give tooltip text a concrete wrapping width; max-width on a flex popup alone
+// does not constrain its content. Leave room for popup padding and viewport edges.
+fn wrapped_tooltip(
+    text: impl Into<SharedString>,
+    window: &mut Window,
+    cx: &mut App,
+) -> gpui_kit::AnyView {
+    let text = text.into();
+    let width = (window.viewport_size().width - px(64.)).clamp(px(40.), px(480.));
+    let content_width = width - px(18.);
+    let max_height = (window.viewport_size().height - px(64.)).max(px(24.));
+    Tooltip::element(move |_, _| {
+        div()
+            .id("tooltip-layout")
+            .test_support()
+            .occlude()
+            .on_scroll(|_, _, cx| cx.stop_propagation())
+            .w(content_width)
+            .child(
+                div()
+                    .w_full()
+                    .max_h(max_height)
+                    .child(
+                        div()
+                            .id("tooltip-text")
+                            .test_support()
+                            .w_full()
+                            .pr_3()
+                            .whitespace_normal()
+                            .child(text.clone()),
+                    )
+                    .overflow_y_scrollbar()
+                    .scroll_bounce(false),
+            )
+    })
+    .w(width)
+    .whitespace_normal()
+    .build(window, cx)
+}
+
 fn paint_graph(
     graph: &GraphRow,
     filtered: bool,
@@ -1296,16 +1336,15 @@ impl Render for HistoryWindow {
                                             .child(
                                                 div()
                                                     .id("graph-heading")
+                                                    .test_support()
                                                     .relative()
                                                     .w(px(self.graph_width))
                                                     .flex_shrink_0()
                                                     .px_2()
                                                     .child(if self.graph_layout.has_collapsed() { "Graph · … idle lanes" } else { "Graph" })
                                                     .when(self.graph_layout.has_collapsed(), |heading| {
-                                                        heading.tooltip(|window, cx| {
-                                                            Tooltip::new("Idle lanes are history lines with no commit, branch, or merge junction in the visible rows. They are grouped into a dashed column to save space; commit dots and junctions stay separate.")
-                                                                .max_w(px(360.))
-                                                                .build(window, cx)
+                                                        heading.hoverable_tooltip(|window, cx| {
+                                                            wrapped_tooltip("Idle lanes are history lines with no commit, branch, or merge junction in the visible rows. They are grouped into a dashed column to save space; commit dots and junctions stay separate.", window, cx)
                                                         })
                                                     })
                                                     .child(div().id("graph-divider").test_support()
@@ -1383,10 +1422,8 @@ impl Render for HistoryWindow {
                     .px_2()
                     .py_1()
                     .child(status.clone())
-                    .tooltip(move |window, cx| {
-                        Tooltip::new(status.clone())
-                            .max_w(px(480.))
-                            .build(window, cx)
+                    .hoverable_tooltip(move |window, cx| {
+                        wrapped_tooltip(status.clone(), window, cx)
                     }),
             )
             .when(self.dialog.is_some(), |root| {

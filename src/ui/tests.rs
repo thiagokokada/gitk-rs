@@ -1063,3 +1063,108 @@ fn dialog_scrollbars_and_wheel_events_are_isolated_from_history(cx: &mut TestApp
         "history must scroll again after closing the dialog"
     );
 }
+
+#[gpui_kit::test]
+fn status_and_idle_lane_tooltips_wrap_inside_the_window(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let tip = fixture.commit("tip");
+    let (app, cx) = open(&fixture, cx);
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            let view = app.view.read(cx);
+            view.workspace_snapshot.is_some()
+                && view
+                    .selected
+                    .as_ref()
+                    .is_some_and(|(_, entry)| entry.commit.id.as_str() == tip)
+                && view.snapshot.as_ref().is_some_and(|snapshot| {
+                    snapshot.eof
+                        && snapshot.generation == view.request.generation
+                        && snapshot.request_id == view.request.id
+                })
+        })
+    });
+    app.view.update(cx, |view, cx| {
+        // A continuation-only lane exercises the production folded-lane heading.
+        let entry = &mut view.snapshot.as_mut().unwrap().rows[0];
+        let mut row = Entry {
+            ordinal: entry.ordinal,
+            commit: entry.commit.clone(),
+            graph: entry.graph.clone(),
+        };
+        row.graph.width = 2;
+        row.graph.edges = vec![gitk_rs::graph::Edge {
+            from: 1,
+            to: 1,
+            parent: false,
+            color: 1,
+        }]
+        .into_boxed_slice();
+        *entry = Arc::new(row);
+        view.operation_message =
+            "branch switched; details for /CaseSensitive/Repository.git ".repeat(6);
+        cx.notify();
+    });
+    for dimensions in [size(px(1280.), px(850.)), size(px(740.), px(500.))] {
+        cx.simulate_resize(dimensions);
+        cx.refresh().unwrap();
+        assert!(cx.update(|_, cx| app.view.read(cx).graph_layout.has_collapsed()));
+        for trigger in ["history-status", "graph-heading"] {
+            cx.simulate_mouse_move(point(px(1.), px(1.)), None, gpui_kit::Modifiers::default());
+            cx.background_executor.advance_clock(Duration::from_secs(1));
+            cx.run_until_parked();
+            cx.refresh().unwrap();
+            cx.update(|window, cx| window.hover(trigger, cx));
+            until(cx, |cx| {
+                cx.update(|window, _| window.try_find("tooltip-layout").is_some())
+            });
+            // Finish placement and entrance animation before checking geometry.
+            cx.background_executor.advance_clock(Duration::from_secs(1));
+            cx.run_until_parked();
+            cx.refresh().unwrap();
+            cx.update(|window, _| {
+                let popup = window.find("tooltip-layout").bounds();
+                let text = window.find("tooltip-text").bounds();
+                assert!(popup.left() >= px(4.) && popup.top() >= px(4.));
+                assert!(popup.right() <= dimensions.width - px(4.));
+                assert!(popup.bottom() <= dimensions.height - px(4.));
+                assert!(
+                    text.size.height > px(24.),
+                    "long tooltip must wrap onto multiple lines"
+                );
+                assert!(text.right() <= popup.right());
+                assert!(text.bottom() <= popup.bottom());
+            });
+        }
+    }
+    // Very long diagnostics stay within the viewport and can be read by scrolling.
+    cx.simulate_mouse_move(point(px(1.), px(1.)), None, gpui_kit::Modifiers::default());
+    cx.background_executor.advance_clock(Duration::from_secs(1));
+    cx.run_until_parked();
+    app.view.update(cx, |view, cx| {
+        view.operation_message =
+            "long diagnostic with /CaseSensitive/Repository.git details ".repeat(100);
+        cx.notify();
+    });
+    cx.refresh().unwrap();
+    cx.update(|window, cx| window.hover("history-status", cx));
+    until(cx, |cx| {
+        cx.update(|window, _| window.try_find("tooltip-layout").is_some())
+    });
+    let before = cx.update(|window, _| {
+        let popup = window.find("tooltip-layout").bounds();
+        let text = window.find("tooltip-text").bounds();
+        assert!(popup.top() >= px(4.) && popup.bottom() <= window.viewport_size().height - px(4.));
+        assert!(text.size.height > popup.size.height);
+        text.origin.y
+    });
+    cx.update(|window, cx| {
+        window.scroll(
+            "tooltip-layout",
+            gpui_kit::ScrollDelta::Pixels(point(px(0.), px(-4000.))),
+            cx,
+        )
+    });
+    cx.refresh().unwrap();
+    cx.update(|window, _| assert!(window.find("tooltip-text").bounds().origin.y < before));
+}
