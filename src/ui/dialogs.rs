@@ -347,8 +347,15 @@ impl HistoryWindow {
                         body.child(self.operation_message.clone())
                     })
                     .child(
-                        Button::new("apply-preferences")
-                            .label("Apply and save")
+                        div()
+                            .id("apply-preferences")
+                            .flex_shrink_0()
+                            .test_support()
+                            .px_3()
+                            .py_2()
+                            .bg(rgb(palette.dialog_button))
+                            .cursor_pointer()
+                            .child("Apply and save")
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.apply_preferences(window, cx)
                             })),
