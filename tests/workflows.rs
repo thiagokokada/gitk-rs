@@ -83,7 +83,7 @@ fn history_request(fixture: &Fixture) -> Request {
         repository: fixture.root().into(),
         range: 0..8,
         query: String::new(),
-        batch: 7,
+        batch: Some(7),
         graph_columns: 200,
         anchor: None,
         restore: None,
@@ -203,6 +203,23 @@ fn history_fixture(count: usize) -> Fixture {
         String::from_utf8_lossy(&imported.stderr)
     );
     fixture
+}
+
+#[test]
+fn default_history_streams_to_eof_without_more_viewport_requests() {
+    let fixture = history_fixture(2500);
+    let config = gitk_rs::cli::parse([]).unwrap();
+    assert_eq!(config.batch, None);
+    let mut request = history_request(&fixture);
+    request.batch = config.batch;
+    let engine = HistoryEngine::spawn(request);
+    let handle = engine.handle();
+    let snapshot = wait(|| handle.take_snapshot().filter(|s| s.eof));
+    assert!(snapshot.error.is_none());
+    assert_eq!(snapshot.loaded, 2500);
+    assert_eq!(snapshot.visible, 2500);
+    assert_eq!(snapshot.rows.len(), 8);
+    assert_eq!(snapshot.rows[0].commit.summary(), "commit 2500");
 }
 
 #[test]

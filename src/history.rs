@@ -27,7 +27,9 @@ pub struct Request {
     pub repository: PathBuf,
     pub range: Range<usize>,
     pub query: String,
-    pub batch: usize,
+    /// None streams to EOF; Some(N) pauses after satisfying browsing demand in
+    /// batches of N. Worker steps and the snapshot mailbox stay bounded either way.
+    pub batch: Option<usize>,
     pub graph_columns: usize,
     pub anchor: Option<usize>,
     pub restore: Option<Restore>,
@@ -369,7 +371,7 @@ impl Session {
         }
         // Publish a small first viewport before ref discovery or further batches.
         if self.entries.is_empty() && !self.eof {
-            self.load(request.batch.clamp(1, 64), 64)?;
+            self.load(request.batch.unwrap_or(1000).clamp(1, 64), 64)?;
             return Ok(true);
         }
         if !self.refs_loaded || self.refs_revision != request.refs_revision {
@@ -380,14 +382,18 @@ impl Session {
         }
         // The requested batch controls prefetch demand, not the size of one
         // worker step. Publish bounded chunks even when --limit is very large.
-        let batch = request.batch.max(1);
+        let batch = request.batch.unwrap_or(1000).max(1);
         let step = batch.min(10000);
-        let needed = request
-            .range
-            .end
-            .saturating_add(64)
-            .div_ceil(batch)
-            .saturating_mul(batch);
+        let needed = if request.batch.is_none() {
+            usize::MAX
+        } else {
+            request
+                .range
+                .end
+                .saturating_add(64)
+                .div_ceil(batch)
+                .saturating_mul(batch)
+        };
         let visible = self.visible_count();
         if self.restore_pending() {
             self.load(step, usize::MAX)?;
@@ -587,7 +593,7 @@ mod tests {
             repository: fixture.root().to_owned(),
             range: 0..10,
             query: String::new(),
-            batch: 1000,
+            batch: Some(1000),
             graph_columns: 200,
             anchor: None,
             restore: None,
@@ -614,7 +620,7 @@ mod tests {
             repository: repository.into(),
             range: 0..1,
             query: String::new(),
-            batch: count,
+            batch: Some(count),
             graph_columns: 200,
             anchor: None,
             restore: None,

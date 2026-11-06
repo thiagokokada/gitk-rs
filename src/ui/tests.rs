@@ -15,9 +15,19 @@ pub(super) fn open<'a>(
     fixture: &Fixture,
     cx: &'a mut TestAppContext,
 ) -> (Harness, &'a mut VisualTestContext) {
+    // Preserve partial-loading fixtures for scrolling/restoration tests.
+    open_with_batch(fixture, Some(1000), cx)
+}
+
+fn open_with_batch<'a>(
+    fixture: &Fixture,
+    batch: Option<usize>,
+    cx: &'a mut TestAppContext,
+) -> (Harness, &'a mut VisualTestContext) {
     let config = Config {
         repository: fixture.root().into(),
         watch: false,
+        batch,
         ..Config::default()
     };
     let request = Request {
@@ -149,6 +159,38 @@ fn history_fixture(count: usize) -> Fixture {
         String::from_utf8_lossy(&result.stderr)
     );
     fixture
+}
+
+#[gpui_kit::test]
+fn default_streaming_loads_history_and_keeps_navigation_and_search_working(
+    cx: &mut TestAppContext,
+) {
+    let fixture = history_fixture(2500);
+    let tip = fixture.git(&["rev-parse", "HEAD"]);
+    let (app, cx) = open_with_batch(&fixture, Config::default().batch, cx);
+    until(cx, |cx| {
+        cx.update(|_, cx| app.view.read(cx).snapshot.as_ref().is_some_and(|s| s.eof))
+    });
+    assert_eq!(
+        cx.update(|_, cx| app.view.read(cx).snapshot.as_ref().unwrap().loaded),
+        2500
+    );
+    assert_eq!(selected(&app.view, cx).as_deref(), Some(tip.as_str()));
+    cx.simulate_keystrokes("alt-j");
+    assert_ne!(selected(&app.view, cx).as_deref(), Some(tip.as_str()));
+    cx.simulate_keystrokes("alt-k");
+    assert_eq!(selected(&app.view, cx).as_deref(), Some(tip.as_str()));
+    cx.simulate_keystrokes("/");
+    cx.simulate_input("commit 1234");
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            app.view
+                .read(cx)
+                .snapshot
+                .as_ref()
+                .is_some_and(|s| s.visible == 1 && s.rows[0].commit.summary() == "commit 1234")
+        })
+    });
 }
 
 #[gpui_kit::test]

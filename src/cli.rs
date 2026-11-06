@@ -12,7 +12,7 @@ pub struct Config {
     pub repository: PathBuf,
     pub theme: Theme,
     pub timings: bool,
-    pub batch: usize,
+    pub batch: Option<usize>,
     pub graph_columns: usize,
     pub text_graph: bool,
     pub syntax: bool,
@@ -26,7 +26,7 @@ impl Default for Config {
             repository: PathBuf::from("."),
             theme: Theme::Dark,
             timings: false,
-            batch: 1000,
+            batch: None,
             graph_columns: 200,
             text_graph: false,
             syntax: true,
@@ -51,9 +51,9 @@ struct Args {
     #[arg(long)]
     timings: bool,
 
-    /// Prefetch commits in batches of N (history continues loading as you browse)
-    #[arg(long, value_name = "N", default_value = "1000")]
-    limit: NonZeroUsize,
+    /// Opt into batches of N instead of streaming all history (browsing loads more)
+    #[arg(long, value_name = "N")]
+    limit: Option<NonZeroUsize>,
 
     /// Visible graph lane cap (1..200)
     #[arg(long, value_name = "N", default_value = "200", value_parser = clap::value_parser!(u16).range(1..=200))]
@@ -84,7 +84,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Config, clap::E
         repository: args.repository,
         theme: args.mode,
         timings: args.timings,
-        batch: args.limit.get(),
+        batch: args.limit.map(NonZeroUsize::get),
         graph_columns: usize::from(args.graph_cols),
         text_graph: args.text_graph,
         syntax: !args.nosyntax,
@@ -153,7 +153,7 @@ mod tests {
                 repository: "repo with spaces".into(),
                 theme: Theme::Light,
                 timings: true,
-                batch: 42,
+                batch: Some(42),
                 graph_columns: 1,
                 text_graph: true,
                 syntax: false,
