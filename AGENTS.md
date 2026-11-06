@@ -81,7 +81,8 @@ nix develop --command env \
   cargo test --lib profile_retained_history --locked -- --ignored --nocapture
 ```
 
-- Compare the same repository HEAD, loaded count, and graph lane cap (200).
+- Compare the same repository HEAD, loaded count, and graph lane cap
+  (default 256, configurable with --graph-cols up to 1024; printed by the probe).
   Accounted retained bytes exclude allocator/runtime overhead. Linux RSS reports
   the history-only test process and live children separately; these are neither
   desktop nor peak-memory measurements. Git may have exited at EOF.

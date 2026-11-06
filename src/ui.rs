@@ -11,7 +11,7 @@ use font_preferences::{FontCatalogGeneration, FontChoices};
 use gitk_rs::{
     cli::{Config, Theme},
     diff::{DiffEngine, DiffHandle, DiffSettings},
-    graph::{GraphLayout, GraphRow, text_graph},
+    graph::{GraphLayout, GraphRow, MAX_GRAPH_LANES, text_graph},
     history::{
         Entry, Generation, HistoryEngine, HistoryHandle, RefKind, Request,
         Restore as HistoryRestore, Snapshot,
@@ -1055,7 +1055,7 @@ fn paint_graph(
     let stroke = 1.5;
     let middle = bounds.top() + bounds.size.height / 2.;
     if !filtered {
-        let mut folded = [false; 200];
+        let mut folded = [false; MAX_GRAPH_LANES];
         for edge in graph.edges.iter() {
             if layout.is_collapsed(edge.from) && layout.is_collapsed(edge.to) {
                 let column = layout.column(edge.from);

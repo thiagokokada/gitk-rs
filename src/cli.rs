@@ -1,3 +1,4 @@
+use crate::graph::{DEFAULT_GRAPH_LANES, MAX_GRAPH_LANES};
 use clap::{Parser, ValueEnum};
 use std::{ffi::OsString, num::NonZeroUsize, path::PathBuf};
 
@@ -27,7 +28,7 @@ impl Default for Config {
             theme: Theme::Dark,
             timings: false,
             batch: None,
-            graph_columns: 200,
+            graph_columns: DEFAULT_GRAPH_LANES,
             text_graph: false,
             syntax: true,
             watch: true,
@@ -55,8 +56,8 @@ struct Args {
     #[arg(long, value_name = "N")]
     limit: Option<NonZeroUsize>,
 
-    /// Visible graph lane cap (1..200)
-    #[arg(long, value_name = "N", default_value = "200", value_parser = clap::value_parser!(u16).range(1..=200))]
+    /// Logical graph lane cap before idle columns are folded (1..1024)
+    #[arg(long, value_name = "N", default_value_t = DEFAULT_GRAPH_LANES as u16, value_parser = clap::value_parser!(u16).range(1..=MAX_GRAPH_LANES as i64))]
     graph_cols: u16,
 
     /// Use a text graph instead of canvas geometry
@@ -173,7 +174,7 @@ mod tests {
             &["--limit", "999999999999999999999999999999"],
             &["--graph-cols"],
             &["--graph-cols", "0"],
-            &["--graph-cols", "201"],
+            &["--graph-cols", "1025"],
             &["--graph-cols", "65536"],
         ] {
             assert!(
@@ -181,7 +182,13 @@ mod tests {
                 "accepted invalid arguments: {args:?}"
             );
         }
-        assert!(command(&["--limit", "1", "--graph-cols", "200"]).is_ok());
+        for value in ["1", "256", "512", "1024"] {
+            assert_eq!(
+                command(&["--graph-cols", value]).unwrap().graph_columns,
+                value.parse::<usize>().unwrap()
+            );
+        }
+        assert_eq!(command(&[]).unwrap().graph_columns, 256);
     }
 
     #[test]

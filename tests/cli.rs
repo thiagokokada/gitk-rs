@@ -19,6 +19,8 @@ fn help_and_version_exit_successfully_on_stdout() {
         let help = String::from_utf8(output.stdout).unwrap();
         assert!(help.contains("Usage: gitk-rs"));
         assert!(help.contains("--graph-cols"));
+        assert!(help.contains("1..1024"));
+        assert!(help.contains("[default: 256]"));
         assert!(help.contains("--nowatch"));
     }
     let revision = gitk_rs::VERSION
@@ -45,7 +47,7 @@ fn invalid_arguments_exit_with_diagnostics_on_stderr() {
         &["--unknown"][..],
         &["--mode", "blue"],
         &["--limit", "0"],
-        &["--graph-cols", "201"],
+        &["--graph-cols", "1025"],
         &["one", "two"],
     ] {
         let output = run(args);

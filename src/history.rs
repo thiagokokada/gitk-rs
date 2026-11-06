@@ -594,7 +594,7 @@ mod tests {
             range: 0..10,
             query: String::new(),
             batch: Some(1000),
-            graph_columns: 200,
+            graph_columns: crate::graph::DEFAULT_GRAPH_LANES,
             anchor: None,
             restore: None,
         }
@@ -621,7 +621,7 @@ mod tests {
             range: 0..1,
             query: String::new(),
             batch: Some(count),
-            graph_columns: 200,
+            graph_columns: crate::graph::DEFAULT_GRAPH_LANES,
             anchor: None,
             restore: None,
         };
@@ -651,7 +651,8 @@ mod tests {
             + session.matches.capacity() * size_of::<usize>()
             + session.strings.capacity() * (size_of::<Arc<str>>() + 1);
         eprintln!(
-            "history_probe loaded={} eof={} elapsed_ms={} records_bytes={records} metadata_bytes={metadata} messages_bytes={messages} graph_bytes={graph} index_bytes={index} accounted_bytes={}",
+            "history_probe graph_lanes={} loaded={} eof={} elapsed_ms={} records_bytes={records} metadata_bytes={metadata} messages_bytes={messages} graph_bytes={graph} index_bytes={index} accounted_bytes={}",
+            request.graph_columns,
             session.entries.len(),
             session.eof,
             started.elapsed().as_millis(),

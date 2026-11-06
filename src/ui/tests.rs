@@ -1696,3 +1696,49 @@ fn shortcuts_keyboard_scrolls_lines_pages_and_boundaries_without_moving_history(
         "arrow keys must return to history navigation after closing help"
     );
 }
+
+#[gpui_kit::test]
+fn graph_paints_a_folded_column_at_the_maximum_lane_limit(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    fixture.commit("wide graph");
+    let (app, cx) = open(&fixture, cx);
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            let view = app.view.read(cx);
+            view.snapshot
+                .as_ref()
+                .is_some_and(|s| s.eof && s.request_id == view.request.id)
+        })
+    });
+    let last = MAX_GRAPH_LANES as u16 - 1;
+    app.view.update(cx, |view, cx| {
+        let snapshot = view.snapshot.as_mut().unwrap();
+        let entry = &snapshot.rows[0];
+        let graph = GraphRow {
+            node: Some(0),
+            width: MAX_GRAPH_LANES as u16,
+            edges: (0..=last)
+                .map(|lane| gitk_rs::graph::Edge {
+                    from: if lane == last { lane } else { 0 },
+                    to: lane,
+                    parent: lane != last,
+                    color: (lane % 6) as u8,
+                })
+                .collect(),
+            ..GraphRow::default()
+        };
+        snapshot.rows[0] = Arc::new(Entry {
+            ordinal: entry.ordinal,
+            commit: entry.commit.clone(),
+            graph,
+        });
+        view.graph_layout = GraphLayout::new([&snapshot.rows[0].graph], view.graph_width);
+        cx.notify();
+    });
+    cx.refresh().unwrap();
+    cx.update(|_, cx| {
+        let layout = &app.view.read(cx).graph_layout;
+        assert_eq!(layout.column(last), last as usize);
+        assert!(layout.is_collapsed(last));
+    });
+}
