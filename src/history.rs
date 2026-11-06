@@ -376,7 +376,10 @@ impl Session {
             self.refs_revision = request.refs_revision;
             return Ok(true);
         }
-        let batch = request.batch.clamp(1, 10000);
+        // The requested batch controls prefetch demand, not the size of one
+        // worker step. Publish bounded chunks even when --limit is very large.
+        let batch = request.batch.max(1);
+        let step = batch.min(10000);
         let needed = request
             .range
             .end
@@ -385,11 +388,11 @@ impl Session {
             .saturating_mul(batch);
         let visible = self.visible_count();
         if self.restore_pending() {
-            self.load(batch, usize::MAX)?;
+            self.load(step, usize::MAX)?;
             return Ok(true);
         }
         if !self.eof && visible < needed {
-            self.load(batch, needed)?;
+            self.load(step, needed)?;
             return Ok(true);
         }
         Ok(false)

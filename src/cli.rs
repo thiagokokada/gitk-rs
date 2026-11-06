@@ -51,7 +51,7 @@ struct Args {
     #[arg(long)]
     timings: bool,
 
-    /// Maximum commits per background batch
+    /// Prefetch commits in batches of N (history continues loading as you browse)
     #[arg(long, value_name = "N", default_value = "1000")]
     limit: NonZeroUsize,
 

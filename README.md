@@ -47,6 +47,10 @@ font preferences, and quitting. Press F1 or ? for all shortcuts.
 Alt+J/K selects the next/previous commit from the commit list, diff, or search box
 without changing focus. In the branch filter, it selects the next/previous branch.
 
+`--limit N` sets the history prefetch batch size (default: 1000), rather than a
+total history cap. For example, `gitk-rs --limit 1000000 ~/Projects/nixpkgs`
+prefetches up to one million commits incrementally; browsing further loads more.
+
 For command-line options:
 
 ```sh
