@@ -323,6 +323,7 @@ fn deep_reload_keeps_selected_commit_and_top_visible_commit(cx: &mut TestAppCont
         cx.update(|_, cx| {
             let view = app.view.read(cx);
             view.reload_selection.is_none()
+                && view.workspace_snapshot.is_some()
                 && view.snapshot.as_ref().is_some_and(|s| s.branch == "side")
                 && view
                     .cached(view.viewport.start)
