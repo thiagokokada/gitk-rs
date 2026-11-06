@@ -3,7 +3,7 @@
 ![Icon](resources/icons/gitk-rs.svg)
 
 A lightweight Git history explorer for Linux and macOS, written in Rust with
-[GPUI Kit](https://gpui-kit.com/).
+[GPUI](https://gpui.rs/).
 
 ![Screenshot](screenshot.png)
 
@@ -60,11 +60,6 @@ font_size = 13.0
 ```
 
 ## Development
-
-The UI depends on pinned GPUI Kit 0.9.0, which supplies the matching GPUI
-snapshot, styled components, and assets. Its platform layer enables X11 and
-Wayland on Linux and runtime Metal shaders on macOS. Headless UI tests use
-Kit's `test-support` feature. No vendored compatibility patches are needed.
 
 ### Building
 
