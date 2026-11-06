@@ -32,7 +32,6 @@ let
         (lib.fileset.fromSource (craneLib.cleanCargoSource ./.))
         ./LICENSE
         ./resources
-        ./vendor
       ];
     };
     strictDeps = true;
@@ -75,12 +74,6 @@ let
     commonArgs
     // {
       cargoTestExtraArgs = "--all-targets --no-run";
-      # Registry crates need the real API of this patched local dependency.
-      # Keep it intact while Crane stubs the application's sources.
-      extraDummyScript = ''
-        rm -r "$out/vendor/xattr"
-        cp -r ${./vendor/xattr} "$out/vendor/xattr"
-      '';
     }
   );
 in

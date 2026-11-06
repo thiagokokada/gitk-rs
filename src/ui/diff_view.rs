@@ -9,12 +9,12 @@ use gitk_rs::{
     },
     git::Commit,
 };
-use gpui::{prelude::*, *};
-use gpui_component::{
+use gpui_kit::component::{
     menu::{ContextMenuExt, PopupMenuItem},
     resizable::{h_resizable, resizable_panel},
-    scroll::{Scrollbar, ScrollbarShow},
+    scroll::{Scrollbar, ScrollbarMode},
 };
+use gpui_kit::{prelude::*, *};
 use std::{
     cell::RefCell, collections::HashMap, ops::Range, path::PathBuf, rc::Rc, sync::Arc,
     time::Duration,
@@ -22,7 +22,7 @@ use std::{
 use unicode_segmentation::UnicodeSegmentation;
 
 actions!(
-    diff,
+    gitk_diff,
     [
         Copy, CopyCode, SelectAll, PageDown, PageUp, LinesDown, LinesUp
     ]
@@ -388,7 +388,7 @@ impl DiffPane {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, event: &MouseDownEvent, window, cx| {
-                    this.focus.focus(window);
+                    this.focus.focus(window, cx);
                     let point = this.hit(index, event.position);
                     if event.click_count >= 3 {
                         let len = this
@@ -507,7 +507,14 @@ impl DiffPane {
                                 rgba(0x4285f4aa),
                             ));
                         }
-                        let _ = layout.shaped.paint(bounds.origin, line_height, window, cx);
+                        let _ = layout.shaped.paint(
+                            bounds.origin,
+                            line_height,
+                            TextAlign::Left,
+                            None,
+                            window,
+                            cx,
+                        );
                     },
                 )
                 .size_full(),
@@ -593,7 +600,7 @@ impl Render for DiffPane {
                                             )
                                             .with_width_from_item(Some(self.viewport.start))
                                             .with_decoration(DiffViewport(cx.entity()))
-                                            .track_scroll(self.scroll.clone())
+                                            .track_scroll(&self.scroll)
                                             .with_horizontal_sizing_behavior(
                                                 ListHorizontalSizingBehavior::Unconstrained,
                                             )
@@ -602,7 +609,7 @@ impl Render for DiffPane {
                                         .child(
                                             div().absolute().top_0().left_0().size_full().child(
                                                 Scrollbar::new(&self.scroll)
-                                                    .scrollbar_show(ScrollbarShow::Always)
+                                                    .mode(ScrollbarMode::Always)
                                                     .id("diff-scrollbar"),
                                             ),
                                         ),
@@ -725,7 +732,7 @@ impl Render for DiffPane {
                                                 .collect::<Vec<_>>()
                                         }),
                                     )
-                                    .track_scroll(self.files_scroll.clone())
+                                    .track_scroll(&self.files_scroll)
                                     .size_full(),
                                 )
                                 .child(
@@ -737,7 +744,7 @@ impl Render for DiffPane {
                                         .debug_selector(|| "files-scrollbar".into())
                                         .child(
                                             Scrollbar::vertical(&self.files_scroll)
-                                                .scrollbar_show(ScrollbarShow::Always)
+                                                .mode(ScrollbarMode::Always)
                                                 .id("files-scrollbar"),
                                         ),
                                 ),

@@ -1,5 +1,5 @@
 use super::*;
-use gpui::{TestAppContext, VisualTestContext};
+use gpui_kit::{TestAppContext, VisualTestContext};
 #[path = "../test_support.rs"]
 mod test_support;
 pub(super) use test_support::Fixture;
@@ -40,8 +40,8 @@ pub(super) fn open<'a>(
     });
     let diff = DiffEngine::spawn();
     cx.update(|cx| {
-        gpui_component::init(cx);
-        gpui_component::Theme::change(ThemeMode::Dark, None, cx);
+        gpui_kit::init(cx);
+        gpui_kit::component::Theme::change(ThemeMode::Dark, None, cx);
         bind_keys(cx);
     });
     let mut view = None;
@@ -62,7 +62,7 @@ pub(super) fn open<'a>(
             )
         });
         view = Some(entity.clone());
-        Root::new(entity, window, cx)
+        gpui_kit::base::Root::new(entity, window, cx)
     });
     cx.simulate_resize(size(px(1280.), px(850.)));
     (
@@ -151,7 +151,7 @@ fn history_fixture(count: usize) -> Fixture {
     fixture
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn history_pages_settle_after_scrolling_beyond_the_first_page(cx: &mut TestAppContext) {
     let fixture = history_fixture(2500);
     let (app, cx) = open(&fixture, cx);
@@ -168,7 +168,7 @@ fn history_pages_settle_after_scrolling_beyond_the_first_page(cx: &mut TestAppCo
     assert!(scrollbar.size.height > px(50.));
     cx.simulate_click(
         point(scrollbar.right() - px(8.), scrollbar.bottom() - px(2.)),
-        gpui::Modifiers::default(),
+        gpui_kit::Modifiers::default(),
     );
     until(cx, |cx| {
         cx.update(|_, cx| app.view.read(cx).viewport.start > 500)
@@ -202,7 +202,7 @@ fn history_pages_settle_after_scrolling_beyond_the_first_page(cx: &mut TestAppCo
     }
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn consecutive_reload_before_layout_preserves_the_restored_top_commit(cx: &mut TestAppContext) {
     let fixture = history_fixture(100);
     let (app, cx) = open(&fixture, cx);
@@ -238,7 +238,7 @@ fn consecutive_reload_before_layout_preserves_the_restored_top_commit(cx: &mut T
     });
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn deep_reload_keeps_selected_commit_and_top_visible_commit(cx: &mut TestAppContext) {
     let fixture = history_fixture(2500);
     let (app, cx) = open(&fixture, cx);
@@ -386,7 +386,7 @@ fn deep_reload_keeps_selected_commit_and_top_visible_commit(cx: &mut TestAppCont
     );
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn filtering_and_new_local_rows_preserve_commit_identity(cx: &mut TestAppContext) {
     let fixture = history_fixture(2500);
     let (app, cx) = open(&fixture, cx);
@@ -456,7 +456,7 @@ fn filtering_and_new_local_rows_preserve_commit_identity(cx: &mut TestAppContext
     });
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn graph_column_can_be_resized_without_changing_selection(cx: &mut TestAppContext) {
     let fixture = Fixture::new();
     let tip = fixture.commit("tip");
@@ -464,23 +464,27 @@ fn graph_column_can_be_resized_without_changing_selection(cx: &mut TestAppContex
     until(cx, |cx| selected(&app.view, cx).as_deref() == Some(&tip));
     let divider = cx.debug_bounds("graph-divider").unwrap();
     let origin = divider.center();
-    cx.simulate_mouse_down(origin, gpui::MouseButton::Left, gpui::Modifiers::default());
+    cx.simulate_mouse_down(
+        origin,
+        gpui_kit::MouseButton::Left,
+        gpui_kit::Modifiers::default(),
+    );
     cx.simulate_mouse_move(
         origin + point(px(140.), px(0.)),
-        Some(gpui::MouseButton::Left),
-        gpui::Modifiers::default(),
+        Some(gpui_kit::MouseButton::Left),
+        gpui_kit::Modifiers::default(),
     );
     cx.simulate_mouse_up(
         origin + point(px(140.), px(0.)),
-        gpui::MouseButton::Left,
-        gpui::Modifiers::default(),
+        gpui_kit::MouseButton::Left,
+        gpui_kit::Modifiers::default(),
     );
     assert_eq!(cx.update(|_, cx| app.view.read(cx).graph_width), 420.);
     assert_eq!(selected(&app.view, cx).as_deref(), Some(tip.as_str()));
     assert!(cx.debug_bounds("graph-divider").unwrap().center().x > origin.x);
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn reload_control_toggles_watching_and_refreshes_history(cx: &mut TestAppContext) {
     let fixture = Fixture::new();
     let head = fixture.commit("base");
@@ -490,7 +494,7 @@ fn reload_control_toggles_watching_and_refreshes_history(cx: &mut TestAppContext
     });
     assert!(!cx.update(|_, cx| app.view.read(cx).config.watch));
     let button = cx.debug_bounds("reload-control").unwrap();
-    cx.simulate_click(button.center(), gpui::Modifiers::default());
+    cx.simulate_click(button.center(), gpui_kit::Modifiers::default());
     assert!(cx.update(|_, cx| app.view.read(cx).config.watch));
     until(cx, |cx| {
         cx.update(|_, cx| app.view.read(cx).reload_selection.is_none())
@@ -500,7 +504,7 @@ fn reload_control_toggles_watching_and_refreshes_history(cx: &mut TestAppContext
         cx.update(|_, cx| !app.view.read(cx).local_rows.is_empty())
     });
     let button = cx.debug_bounds("reload-control").unwrap();
-    cx.simulate_click(button.center(), gpui::Modifiers::default());
+    cx.simulate_click(button.center(), gpui_kit::Modifiers::default());
     assert!(!cx.update(|_, cx| app.view.read(cx).config.watch));
     until(cx, |cx| {
         cx.update(|_, cx| app.view.read(cx).reload_selection.is_none())
@@ -510,7 +514,7 @@ fn reload_control_toggles_watching_and_refreshes_history(cx: &mut TestAppContext
     assert!(cx.update(|_, cx| app.view.read(cx).config.watch));
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn keyboard_navigation_and_filter_focus(cx: &mut TestAppContext) {
     let fixture = Fixture::new();
     let older = fixture.commit("older needle");
@@ -549,7 +553,7 @@ fn keyboard_navigation_and_filter_focus(cx: &mut TestAppContext) {
     assert_eq!(selected(&app.view, cx).as_deref(), Some(newer.as_str()));
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn branch_protection_and_selected_ancestor_survive_switch(cx: &mut TestAppContext) {
     let fixture = Fixture::new();
     let ancestor = fixture.commit("ancestor");
@@ -601,7 +605,7 @@ fn branch_protection_and_selected_ancestor_survive_switch(cx: &mut TestAppContex
     assert_eq!(selected(&app.view, cx).as_deref(), Some(tip.as_str()));
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn repository_path_dialog_replaces_history_and_restores_navigation(cx: &mut TestAppContext) {
     let first = Fixture::new();
     let old = first.commit("old repository");
@@ -619,7 +623,7 @@ fn repository_path_dialog_replaces_history_and_restores_navigation(cx: &mut Test
     assert_eq!(selected(&app.view, cx).as_deref(), Some(base.as_str()));
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn workspace_changes_before_layout_preserve_the_top_commit(cx: &mut TestAppContext) {
     let fixture = history_fixture(100);
     let (app, cx) = open(&fixture, cx);
