@@ -1006,7 +1006,7 @@ impl Render for HistoryWindow {
             Theme::Light => (0xf5f6f8, 0x202329, 0xffffff, 0xc4c9d2),
         };
         let section = || div().bg(rgb(panel)).border_1().border_color(rgb(border));
-        let status = self.snapshot.as_ref().map_or_else(
+        let mut status = self.snapshot.as_ref().map_or_else(
             || "Loading commits…".into(),
             |s| {
                 if let Some(error) = &s.error {
@@ -1026,6 +1026,18 @@ impl Render for HistoryWindow {
                 )
             },
         );
+        if !self.operation_message.is_empty() && self.dialog.is_none() {
+            status.push_str("  — ");
+            status.push_str(&self.operation_message);
+        }
+        if let Some(error) = self
+            .workspace_snapshot
+            .as_ref()
+            .and_then(|s| s.watcher_error.as_deref())
+        {
+            status.push_str("  — ");
+            status.push_str(error);
+        }
         let count = self.snapshot.as_ref().map_or(0, |s| {
             self.local_rows.len() + s.visible + usize::from(!s.eof && s.error.is_none())
         });
@@ -1358,19 +1370,18 @@ impl Render for HistoryWindow {
             )
             .child(
                 section()
+                    .id("history-status")
+                    .test_support()
+                    .flex_shrink_0()
+                    .truncate()
                     .px_2()
                     .py_1()
-                    .child(status)
-                    .when(
-                        !self.operation_message.is_empty() && self.dialog.is_none(),
-                        |row| row.child(format!("  — {}", self.operation_message)),
-                    )
-                    .when_some(
-                        self.workspace_snapshot
-                            .as_ref()
-                            .and_then(|s| s.watcher_error.clone()),
-                        |row, error| row.child(format!("  — {error}")),
-                    ),
+                    .child(status.clone())
+                    .tooltip(move |window, cx| {
+                        Tooltip::new(status.clone())
+                            .max_w(px(480.))
+                            .build(window, cx)
+                    }),
             )
             .when(self.dialog.is_some(), |root| {
                 root.child(self.dialog_element(cx))

@@ -457,6 +457,32 @@ fn filtering_and_new_local_rows_preserve_commit_identity(cx: &mut TestAppContext
 }
 
 #[gpui_kit::test]
+fn status_messages_keep_one_line_at_narrow_widths(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let tip = fixture.commit("tip");
+    let (app, cx) = open(&fixture, cx);
+    until(cx, |cx| selected(&app.view, cx).as_deref() == Some(&tip));
+    let height = cx.update(|window, _| window.find("history-status").bounds().size.height);
+    for message in [
+        "Branch switched.".to_owned(),
+        "Long operation message ".repeat(30),
+    ] {
+        cx.update(|_, cx| {
+            app.view.update(cx, |view, cx| {
+                view.operation_message = message;
+                cx.notify();
+            });
+        });
+        cx.simulate_resize(size(px(740.), px(850.)));
+        cx.refresh().unwrap();
+        assert_eq!(
+            cx.update(|window, _| window.find("history-status").bounds().size.height),
+            height,
+        );
+    }
+}
+
+#[gpui_kit::test]
 fn graph_column_can_be_resized_without_changing_selection(cx: &mut TestAppContext) {
     let fixture = Fixture::new();
     let tip = fixture.commit("tip");
