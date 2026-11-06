@@ -85,12 +85,6 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Enable KVM for the GUI VM test
-        if: runner.os == 'Linux'
-        run: |
-          test -c /dev/kvm
-          sudo chmod a+rw /dev/kvm
-
       - uses: cachix/install-nix-action@v31
         with:
           extra_nix_config: ${{ runner.os == 'Linux' && 'extra-system-features = kvm nixos-test' || '' }}
