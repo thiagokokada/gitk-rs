@@ -476,6 +476,10 @@ const SHORTCUT_GROUPS: &[ShortcutGroup] = &[
     ShortcutGroup {
         title: "Filter box and text inputs",
         shortcuts: &[
+            (
+                "Alt+J / Alt+K",
+                "Select next / previous commit (history filter)",
+            ),
             ("Ctrl+A / Ctrl+E", "Move to start / end of line"),
             ("Ctrl+B / Ctrl+F", "Move back / forward one character"),
             ("Ctrl+W", "Delete word before cursor"),
@@ -487,8 +491,8 @@ const SHORTCUT_GROUPS: &[ShortcutGroup] = &[
     ShortcutGroup {
         title: "Branch dialog",
         shortcuts: &[
-            ("Up / Ctrl+P", "Select previous branch"),
-            ("Down / Ctrl+N", "Select next branch"),
+            ("Up / Ctrl+P / Alt+K", "Select previous branch"),
+            ("Down / Ctrl+N / Alt+J", "Select next branch"),
             ("Enter", "Switch to selected branch"),
             ("Type in filter", "Filter local branches"),
         ],

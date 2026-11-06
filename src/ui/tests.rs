@@ -1168,3 +1168,100 @@ fn status_and_idle_lane_tooltips_wrap_inside_the_window(cx: &mut TestAppContext)
     cx.refresh().unwrap();
     cx.update(|window, _| assert!(window.find("tooltip-text").bounds().origin.y < before));
 }
+
+#[gpui_kit::test]
+fn alt_list_navigation_preserves_filter_focus_and_emacs_editing(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let oldest = fixture.commit("match oldest");
+    let middle = fixture.commit("match middle");
+    let newest = fixture.commit("match newest");
+    fixture.git(&["branch", "match-a"]);
+    fixture.git(&["branch", "match-b"]);
+    let (app, cx) = open(&fixture, cx);
+    until(cx, |cx| selected(&app.view, cx).as_deref() == Some(&newest));
+    // macOS Option keys may also carry printable characters; bindings must consume them.
+    let (down, up) = if cfg!(target_os = "macos") {
+        ("alt-j->\u{2206}", "alt-k->\u{02da}")
+    } else {
+        ("alt-j", "alt-k")
+    };
+    cx.simulate_keystrokes("/");
+    cx.simulate_input("match");
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            let view = app.view.read(cx);
+            view.request.query == "match"
+                && view.snapshot.as_ref().is_some_and(|snapshot| {
+                    !snapshot.filtering
+                        && snapshot.generation == view.request.generation
+                        && snapshot.request_id == view.request.id
+                })
+        })
+    });
+    cx.simulate_keystrokes(down);
+    assert_eq!(selected(&app.view, cx).as_deref(), Some(middle.as_str()));
+    cx.simulate_keystrokes(down);
+    assert_eq!(selected(&app.view, cx).as_deref(), Some(oldest.as_str()));
+    cx.simulate_keystrokes(up);
+    assert_eq!(selected(&app.view, cx).as_deref(), Some(middle.as_str()));
+    assert!(cx.update(|window, cx| {
+        app.view
+            .read(cx)
+            .filter
+            .read(cx)
+            .focus_handle(cx)
+            .is_focused(window)
+    }));
+    assert_eq!(
+        cx.update(|_, cx| app.view.read(cx).filter.read(cx).value().to_string()),
+        "match"
+    );
+    cx.simulate_keystrokes("ctrl-a ctrl-k");
+    assert_eq!(
+        cx.update(|_, cx| app.view.read(cx).filter.read(cx).value().to_string()),
+        ""
+    );
+    cx.simulate_keystrokes("escape ctrl-b");
+    until(cx, |cx| {
+        cx.update(|_, cx| !app.view.read(cx).branches.is_empty())
+    });
+    cx.simulate_input("match");
+    assert_eq!(
+        cx.update(|_, cx| app.view.read(cx).filtered_branches.len()),
+        2
+    );
+    cx.simulate_keystrokes(down);
+    assert_eq!(cx.update(|_, cx| app.view.read(cx).branch_index), 1);
+    cx.simulate_keystrokes(up);
+    assert_eq!(cx.update(|_, cx| app.view.read(cx).branch_index), 0);
+    assert!(cx.update(|window, cx| {
+        app.view
+            .read(cx)
+            .branch_filter
+            .read(cx)
+            .focus_handle(cx)
+            .is_focused(window)
+    }));
+    assert_eq!(
+        cx.update(|_, cx| app.view.read(cx).branch_filter.read(cx).value().to_string()),
+        "match"
+    );
+    cx.simulate_keystrokes("ctrl-a ctrl-k");
+    assert_eq!(
+        cx.update(|_, cx| app.view.read(cx).branch_filter.read(cx).value().to_string()),
+        ""
+    );
+    cx.simulate_keystrokes("escape ctrl-shift-o ctrl-a ctrl-k");
+    cx.simulate_input("keep this path");
+    cx.simulate_keystrokes("alt-j alt-k");
+    assert_eq!(
+        cx.update(|_, cx| app
+            .view
+            .read(cx)
+            .repository_input
+            .read(cx)
+            .value()
+            .to_string()),
+        "keep this path"
+    );
+}

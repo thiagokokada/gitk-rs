@@ -31,10 +31,10 @@ use gpui_kit::component::{
     tooltip::Tooltip,
 };
 use gpui_kit::{
-    AnyElement, App, Bounds, Context, Entity, FocusHandle, KeyBinding, PathBuilder, ScrollHandle,
-    ScrollStrategy, SharedString, Subscription, Task, TestSupportExt, UniformListDecoration,
-    UniformListScrollHandle, Window, WindowBounds, WindowOptions, actions, canvas, div, fill,
-    point, prelude::*, px, rgb, size, uniform_list,
+    AnyElement, App, Bounds, Context, Entity, FocusHandle, Focusable, KeyBinding, PathBuilder,
+    ScrollHandle, ScrollStrategy, SharedString, Subscription, Task, TestSupportExt,
+    UniformListDecoration, UniformListScrollHandle, Window, WindowBounds, WindowOptions, actions,
+    canvas, div, fill, point, prelude::*, px, rgb, size, uniform_list,
 };
 use std::{
     ops::Range,
@@ -649,6 +649,8 @@ impl HistoryWindow {
     }
 
     fn move_selection(&mut self, delta: isize, window: &mut Window, cx: &mut Context<Self>) {
+        let filter_focus = self.filter.read(cx).focus_handle(cx);
+        let keep_filter_focus = filter_focus.is_focused(window);
         let Some(snapshot) = &self.snapshot else {
             return;
         };
@@ -665,6 +667,9 @@ impl HistoryWindow {
             .saturating_add_signed(delta)
             .min(maximum);
         self.select(index, window, cx);
+        if keep_filter_focus {
+            filter_focus.focus(window, cx);
+        }
     }
 
     fn reload(&mut self, cx: &mut Context<Self>) {
@@ -1285,7 +1290,7 @@ impl Render for HistoryWindow {
                     .items_center()
                     .gap_2()
                     .child("Filter:")
-                    .child(div().flex_1().child(Input::new(&self.filter)))
+                    .child(div().flex_1().key_context("HistoryFilter").child(Input::new(&self.filter)))
                     .child(
                         div()
                             .id("clear-filter")
@@ -1526,6 +1531,10 @@ fn bind_keys(cx: &mut App) {
         KeyBinding::new("down", BranchDown, Some("Dialog")),
         KeyBinding::new("down", BranchDown, Some("BranchDialog > Input")),
         KeyBinding::new("up", BranchUp, Some("BranchDialog > Input")),
+        KeyBinding::new("alt-j", BranchDown, Some("BranchDialog > Input")),
+        KeyBinding::new("alt-k", BranchUp, Some("BranchDialog > Input")),
+        KeyBinding::new("alt-j", Next, Some("HistoryFilter > Input")),
+        KeyBinding::new("alt-k", Previous, Some("HistoryFilter > Input")),
         KeyBinding::new("ctrl-n", BranchDown, Some("BranchDialog > Input")),
         KeyBinding::new("ctrl-p", BranchUp, Some("BranchDialog > Input")),
         KeyBinding::new("enter", BranchAccept, Some("Dialog")),
