@@ -366,7 +366,11 @@ impl HistoryWindow {
                                         .children(group.shortcuts.iter().map(
                                             |&(keys, description)| {
                                                 div()
+                                                    .w_full()
+                                                    .min_w_0()
+                                                    .flex_shrink_0()
                                                     .flex()
+                                                    .items_start()
                                                     .gap_3()
                                                     .child(
                                                         div()
@@ -374,7 +378,15 @@ impl HistoryWindow {
                                                             .flex_shrink_0()
                                                             .child(keys),
                                                     )
-                                                    .child(div().flex_1().child(description))
+                                                    .child(
+                                                        div()
+                                                            .id(keys)
+                                                            .test_support()
+                                                            .flex_1()
+                                                            .min_w_0()
+                                                            .whitespace_normal()
+                                                            .child(description),
+                                                    )
                                             },
                                         ))
                                 })),
@@ -505,10 +517,7 @@ const SHORTCUT_GROUPS: &[ShortcutGroup] = &[
                 command_shortcut!("PageUp / PageDown"),
                 "Scroll history up / down a page",
             ),
-            (
-                command_shortcut!("C"),
-                "Copy selected commit hash and summary (history focused)",
-            ),
+            (command_shortcut!("C"), "Copy commit hash and summary"),
         ],
     },
     ShortcutGroup {
@@ -520,12 +529,9 @@ const SHORTCUT_GROUPS: &[ShortcutGroup] = &[
             ("d / D", "Scroll diff down 18 lines"),
             ("Drag / Shift-click", "Select text / extend selection"),
             ("Double-click", "Select a word"),
-            (command_shortcut!("A"), "Select all (diff focused)"),
-            (command_shortcut!("C"), "Copy selection (diff focused)"),
-            (
-                command_shortcut!("Shift+C"),
-                "Copy without +/- markers (diff focused)",
-            ),
+            (command_shortcut!("A"), "Select all diff text"),
+            (command_shortcut!("C"), "Copy selected text"),
+            (command_shortcut!("Shift+C"), "Copy without +/- markers"),
         ],
     },
     ShortcutGroup {

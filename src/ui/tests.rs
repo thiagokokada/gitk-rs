@@ -787,10 +787,11 @@ fn shortcuts_are_grouped_scrollable_and_restore_focus(cx: &mut TestAppContext) {
             assert!(close.bounds().bottom() <= window.bounds().size.height);
             assert!(!window.find("Graph").visible());
         });
+        let end = cx.update(|_, cx| -app.view.read(cx).help_scroll.max_offset().y);
         cx.update(|window, cx| {
             window.scroll(
                 "shortcut-groups",
-                gpui_kit::ScrollDelta::Pixels(point(px(0.), px(-4000.))),
+                gpui_kit::ScrollDelta::Pixels(point(px(0.), end)),
                 cx,
             );
         });
@@ -1483,5 +1484,42 @@ fn font_preferences_keep_actions_visible_with_large_fonts_in_a_small_window(
                 <= window.find("apply-preferences").bounds().top()
         );
         assert!(window.find("close-dialog").visible());
+    });
+}
+
+#[gpui_kit::test]
+fn shortcuts_descriptions_wrap_without_clipping(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    fixture.commit("tip");
+    let (app, cx) = open(&fixture, cx);
+    app.view.update(cx, |view, cx| {
+        view.preferences.ui_font = fixed_font().into();
+        view.preferences.font_size = 24.;
+        cx.notify();
+    });
+    cx.simulate_resize(size(px(800.), px(600.)));
+    cx.simulate_keystrokes("f1");
+    cx.refresh().unwrap();
+    cx.update(|window, _| {
+        let viewport = window.find("shortcut-groups").bounds();
+        let group = window.within("Commit list");
+        let single_line = group.find("Up / p / k").bounds();
+        let copy = group
+            .find(if cfg!(target_os = "macos") {
+                "Ctrl/Cmd+C"
+            } else {
+                "Ctrl+C"
+            })
+            .bounds();
+        assert!(
+            copy.size.height > single_line.size.height,
+            "long descriptions must wrap rather than overflow horizontally"
+        );
+        assert!(copy.right() <= viewport.right());
+        assert!(copy.left() >= viewport.left());
+        assert!(
+            copy.bottom() < window.find("Diff view").bounds().top(),
+            "the following group must stay below wrapped descriptions"
+        );
     });
 }
