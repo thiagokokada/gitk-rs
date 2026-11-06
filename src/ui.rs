@@ -19,19 +19,19 @@ use gitk_rs::{
         WorkspaceSnapshot,
     },
 };
-use gpui::{
-    AnyElement, App, Application, Bounds, Context, Entity, FocusHandle, KeyBinding, PathBuilder,
-    ScrollStrategy, SharedString, Subscription, Task, UniformListDecoration,
-    UniformListScrollHandle, Window, WindowBounds, WindowOptions, actions, canvas, div, fill,
-    point, prelude::*, px, rgb, size, uniform_list,
-};
-use gpui_component::{
-    Root, ThemeMode,
+use gpui_kit::component::{
+    ThemeMode,
     button::Button,
     input::{Input, InputEvent, InputState},
     menu::{ContextMenuExt, DropdownMenu, PopupMenuItem},
     resizable::{resizable_panel, v_resizable},
-    scroll::{Scrollbar, ScrollbarShow},
+    scroll::{Scrollbar, ScrollbarMode},
+};
+use gpui_kit::{
+    AnyElement, App, Bounds, Context, Entity, FocusHandle, KeyBinding, PathBuilder, ScrollStrategy,
+    SharedString, Subscription, Task, TestSupportExt, UniformListDecoration,
+    UniformListScrollHandle, Window, WindowBounds, WindowOptions, actions, canvas, div, fill,
+    point, prelude::*, px, rgb, size, uniform_list,
 };
 use std::{
     ops::Range,
@@ -81,9 +81,9 @@ impl UniformListDecoration for HistoryViewport {
     fn compute(
         &self,
         range: Range<usize>,
-        _: Bounds<gpui::Pixels>,
-        _: gpui::Point<gpui::Pixels>,
-        _: gpui::Pixels,
+        _: Bounds<gpui_kit::Pixels>,
+        _: gpui_kit::Point<gpui_kit::Pixels>,
+        _: gpui_kit::Pixels,
         _: usize,
         _: &mut Window,
         cx: &mut App,
@@ -153,7 +153,7 @@ struct HistoryWindow {
     viewport: Range<usize>,
     graph_layout: GraphLayout,
     graph_width: f32,
-    graph_resize: Option<(gpui::Pixels, f32)>,
+    graph_resize: Option<(gpui_kit::Pixels, f32)>,
 }
 
 impl HistoryWindow {
@@ -199,7 +199,7 @@ impl HistoryWindow {
                 }
             });
         let focus = cx.focus_handle();
-        focus.focus(window);
+        focus.focus(window, cx);
         let filter =
             cx.new(|cx| InputState::new(window, cx).placeholder("Hash, author or commit message"));
         let subscription = cx.subscribe_in(&filter, window, |this, input, event, _, cx| {
@@ -609,7 +609,7 @@ impl HistoryWindow {
     }
 
     fn select(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        self.focus.focus(window);
+        self.focus.focus(window, cx);
         if let Some(staged) = self.local_rows.get(index).copied() {
             self.selected = None;
             self.local_selection = Some(staged);
@@ -883,7 +883,7 @@ impl HistoryWindow {
                     menu.item(PopupMenuItem::new("Copy commit reference").on_click({
                         let reference = reference.clone();
                         move |_, _, cx| {
-                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                            cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(
                                 reference.clone(),
                             ))
                         }
@@ -895,7 +895,7 @@ impl HistoryWindow {
 }
 
 fn apply_fonts(preferences: &Preferences, cx: &mut App) {
-    let theme = gpui_component::Theme::global_mut(cx);
+    let theme = gpui_kit::component::Theme::global_mut(cx);
     theme.font_family = preferences.ui_font.clone().into();
     theme.font_size = px(preferences.font_size);
     theme.mono_font_family = preferences.fixed_font.clone().into();
@@ -914,7 +914,7 @@ fn paint_graph(
     graph: &GraphRow,
     filtered: bool,
     layout: &GraphLayout,
-    bounds: Bounds<gpui::Pixels>,
+    bounds: Bounds<gpui_kit::Pixels>,
     window: &mut Window,
 ) {
     let colors = [0x80bfff, 0x83d49b, 0xe5b978, 0xd49fe8, 0x73d5d1, 0xef9090];
@@ -990,7 +990,7 @@ impl Render for HistoryWindow {
         if std::mem::take(&mut self.restore_focus)
             || self.dialog.is_none() && self.dialog_focus.is_focused(window)
         {
-            self.focus.focus(window);
+            self.focus.focus(window, cx);
         }
         if std::mem::take(&mut self.restore_repository_focus) {
             self.repository_input
@@ -1030,8 +1030,8 @@ impl Render for HistoryWindow {
         });
         div()
             .relative()
-            .on_mouse_move(cx.listener(|this, event: &gpui::MouseMoveEvent, window, cx| {
-                if event.pressed_button == Some(gpui::MouseButton::Left)
+            .on_mouse_move(cx.listener(|this, event: &gpui_kit::MouseMoveEvent, window, cx| {
+                if event.pressed_button == Some(gpui_kit::MouseButton::Left)
                     && let Some((start, width)) = this.graph_resize {
                     let maximum = (f32::from(window.viewport_size().width) - 540.).clamp(160., 720.);
                     this.graph_width = (width + f32::from(event.position.x - start)).clamp(160., maximum);
@@ -1039,7 +1039,7 @@ impl Render for HistoryWindow {
                     cx.notify();
                 }
             }))
-            .on_mouse_up(gpui::MouseButton::Left, cx.listener(|this, _, _, _| this.graph_resize = None))
+            .on_mouse_up(gpui_kit::MouseButton::Left, cx.listener(|this, _, _, _| this.graph_resize = None))
             .track_focus(&self.focus)
             .key_context("GitHistory")
             .on_action(|_: &Quit, _, cx| cx.quit())
@@ -1085,7 +1085,7 @@ impl Render for HistoryWindow {
                 } else {
                     Theme::Dark
                 };
-                gpui_component::Theme::change(
+                gpui_kit::component::Theme::change(
                     if this.config.theme == Theme::Dark {
                         ThemeMode::Dark
                     } else {
@@ -1102,7 +1102,7 @@ impl Render for HistoryWindow {
             }))
             .on_action(cx.listener(|this, _: &CopyCommit, _, cx| {
                 if let Some((_, entry)) = &this.selected {
-                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(format!(
+                    cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(format!(
                         "{} {}",
                         entry.commit.id.as_str(),
                         entry.commit.summary()
@@ -1121,17 +1121,17 @@ impl Render for HistoryWindow {
             )
             .on_action(cx.listener(|this, _: &Help, window, cx| {
                 this.dialog = Some(DialogKind::Help);
-                this.dialog_focus.focus(window);
+                this.dialog_focus.focus(window, cx);
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &About, window, cx| {
                 this.dialog = Some(DialogKind::About);
-                this.dialog_focus.focus(window);
+                this.dialog_focus.focus(window, cx);
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &CloseDialog, window, cx| {
                 this.dialog = None;
-                this.focus.focus(window);
+                this.focus.focus(window, cx);
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &BranchUp, _, cx| {
@@ -1170,14 +1170,14 @@ impl Render for HistoryWindow {
             .on_action(cx.listener(|this, _: &FocusFilter, window, cx| {
                 this.filter.update(cx, |input, cx| input.focus(window, cx))
             }))
-            .on_action(cx.listener(|this, _: &BlurFilter, window, _| this.focus.focus(window)))
+            .on_action(cx.listener(|this, _: &BlurFilter, window, cx| this.focus.focus(window, cx)))
             .size_full()
             .flex()
             .flex_col()
             .gap_2()
             .p_3()
             .text_size(px(self.preferences.font_size))
-            .font_family(gpui::SharedString::from(self.preferences.ui_font.clone()))
+            .font_family(gpui_kit::SharedString::from(self.preferences.ui_font.clone()))
             .bg(rgb(background))
             .text_color(rgb(foreground))
             .child(
@@ -1243,7 +1243,7 @@ impl Render for HistoryWindow {
                     .child(
                         div()
                             .id("reload")
-                            .debug_selector(|| "reload-control".into())
+                            .test_support()
                             .px_3()
                             .py_2()
                             .bg(rgb(panel))
@@ -1263,6 +1263,8 @@ impl Render for HistoryWindow {
                             resizable_panel().size(px(265.)).child(
                                 section()
                                     .size_full()
+                                    // Keep the scrollbar above Kit's overlapping resize handle.
+                                    .pb_1()
                                     .flex()
                                     .flex_col()
                                     .overflow_hidden()
@@ -1279,10 +1281,10 @@ impl Render for HistoryWindow {
                                                     .flex_shrink_0()
                                                     .px_2()
                                                     .child(if self.graph_layout.has_collapsed() { "Graph · … idle lanes" } else { "Graph" })
-                                                    .child(div().id("graph-divider").debug_selector(|| "graph-divider".into())
+                                                    .child(div().id("graph-divider").test_support()
                                                         .absolute().right_0().top_0().bottom_0().w(px(7.))
                                                         .cursor_col_resize()
-                                                        .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, event: &gpui::MouseDownEvent, _, cx| {
+                                                        .on_mouse_down(gpui_kit::MouseButton::Left, cx.listener(|this, event: &gpui_kit::MouseDownEvent, _, cx| {
                                                             this.graph_resize = Some((event.position.x, this.graph_width));
                                                             cx.stop_propagation();
                                                         }))),
@@ -1322,7 +1324,7 @@ impl Render for HistoryWindow {
                                                 )
                                                 .with_width_from_item(Some(self.viewport.start))
                                                 .with_decoration(HistoryViewport(cx.entity()))
-                                                .track_scroll(self.scroll.clone())
+                                                .track_scroll(&self.scroll)
                                                 .size_full(),
                                             )
                                             .child(
@@ -1331,10 +1333,11 @@ impl Render for HistoryWindow {
                                                     .top_0()
                                                     .left_0()
                                                     .size_full()
-                                                    .debug_selector(|| "history-scrollbar".into())
+                                                    .id("history-scrollbar-viewport")
+                                                    .test_support()
                                                     .child(
                                                         Scrollbar::vertical(&self.scroll)
-                                                            .scrollbar_show(ScrollbarShow::Always)
+                                                            .mode(ScrollbarMode::Always)
                                                             .id("history-scrollbar"),
                                                     ),
                                             ),
@@ -1408,26 +1411,38 @@ fn bind_keys(cx: &mut App) {
             ToggleWatch,
             Some("GitHistory && !Input && !Dialog"),
         ),
-        KeyBinding::new("ctrl-a", gpui_component::input::MoveHome, Some("Input")),
-        KeyBinding::new("ctrl-e", gpui_component::input::MoveEnd, Some("Input")),
-        KeyBinding::new("ctrl-b", gpui_component::input::MoveLeft, Some("Input")),
-        KeyBinding::new("ctrl-f", gpui_component::input::MoveRight, Some("Input")),
+        KeyBinding::new(
+            "ctrl-a",
+            gpui_kit::component::input::MoveHome,
+            Some("Input"),
+        ),
+        KeyBinding::new("ctrl-e", gpui_kit::component::input::MoveEnd, Some("Input")),
+        KeyBinding::new(
+            "ctrl-b",
+            gpui_kit::component::input::MoveLeft,
+            Some("Input"),
+        ),
+        KeyBinding::new(
+            "ctrl-f",
+            gpui_kit::component::input::MoveRight,
+            Some("Input"),
+        ),
         KeyBinding::new(
             "ctrl-w",
-            gpui_component::input::DeleteToPreviousWordStart,
+            gpui_kit::component::input::DeleteToPreviousWordStart,
             Some("Input"),
         ),
         KeyBinding::new(
             "ctrl-u",
-            gpui_component::input::DeleteToBeginningOfLine,
+            gpui_kit::component::input::DeleteToBeginningOfLine,
             Some("Input"),
         ),
         KeyBinding::new(
             "ctrl-k",
-            gpui_component::input::DeleteToEndOfLine,
+            gpui_kit::component::input::DeleteToEndOfLine,
             Some("Input"),
         ),
-        KeyBinding::new("ctrl-d", gpui_component::input::Delete, Some("Input")),
+        KeyBinding::new("ctrl-d", gpui_kit::component::input::Delete, Some("Input")),
         KeyBinding::new("ctrl-o", OpenRepository, Some("GitHistory && !Dialog")),
         KeyBinding::new(
             "ctrl-shift-o",
@@ -1503,11 +1518,11 @@ pub fn run(config: Config, launched: Instant) {
     let workspace = workspace_engine.handle();
     let diff_engine = DiffEngine::spawn();
     let diff_handle = diff_engine.handle();
-    Application::new()
-        .with_assets(gpui_component_assets::Assets)
+    gpui_kit::application()
+        .with_assets(gpui_kit::assets::Assets)
         .run(move |cx: &mut App| {
-            gpui_component::init(cx);
-            gpui_component::Theme::change(
+            gpui_kit::init(cx);
+            gpui_kit::component::Theme::change(
                 match config.theme {
                     Theme::Dark => ThemeMode::Dark,
                     Theme::Light => ThemeMode::Light,
@@ -1516,14 +1531,14 @@ pub fn run(config: Config, launched: Instant) {
                 cx,
             );
             bind_keys(cx);
-            cx.on_window_closed(|cx| {
+            cx.on_window_closed(|cx, _| {
                 if cx.windows().is_empty() {
                     // Native X11 close still holds its client borrow during App::defer.
                     cx.spawn(async |cx| {
                         cx.background_executor()
                             .timer(Duration::from_millis(1))
                             .await;
-                        let _ = cx.update(|cx| {
+                        cx.update(|cx| {
                             if cx.windows().is_empty() {
                                 cx.quit();
                             }
@@ -1534,16 +1549,17 @@ pub fn run(config: Config, launched: Instant) {
             })
             .detach();
             let bounds = Bounds::centered(None, size(px(1280.), px(850.)), cx);
-            if let Err(error) = cx.open_window(
+            if let Err(error) = gpui_kit::open_window(
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(bounds)),
                     ..Default::default()
                 },
+                cx,
                 move |window, cx| {
                     window.set_window_title("gitk-rs");
                     window.set_app_id("gitk-rs");
                     timing.mark(Phase::WindowCreated);
-                    let view = cx.new(|cx| {
+                    cx.new(|cx| {
                         HistoryWindow::new(
                             config,
                             timing,
@@ -1557,8 +1573,7 @@ pub fn run(config: Config, launched: Instant) {
                             window,
                             cx,
                         )
-                    });
-                    cx.new(|cx| Root::new(view, window, cx))
+                    })
                 },
             ) {
                 eprintln!("gitk-rs: unable to open window: {error}");

@@ -1,7 +1,7 @@
 use crate::ui::tests::{Fixture, open, until};
-use gpui::{Modifiers, TestAppContext, point, px};
+use gpui_kit::{Modifiers, TestAppContext, point, px, test::TestWindowExt};
 
-#[gpui::test]
+#[gpui_kit::test]
 fn ref_refresh_preserves_local_diff_page_and_text_selection(cx: &mut TestAppContext) {
     let fixture = Fixture::new();
     fixture.commit("base");
@@ -27,7 +27,7 @@ fn ref_refresh_preserves_local_diff_page_and_text_selection(cx: &mut TestAppCont
     until(cx, |cx| {
         cx.update(|_, cx| pane.read(cx).viewport.start >= 400)
     });
-    cx.update(|window, cx| pane.read(cx).focus.focus(window));
+    cx.update(|window, cx| pane.read(cx).focus.clone().focus(window, cx));
     cx.simulate_keystrokes("ctrl-a");
     let selection = cx.update(|_, cx| pane.read(cx).selection.unwrap().ordered());
     let identity = cx.update(|_, cx| pane.read(cx).page.selection);
@@ -60,7 +60,7 @@ fn ref_refresh_preserves_local_diff_page_and_text_selection(cx: &mut TestAppCont
     );
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn removing_the_selected_local_row_returns_to_a_commit(cx: &mut TestAppContext) {
     let fixture = Fixture::new();
     let head = fixture.commit("base");
@@ -85,7 +85,7 @@ fn removing_the_selected_local_row_returns_to_a_commit(cx: &mut TestAppContext) 
     });
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn file_scrollbar_reaches_and_selects_offscreen_files(cx: &mut TestAppContext) {
     let fixture = Fixture::new();
     for i in 0..80 {
@@ -107,13 +107,15 @@ fn file_scrollbar_reaches_and_selects_offscreen_files(cx: &mut TestAppContext) {
                 .is_some_and(|s| s.files.len() == 80)
         })
     });
-    let scrollbar = cx.debug_bounds("files-scrollbar").unwrap();
+    let scrollbar = cx.update(|window, _| window.find("files-scrollbar-viewport").bounds());
     cx.simulate_click(
         point(scrollbar.right() - px(8.), scrollbar.bottom() - px(2.)),
         Modifiers::default(),
     );
-    until(cx, |cx| cx.debug_bounds("diff-file-80").is_some());
-    let last = cx.debug_bounds("diff-file-80").unwrap();
+    until(cx, |cx| {
+        cx.update(|window, _| window.try_find(("diff-file", 80_usize)).is_some())
+    });
+    let last = cx.update(|window, _| window.find(("diff-file", 80_usize)).bounds());
     cx.simulate_click(last.center(), Modifiers::default());
     until(cx, |cx| {
         cx.update(|_, cx| {
@@ -128,7 +130,7 @@ fn file_scrollbar_reaches_and_selects_offscreen_files(cx: &mut TestAppContext) {
     });
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn file_click_and_copy_use_the_full_diff_not_just_visible_rows(cx: &mut TestAppContext) {
     let fixture = Fixture::new();
     let source: String = (0..400)
@@ -149,9 +151,7 @@ fn file_click_and_copy_use_the_full_diff_not_just_visible_rows(cx: &mut TestAppC
         })
     });
     assert_eq!(cx.update(|_, cx| pane.read(cx).selected_file), Some(0));
-    let bounds = cx
-        .debug_bounds("diff-file-2")
-        .expect("second file rendered");
+    let bounds = cx.update(|window, _| window.find(("diff-file", 2_usize)).bounds());
     cx.simulate_click(bounds.center(), Modifiers::default());
     until(cx, |cx| {
         cx.update(|_, cx| {
@@ -167,7 +167,7 @@ fn file_click_and_copy_use_the_full_diff_not_just_visible_rows(cx: &mut TestAppC
     });
     assert_eq!(cx.update(|_, cx| pane.read(cx).selected_file), Some(2));
     // Focus the real diff context, then dispatch its production key bindings.
-    cx.update(|window, cx| pane.read(cx).focus.focus(window));
+    cx.update(|window, cx| pane.read(cx).focus.clone().focus(window, cx));
     cx.simulate_keystrokes("ctrl-a ctrl-c");
     until(cx, |cx| {
         cx.read_from_clipboard()
@@ -196,7 +196,7 @@ fn file_click_and_copy_use_the_full_diff_not_just_visible_rows(cx: &mut TestAppC
         cx.run_until_parked();
         assert_eq!(cx.update(|_, cx| pane.read(cx).selected_file), Some(2));
     }
-    let bounds = cx.debug_bounds("diff-file-0").unwrap();
+    let bounds = cx.update(|window, _| window.find(("diff-file", 0_usize)).bounds());
     cx.simulate_click(bounds.center(), Modifiers::default());
     until(cx, |cx| {
         cx.update(|_, cx| pane.read(cx).viewport.start == 0)
@@ -206,7 +206,7 @@ fn file_click_and_copy_use_the_full_diff_not_just_visible_rows(cx: &mut TestAppC
     until(cx, |cx| {
         cx.update(|_, cx| pane.read(cx).selected_file == Some(1))
     });
-    cx.update(|window, cx| app.view.read(cx).focus.focus(window));
+    cx.update(|window, cx| app.view.read(cx).focus.clone().focus(window, cx));
     let identity = cx.update(|_, cx| pane.read(cx).page.selection);
     let generation = cx.update(|_, cx| app.view.read(cx).request.generation);
     cx.simulate_keystrokes("f5");
@@ -241,7 +241,7 @@ fn file_click_and_copy_use_the_full_diff_not_just_visible_rows(cx: &mut TestAppC
     });
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn staged_and_unstaged_diff_pages_settle_after_scrolling(cx: &mut TestAppContext) {
     let fixture = Fixture::new();
     fixture.commit("base");

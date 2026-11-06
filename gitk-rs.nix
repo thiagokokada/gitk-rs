@@ -1,6 +1,7 @@
 {
   lib,
   stdenv,
+  autoPatchelfHook,
   clang,
   cmake,
   craneLib,
@@ -32,7 +33,6 @@ let
         (lib.fileset.fromSource (craneLib.cleanCargoSource ./.))
         ./LICENSE
         ./resources
-        ./vendor
       ];
     };
     strictDeps = true;
@@ -75,12 +75,6 @@ let
     commonArgs
     // {
       cargoTestExtraArgs = "--all-targets --no-run";
-      # Registry crates need the real API of this patched local dependency.
-      # Keep it intact while Crane stubs the application's sources.
-      extraDummyScript = ''
-        rm -r "$out/vendor/xattr"
-        cp -r ${./vendor/xattr} "$out/vendor/xattr"
-      '';
     }
   );
 in
@@ -88,7 +82,19 @@ craneLib.buildPackage (
   commonArgs
   // {
     inherit cargoArtifacts;
-    nativeBuildInputs = commonArgs.nativeBuildInputs ++ [ makeWrapper ];
+    nativeBuildInputs =
+      commonArgs.nativeBuildInputs
+      ++ [ makeWrapper ]
+      ++ lib.optionals stdenv.hostPlatform.isLinux [ autoPatchelfHook ];
+    buildInputs =
+      commonArgs.buildInputs ++ lib.optionals stdenv.hostPlatform.isLinux [ stdenv.cc.cc.lib ];
+    # GPUI loads these by name with dlopen, so linking alone cannot retain them.
+    runtimeDependencies = lib.optionals stdenv.hostPlatform.isLinux (
+      map lib.getLib [
+        vulkan-loader
+        wayland
+      ]
+    );
     passthru = { inherit commonArgs cargoArtifacts; };
 
     postInstall = ''
@@ -104,7 +110,6 @@ craneLib.buildPackage (
 
     postFixup = ''
       wrapProgram $out/bin/gitk-rs \
-        ${lib.optionalString stdenv.hostPlatform.isLinux "--prefix LD_LIBRARY_PATH : ${lib.makeLibraryPath commonArgs.buildInputs}"} \
         --prefix PATH : ${lib.makeBinPath [ git ]}
     '';
 

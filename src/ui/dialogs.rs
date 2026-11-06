@@ -6,7 +6,7 @@ impl HistoryWindow {
             return;
         }
         self.repository_prompt_pending = true;
-        let receiver = cx.prompt_for_paths(gpui::PathPromptOptions {
+        let receiver = cx.prompt_for_paths(gpui_kit::PathPromptOptions {
             files: false,
             directories: true,
             multiple: false,
@@ -84,7 +84,7 @@ impl HistoryWindow {
 
     pub(super) fn open_branches(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.dialog = Some(DialogKind::Branches);
-        self.dialog_focus.focus(window);
+        self.dialog_focus.focus(window, cx);
         self.branches.clear();
         self.filtered_branches.clear();
         self.branch_filter
@@ -160,7 +160,7 @@ impl HistoryWindow {
         };
         let mut body = div()
             .id("dialog-card")
-            .max_h(gpui::relative(0.9))
+            .max_h(gpui_kit::relative(0.9))
             .overflow_y_scroll()
             .flex()
             .flex_col()
@@ -176,7 +176,7 @@ impl HistoryWindow {
                         range.map(|i| div().id(("branch", i)).h(px((this.preferences.font_size * 2.).max(26.))).px_2().bg(rgb(if i == this.branch_index { 0x285b8e } else if this.config.theme == Theme::Dark { 0x292d35 } else { 0xffffff }))
                             .when(i == this.branch_index, |row| row.text_color(rgb(0xffffff))).child(this.branches[this.filtered_branches[i]].clone()).cursor_pointer()
                             .on_click(cx.listener(move |this, _, _, cx| this.switch_branch(i, cx)))).collect::<Vec<_>>()
-                    })).h(px(300.)).track_scroll(self.branch_scroll.clone()))
+                    })).h(px(300.)).track_scroll(&self.branch_scroll))
                     .child(self.operation_message.clone());
             }
             Some(DialogKind::OpenRepository) => body = body.child("Repository directory").child(Input::new(&self.repository_input)).child(self.operation_message.clone())
@@ -199,14 +199,14 @@ impl HistoryWindow {
                 .child("Close (Escape)")
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.dialog = None;
-                    this.focus.focus(window);
+                    this.focus.focus(window, cx);
                     cx.notify();
                 })),
         );
         div()
             .absolute()
             .inset_0()
-            .bg(gpui::rgba(0x00000099))
+            .bg(gpui_kit::rgba(0x00000099))
             .flex()
             .items_center()
             .justify_center()
@@ -244,7 +244,7 @@ impl HistoryWindow {
         window.refresh();
         self.preferences = preferences.clone();
         self.dialog = None;
-        self.focus.focus(window);
+        self.focus.focus(window, cx);
         let save = cx
             .background_executor()
             .spawn(async move { preferences.save().map_err(|e| format!("{e:#}")) });

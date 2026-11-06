@@ -21,6 +21,6 @@ craneLib.devShell (
     ];
   }
   // lib.optionalAttrs stdenv.hostPlatform.isLinux {
-    LD_LIBRARY_PATH = lib.makeLibraryPath gitk-rs.buildInputs;
+    LD_LIBRARY_PATH = lib.makeLibraryPath gitk-rs.commonArgs.buildInputs;
   }
 )
