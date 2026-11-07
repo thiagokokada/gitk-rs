@@ -44,7 +44,7 @@ impl HistoryWindow {
         .detach();
     }
     pub(super) fn change_repository(&mut self, path: std::path::PathBuf, cx: &mut Context<Self>) {
-        self.config.repository = path;
+        self.config.repository = std::path::absolute(&path).unwrap_or(path);
         self.workspace_generation.0 += 1;
         self.workspace_snapshot = None;
         self.local_rows.clear();

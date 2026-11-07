@@ -35,8 +35,8 @@ use gpui_kit::component::{
 use gpui_kit::{
     AnyElement, App, Bounds, Context, Entity, FocusHandle, Focusable, KeyBinding, PathBuilder,
     ScrollHandle, ScrollStrategy, SharedString, Subscription, Task, TestSupportExt,
-    UniformListDecoration, UniformListScrollHandle, Window, WindowBounds, WindowOptions, actions,
-    canvas, div, fill, point, prelude::*, px, rgb, size, uniform_list,
+    TitlebarOptions, UniformListDecoration, UniformListScrollHandle, Window, WindowBounds,
+    WindowOptions, actions, canvas, div, fill, point, prelude::*, px, rgb, size, uniform_list,
 };
 use preference_dialog::{FontCatalogGeneration, FontChoices};
 use std::{
@@ -182,7 +182,7 @@ struct HistoryWindow {
 
 impl HistoryWindow {
     fn new(
-        config: Config,
+        mut config: Config,
         timing: Timing,
         services: WindowServices,
         preferences: Preferences,
@@ -190,6 +190,7 @@ impl HistoryWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        config.repository = std::path::absolute(&config.repository).unwrap_or(config.repository);
         apply_fonts(&preferences, cx);
         let WindowServices {
             history,
@@ -1150,18 +1151,21 @@ fn paint_graph(
     }
 }
 
+fn repository_title(path: &std::path::Path) -> String {
+    format!("{} — gitk-rs", path.display())
+}
+
 impl Render for HistoryWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let repository = self
             .workspace_snapshot
             .as_ref()
             .and_then(|snapshot| snapshot.repository.as_ref());
-        if let Some(repository) = repository {
-            let title = format!("gitk-rs - {}", repository.root.display());
-            if self.title != title {
-                window.set_window_title(&title);
-                self.title = title;
-            }
+        let path = repository.map_or(&self.config.repository, |repository| &repository.root);
+        let title = repository_title(path);
+        if self.title != title {
+            window.set_window_title(&title);
+            self.title = title;
         }
         if std::mem::take(&mut self.restore_focus)
             || self.dialog.is_none() && self.dialog_focus.is_focused(window)
@@ -1670,7 +1674,9 @@ fn bind_keys(cx: &mut App) {
     ]);
 }
 
-pub fn run(config: Config, preferences: Preferences, launched: Instant) {
+pub fn run(mut config: Config, preferences: Preferences, launched: Instant) {
+    config.repository = std::path::absolute(&config.repository).unwrap_or(config.repository);
+    let initial_title = repository_title(&config.repository);
     let guard = TimingGuard::start(config.timings, launched);
     let timing = guard.timing();
     let request = Request {
@@ -1738,12 +1744,15 @@ pub fn run(config: Config, preferences: Preferences, launched: Instant) {
             if let Err(error) = gpui_kit::open_window(
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(bounds)),
+                    titlebar: Some(TitlebarOptions {
+                        title: Some(initial_title.into()),
+                        ..Default::default()
+                    }),
+                    app_id: Some("gitk-rs".into()),
                     ..Default::default()
                 },
                 cx,
                 move |window, cx| {
-                    window.set_window_title("gitk-rs");
-                    window.set_app_id("gitk-rs");
                     timing.mark(Phase::WindowCreated);
                     cx.new(|cx| {
                         HistoryWindow::new(

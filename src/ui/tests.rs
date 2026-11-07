@@ -1975,7 +1975,7 @@ fn repository_title_and_inline_filter_clear_controls(cx: &mut TestAppContext) {
     assert_eq!(
         cx.update(|_, cx| app.view.read(cx).title.clone()),
         format!(
-            "gitk-rs - {}",
+            "{} — gitk-rs",
             fixture.root().canonicalize().unwrap().display()
         )
     );
@@ -2015,4 +2015,40 @@ fn repository_title_and_inline_filter_clear_controls(cx: &mut TestAppContext) {
         cx.update(|_, cx| app.view.read(cx).filtered_branches.len()),
         2
     );
+}
+
+#[gpui_kit::test]
+fn repository_caption_updates_even_when_opening_the_directory_fails(cx: &mut TestAppContext) {
+    let first = Fixture::new();
+    first.commit("first");
+    let second = Fixture::new();
+    second.commit("second");
+    let invalid = tempfile::tempdir().unwrap();
+    let (app, cx) = open(&first, cx);
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            app.view.read(cx).title == repository_title(&first.root().canonicalize().unwrap())
+        })
+    });
+    app.view.update(cx, |view, cx| {
+        view.change_repository(invalid.path().to_owned(), cx)
+    });
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            let view = app.view.read(cx);
+            view.title == repository_title(invalid.path())
+                && view
+                    .workspace_snapshot
+                    .as_ref()
+                    .is_some_and(|s| s.error.is_some())
+        })
+    });
+    app.view.update(cx, |view, cx| {
+        view.change_repository(second.root().to_owned(), cx)
+    });
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            app.view.read(cx).title == repository_title(&second.root().canonicalize().unwrap())
+        })
+    });
 }
