@@ -9,7 +9,8 @@ side of the displayed hunks, rather than loading the complete file. Context
 starts at three lines and accepts zero through ten million lines. Ignore space
 change uses `git diff -w`, matching gitk (including ignoring all whitespace).
 
-Line diff retains syntax highlighting. Markup words and Color words use Git's
+All three display modes retain syntax highlighting when enabled.
+Markup words and Color words use Git's
 porcelain word diff, joining unchanged and changed fragments into display lines.
 Markup adds `[-removed-]` and `{+added+}` delimiters; both modes color changed
 fragments. Word colors take priority over syntax colors. Copying reads the

@@ -185,6 +185,8 @@ pub struct DiffDocument {
     added: u64,
     removed: u64,
     highlight_cache: Option<HighlightCache>,
+    old_version: bool,
+    word_markup: bool,
     word_spans: std::collections::HashMap<usize, Vec<(Range<usize>, bool)>>,
 }
 
@@ -393,6 +395,8 @@ impl DiffDocument {
             removed,
             highlight_cache: None,
             word_spans,
+            word_markup: selection.options.words == WordDiff::Markup,
+            old_version: selection.options.version == DiffVersion::Old,
         })
     }
 
@@ -476,12 +480,42 @@ impl DiffDocument {
         settings: DiffSettings,
         obsolete: impl Fn() -> bool,
     ) -> Result<bool> {
-        if !self.word_spans.is_empty() {
-            snapshot.highlighting = false;
-            return Ok(true);
-        }
         let mut cache = self.highlight_cache.take().unwrap_or_default();
+        let overlays: Vec<_> = snapshot
+            .lines
+            .iter()
+            .map(|line| line.spans.clone())
+            .collect();
         let result = cache.apply(self, snapshot, settings, obsolete);
+        if matches!(result, Ok(true)) {
+            for (line, words) in snapshot.lines.iter_mut().zip(overlays) {
+                for word in words {
+                    let mut combined = Vec::new();
+                    for span in line.spans.drain(..) {
+                        if span.range.end <= word.range.start || span.range.start >= word.range.end
+                        {
+                            combined.push(span);
+                        } else {
+                            if span.range.start < word.range.start {
+                                combined.push(Span {
+                                    range: span.range.start..word.range.start,
+                                    color: span.color,
+                                });
+                            }
+                            if span.range.end > word.range.end {
+                                combined.push(Span {
+                                    range: word.range.end..span.range.end,
+                                    color: span.color,
+                                });
+                            }
+                        }
+                    }
+                    combined.push(word);
+                    combined.sort_by_key(|span| span.range.start);
+                    line.spans = combined;
+                }
+            }
+        }
         cache.limit_cursor();
         self.highlight_cache = Some(cache);
         result
