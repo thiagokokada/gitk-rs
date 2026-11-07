@@ -41,9 +41,13 @@ milestone without waiting for confirmation. Stop only when user input is actuall
 
 ## Dependencies, verification, and documentation
 
-- Keep README.md focused on user-facing features, usage, and setup. Put
-  implementation details, dependency versions, architecture, and internal
-  workarounds in contributor documentation instead.
+- Keep README.md concise and factual, focused on user-facing features, usage,
+  and setup. Put implementation details, dependency versions, architecture, and
+  internal workarounds in the `docs/` directory. Avoid promotional or generic
+  filler, exhaustive shortcut lists, repeated caveats, and examples that imply
+  stronger limits or guarantees
+  than the implementation provides. Prefer linking to `--help` for complete
+  option details; explain only behavior needed to use a feature safely.
 - Pin GPUI and use documentation matching that release. Commit Cargo.lock and
   flake.lock. Use the Rust toolchain from pinned nixpkgs for builds and checks.
 - Keep native dependencies conditional on platform. Preserve license notices for

@@ -16,6 +16,11 @@ A lightweight Git history explorer for Linux and macOS, written in Rust with
 - Staged, unstaged and untracked changes
 - Branch switching, automatic refresh and keyboard navigation
 - Light and dark themes with searchable font selection and live previews
+- Built to browse large Git repositories such as
+  [NixOS/nixpkgs](https://github.com/NixOS/nixpkgs/)
+  +  It streams commit history in the background, shows rows as they arrive,
+     and virtualizes history and diff rendering so drawing work stays focused
+     on what’s visible.
 
 ## Usage
 
@@ -28,46 +33,26 @@ with Metal support.
 
 # Browse another repository
 ./gitk-rs ~/Projects/nixpkgs
-
-# Use the light theme
-./gitk-rs --mode light ~/Projects/nixpkgs
 ```
 
-You can also build and run the executable directly:
-
-```sh
-./gitk-rs /path/to/repository
-```
-
-Use the arrow keys or j/k to select commits, gg/G to jump to the first/last
-loaded commit, / to filter, and Space/Backspace to page through a diff.
-Ctrl+O opens a repository, Ctrl+B switches branches, and F5 reloads. On macOS,
-Cmd also works for repository commands, history paging, copying, diff selection,
-preferences, and quitting. Press F1 or ? for all shortcuts.
-Alt+J/K selects the next/previous commit from the commit list, diff, or search box
-without changing focus. In the branch filter, it selects the next/previous branch.
+Press F1 or ? to show all shortcuts.
 
 History streams in the background until the whole repository history is loaded.
 For lower memory use, `--limit N` opts into loading history on demand in batches
-of N commits. For example, `gitk-rs --limit 1000 ~/Projects/nixpkgs` initially
-prefetches 1000 commits; browsing further loads more. Filtering can scan the full
-history, and loaded commits remain in memory, so this is not a hard memory cap.
+of N commits.
 
-For command-line options:
+For more command-line options:
 
 ```sh
 ./gitk-rs --help
 ```
 
-Preferences are saved as `gitk-rs/preferences.toml` in the OS
-configuration directory (`~/.config` on Linux or `~/Library/Application
-Support` on macOS). Open Preferences with Ctrl+, (Cmd+, on macOS) to edit fonts,
-appearance, history loading, graph columns, syntax highlighting, and automatic
-reload. Apply updates the running window and saves the settings.
-Explicit command-line flags override saved settings at startup; applying new
-preferences can replace those flag values during the session. For example:
+Preferences are saved as `gitk-rs/preferences.toml` in the OS configuration
+directory (`~/.config` on Linux or `~/Library/Application Support` on macOS).
+For example:
 
 ```toml
+# Default options in Linux
 ui_font = "DejaVu Sans"
 fixed_font = "DejaVu Sans Mono"
 font_size = 13.0
@@ -76,20 +61,15 @@ graph_columns = 256
 text_graph = false
 syntax = true
 watch = true
-# batch = 1000 # Omit to stream all history; set to load on demand.
+# batch = 1000 # Omit to stream all history.
 ```
-
-Boolean flags also accept `=false`, such as `--text-graph=false`,
-`--nosyntax=false`, or `--nowatch=false`. Use `--no-limit` to stream all history
-when the saved preferences specify a batch size. `--help` and `--version` remain
-standalone commands. Timing and verbose diagnostics are CLI-only options.
 
 ## Development
 
 ### Building
 
-Install a current stable Rust toolchain with [rustup](https://rustup.rs/).
-On Ubuntu 24.04, install the native dependencies:
+Install a current stable Rust toolchain with [rustup](https://rustup.rs/). On
+Ubuntu 26.04, install the native dependencies:
 
 ```sh
 sudo apt-get update
