@@ -340,6 +340,21 @@ fn diff_option_changes_replace_generation_and_reject_old_pages(cx: &mut TestAppC
     until(cx, |cx| cx.update(|_, cx| pane.read(cx).snapshot.is_some()));
     let radio = cx.update(|window, _| window.find("old-mode").bounds());
     let words = cx.update(|window, _| window.find("word-diff").bounds());
+    let toolbar = cx.update(|window, _| window.find("diff-options").bounds());
+    let padding = cx.update(|window, _| window.rem_size() * 0.5);
+    let content = cx.update(|window, _| window.find("diff-content").bounds());
+    assert!(
+        (content.top() - toolbar.bottom()).abs() <= px(1.),
+        "extra gap below toolbar"
+    );
+    assert!(
+        toolbar.size.height + px(1.) >= words.size.height + padding,
+        "toolbar {toolbar:?}; word control {words:?}"
+    );
+    assert!(
+        (toolbar.center().y - radio.center().y).abs() <= px(1.),
+        "toolbar {toolbar:?}; radio {radio:?}"
+    );
     assert!((radio.center().y - words.center().y).abs() <= px(1.));
     cx.simulate_click(radio.center(), Modifiers::default());
     assert_eq!(

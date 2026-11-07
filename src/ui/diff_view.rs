@@ -349,6 +349,9 @@ impl DiffPane {
 
     fn controls(&self, cx: &mut Context<Self>) -> AnyElement {
         let mut bar = div()
+            .id("diff-options")
+            .test_support()
+            .flex_shrink_0()
             .flex()
             .items_center()
             .gap_2()
@@ -740,7 +743,6 @@ impl Render for DiffPane {
             .size_full()
             .flex()
             .flex_col()
-            .gap_2()
             .child(self.controls(cx))
             .track_focus(&self.focus)
             .key_context("Diff")
@@ -782,6 +784,8 @@ impl Render for DiffPane {
                                 .flex_col()
                                 .border_1()
                                 .border_color(rgb(palette.border))
+                                .id("diff-content")
+                                .test_support()
                                 .font_family(self.font.clone())
                                 .child(
                                     div()
