@@ -48,8 +48,9 @@ For more command-line options:
 ./gitk-rs --help
 ```
 
-Preferences are saved as `gitk-rs/preferences.toml` in the OS configuration
+Apply in Preferences saves `gitk-rs/preferences.toml` in the OS configuration
 directory (`~/.config` on Linux or `~/Library/Application Support` on macOS).
+Diff controls are remembered automatically in a separate `gitk-rs/state.toml` file.
 For example:
 
 ```toml

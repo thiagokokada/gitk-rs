@@ -125,6 +125,7 @@ pub(super) struct DiffPane {
 
 impl DiffPane {
     pub(super) fn new(handle: DiffHandle, settings: DiffSettings, cx: &mut Context<Self>) -> Self {
+        let options = handle.initial_options();
         let poll = cx.spawn(async |this, cx| {
             loop {
                 cx.background_executor()
@@ -181,7 +182,7 @@ impl DiffPane {
         });
         Self {
             restore_position: None,
-            options: DiffOptions::default(),
+            options,
             current: None,
             context_input: None,
             handle,
@@ -311,6 +312,7 @@ impl DiffPane {
             return;
         }
         self.options = options;
+        self.handle.save_options(options);
         if let Some(mut selection) = self.current.clone() {
             let position = self
                 .snapshot
@@ -709,7 +711,7 @@ impl Render for DiffPane {
         if self.context_input.is_none() {
             let input = cx.new(|cx| {
                 InputState::new(window, cx)
-                    .default_value("3")
+                    .default_value(self.options.context.to_string())
                     .step(1.)
                     .min(0.)
                     .max(10_000_000.)

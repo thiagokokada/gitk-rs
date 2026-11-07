@@ -1,5 +1,5 @@
 use crate::ui::tests::{Fixture, open, selected, until};
-use gpui_kit::{Modifiers, TestAppContext, point, px, test::TestWindowExt};
+use gpui_kit::{AppContext, Modifiers, TestAppContext, point, px, test::TestWindowExt};
 
 #[gpui_kit::test]
 fn ref_refresh_preserves_local_diff_page_and_text_selection(cx: &mut TestAppContext) {
@@ -493,4 +493,81 @@ fn opening_a_non_repository_shows_one_error_and_recovers(cx: &mut TestAppContext
         !cx.update(|_, cx| app.view.read(cx).status_text())
             .contains("not a git repository")
     );
+}
+
+#[gpui_kit::test]
+fn diff_options_restore_and_save_independently_of_preferences(cx: &mut TestAppContext) {
+    use gitk_rs::diff::{DiffEngine, DiffSettings, options};
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("state.toml");
+    let saved = super::DiffOptions {
+        context: 19,
+        version: super::DiffVersion::Old,
+        words: super::WordDiff::Color,
+        ignore_space: true,
+    };
+    options::save_to(saved, &path).unwrap();
+    let engine = DiffEngine::with_options_file(Some(path.clone()));
+    let fixture = Fixture::new();
+    fixture.commit("base");
+    let (app, cx) = open(&fixture, cx);
+    let pane = cx.update(|_, cx| {
+        cx.new(|cx| {
+            super::DiffPane::new(
+                engine.handle(),
+                DiffSettings {
+                    syntax: true,
+                    dark: true,
+                },
+                cx,
+            )
+        })
+    });
+    app.view.update(cx, |view, cx| {
+        view.diff = pane.clone();
+        cx.notify();
+    });
+    until(cx, |cx| {
+        cx.update(|_, cx| pane.read(cx).context_input.is_some())
+    });
+    assert_eq!(cx.update(|_, cx| pane.read(cx).options), saved);
+    assert_eq!(
+        cx.update(|_, cx| pane
+            .read(cx)
+            .context_input
+            .as_ref()
+            .unwrap()
+            .read(cx)
+            .value()
+            .to_string()),
+        "19"
+    );
+    let changed = super::DiffOptions {
+        context: 23,
+        words: super::WordDiff::Markup,
+        ..saved
+    };
+    pane.update(cx, |pane, cx| pane.change_options(changed, cx));
+    drop(engine);
+    assert_eq!(options::load_from(&path).unwrap(), changed);
+    assert!(!root.path().join("preferences.toml").exists());
+    let permissions = std::fs::metadata(&path).unwrap().permissions();
+    let mut readonly = permissions.clone();
+    readonly.set_readonly(true);
+    std::fs::set_permissions(&path, readonly).unwrap();
+    let engine = DiffEngine::with_options_file(Some(path.clone()));
+    pane.update(cx, |pane, cx| {
+        pane.handle = engine.handle();
+        pane.change_options(
+            super::DiffOptions {
+                context: 31,
+                ..changed
+            },
+            cx,
+        );
+    });
+    drop(engine);
+    assert_eq!(cx.update(|_, cx| pane.read(cx).options.context), 31);
+    assert_eq!(options::load_from(&path).unwrap(), changed);
+    std::fs::set_permissions(&path, permissions).unwrap();
 }

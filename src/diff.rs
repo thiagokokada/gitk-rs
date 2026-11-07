@@ -18,6 +18,7 @@ use std::{
 mod highlight;
 #[cfg(test)]
 mod highlight_tests;
+pub mod options;
 use highlight::HighlightCache;
 
 pub mod selection;
@@ -69,21 +70,24 @@ pub struct DiffSelection {
     pub source: DiffSource,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum DiffVersion {
     #[default]
     Diff,
     Old,
     New,
 }
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum WordDiff {
     #[default]
     Lines,
     Markup,
     Color,
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct DiffOptions {
     pub version: DiffVersion,
     pub context: u32,
@@ -781,6 +785,7 @@ pub(crate) fn path_from_bytes(bytes: Vec<u8>) -> Result<PathBuf> {
 }
 
 struct DiffMailbox {
+    options: Option<DiffOptions>,
     selection: Option<DiffSelection>,
     page: Option<DiffPage>,
     copy: Option<CopyRequest>,
@@ -793,6 +798,8 @@ struct DiffMailbox {
 }
 
 struct DiffShared {
+    options_path: Option<PathBuf>,
+    initial_options: DiffOptions,
     mailbox: Mutex<DiffMailbox>,
     changed: Condvar,
 }
@@ -807,8 +814,22 @@ pub struct DiffEngine {
 
 impl DiffEngine {
     pub fn spawn() -> Self {
+        Self::with_options_file(None)
+    }
+
+    /// Load startup state before opening the UI; subsequent writes run on the worker.
+    pub fn with_options_file(path: Option<PathBuf>) -> Self {
+        let initial_options = path.as_ref().map_or_else(DiffOptions::default, |path| {
+            options::load_from(path).unwrap_or_else(|error| {
+                eprintln!("gitk-rs: load diff options {}: {error:#}", path.display());
+                DiffOptions::default()
+            })
+        });
         let shared = Arc::new(DiffShared {
+            options_path: path,
+            initial_options,
             mailbox: Mutex::new(DiffMailbox {
+                options: None,
                 selection: None,
                 page: None,
                 copy: None,
@@ -849,6 +870,17 @@ impl Drop for DiffEngine {
 }
 
 impl DiffHandle {
+    pub fn initial_options(&self) -> DiffOptions {
+        self.shared.initial_options
+    }
+    pub fn save_options(&self, options: DiffOptions) {
+        if self.shared.options_path.is_none() {
+            return;
+        }
+        self.shared.mailbox.lock().unwrap().options = Some(options);
+        self.shared.changed.notify_one();
+    }
+
     pub fn select(&self, selection: DiffSelection, page: DiffPage) {
         self.clear(selection.id);
         {
@@ -941,18 +973,16 @@ fn diff_worker(shared: Arc<DiffShared>) {
     let mut document: Option<DiffDocument> = None;
     let mut failure: Option<String> = None;
     loop {
-        let (selection, page, copy, cancellation, clear) = {
+        let (selection, page, copy, cancellation, clear, options, stopped) = {
             let mut mailbox = shared.mailbox.lock().unwrap();
             while mailbox.selection.is_none()
                 && mailbox.page.is_none()
                 && mailbox.copy.is_none()
+                && mailbox.options.is_none()
                 && !mailbox.clear
                 && !mailbox.stopped
             {
                 mailbox = shared.changed.wait(mailbox).unwrap();
-            }
-            if mailbox.stopped {
-                break;
             }
             let clear = std::mem::take(&mut mailbox.clear);
             (
@@ -961,8 +991,19 @@ fn diff_worker(shared: Arc<DiffShared>) {
                 mailbox.copy.take(),
                 mailbox.cancellation.clone(),
                 clear,
+                mailbox.options.take(),
+                mailbox.stopped,
             )
         };
+        if let Some(options) = options
+            && let Some(path) = &shared.options_path
+            && let Err(error) = options::save_to(options, path)
+        {
+            eprintln!("gitk-rs: save diff options {}: {error:#}", path.display());
+        }
+        if stopped {
+            break;
+        }
         if clear {
             document = None;
             failure = None;

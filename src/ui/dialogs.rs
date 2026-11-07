@@ -608,7 +608,10 @@ impl HistoryWindow {
         let save = cx.background_executor().spawn(async move {
             path.as_ref()
                 .map_or_else(|| preferences.save(), |path| preferences.save_to(path))
-                .map_err(|e| format!("{e:#}"))
+                .map_err(|error| {
+                    eprintln!("gitk-rs: save preferences: {error:#}");
+                    format!("{error:#}")
+                })
         });
         cx.spawn(async move |this, cx| {
             let result = save.await;

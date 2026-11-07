@@ -1693,7 +1693,12 @@ pub fn run(config: Config, preferences: Preferences, launched: Instant) {
         watch: config.watch,
     });
     let workspace = workspace_engine.handle();
-    let diff_engine = DiffEngine::spawn();
+    let options_path = gitk_rs::diff::options::path()
+        .map_err(|error| {
+            eprintln!("gitk-rs: diff options: {error:#}");
+        })
+        .ok();
+    let diff_engine = DiffEngine::with_options_file(options_path);
     let diff_handle = diff_engine.handle();
     gpui_kit::application()
         .with_assets(gpui_kit::assets::Assets)
