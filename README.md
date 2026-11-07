@@ -12,6 +12,7 @@ A lightweight Git history explorer for Linux and macOS, written in Rust with
 - Commit history with a branch graph, author and date columns
 - Background loading and filtering to browse large repositories
 - Syntax-highlighted diffs with support for more than 200 languages
+- Diff, old/new sides, adjustable context, whitespace filtering and word diffs
 - File list to jump between changes, with text selection and copying
 - Staged, unstaged and untracked changes
 - Branch switching, automatic refresh and keyboard navigation

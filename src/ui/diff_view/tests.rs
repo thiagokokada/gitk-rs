@@ -329,3 +329,41 @@ fn alt_commit_navigation_works_with_history_and_diff_focus(cx: &mut TestAppConte
         assert!(cx.update(|window, _| focus.is_focused(window)));
     }
 }
+
+#[gpui_kit::test]
+fn diff_option_changes_replace_generation_and_reject_old_pages(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    fixture.commit("base");
+    fixture.commit("changed");
+    let (app, cx) = open(&fixture, cx);
+    let pane = cx.update(|_, cx| app.view.read(cx).diff.clone());
+    until(cx, |cx| cx.update(|_, cx| pane.read(cx).snapshot.is_some()));
+    let radio = cx.update(|window, _| window.find("old-mode").bounds());
+    cx.simulate_click(radio.center(), Modifiers::default());
+    assert_eq!(
+        cx.update(|_, cx| pane.read(cx).options.version),
+        super::DiffVersion::Old
+    );
+    let old = cx.update(|_, cx| pane.read(cx).page.selection);
+    pane.update(cx, |pane, cx| {
+        pane.change_options(
+            super::DiffOptions {
+                version: super::DiffVersion::Old,
+                context: 0,
+                words: super::WordDiff::Markup,
+                ignore_space: true,
+            },
+            cx,
+        )
+    });
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            let pane = pane.read(cx);
+            pane.snapshot
+                .as_ref()
+                .is_some_and(|s| s.selection != old && s.selection == pane.page.selection)
+        })
+    });
+    assert!(cx.update(|_, cx| pane.read(cx).selection.is_none()));
+    assert!(cx.update(|_, cx| pane.read(cx).current.as_ref().unwrap().options.ignore_space));
+}

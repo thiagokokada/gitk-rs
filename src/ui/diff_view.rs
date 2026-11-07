@@ -7,13 +7,17 @@ use super::{
 };
 use gitk_rs::{
     diff::{
-        CopyRequest, DiffHandle, DiffPage, DiffSelection, DiffSettings, DiffSnapshot, DiffSource,
-        LineKind, SelectionId, TextPoint, TextSelection, selection::DisplayText,
+        CopyRequest, DiffHandle, DiffOptions, DiffPage, DiffSelection, DiffSettings, DiffSnapshot,
+        DiffSource, DiffVersion, LineKind, SelectionId, TextPoint, TextSelection, WordDiff,
+        selection::DisplayText,
     },
     git::Commit,
 };
 use gpui_kit::component::{
-    menu::{ContextMenuExt, PopupMenuItem},
+    button::Button,
+    checkbox::Checkbox,
+    input::{Input, InputEvent, InputState},
+    menu::{ContextMenuExt, DropdownMenu, PopupMenuItem},
     resizable::{h_resizable, resizable_panel},
     scroll::{Scrollbar, ScrollbarMode},
 };
@@ -93,6 +97,9 @@ enum DiffIdentity {
 }
 
 pub(super) struct DiffPane {
+    options: DiffOptions,
+    current: Option<DiffSelection>,
+    context_input: Option<Entity<InputState>>,
     handle: DiffHandle,
     focus: FocusHandle,
     settings: DiffSettings,
@@ -153,6 +160,9 @@ impl DiffPane {
             }
         });
         Self {
+            options: DiffOptions::default(),
+            current: None,
+            context_input: None,
             handle,
             focus: cx.focus_handle(),
             settings,
@@ -222,14 +232,14 @@ impl DiffPane {
         }
         self.clear("Loading diff…", cx);
         self.identity = Some(identity);
-        self.handle.select(
-            DiffSelection {
-                id: self.page.selection,
-                repository,
-                source: DiffSource::Commit(commit),
-            },
-            self.page.clone(),
-        );
+        let selection = DiffSelection {
+            options: self.options,
+            id: self.page.selection,
+            repository,
+            source: DiffSource::Commit(commit),
+        };
+        self.current = Some(selection.clone());
+        self.handle.select(selection, self.page.clone());
     }
 
     pub(super) fn load_local(
@@ -245,14 +255,14 @@ impl DiffPane {
         }
         self.clear("Loading local changes…", cx);
         self.identity = Some(identity);
-        self.handle.select(
-            DiffSelection {
-                id: self.page.selection,
-                repository,
-                source: DiffSource::Local { staged },
-            },
-            self.page.clone(),
-        );
+        let selection = DiffSelection {
+            options: self.options,
+            id: self.page.selection,
+            repository,
+            source: DiffSource::Local { staged },
+        };
+        self.current = Some(selection.clone());
+        self.handle.select(selection, self.page.clone());
     }
 
     pub(super) fn clear(&mut self, message: &str, cx: &mut Context<Self>) {
@@ -261,6 +271,7 @@ impl DiffPane {
         self.page.range = 0..128;
         self.handle.clear(self.page.selection);
         self.identity = None;
+        self.current = None;
         self.snapshot = None;
         self.selected_file = None;
         self.file_jump_pending = false;
@@ -271,6 +282,120 @@ impl DiffPane {
         self.scroll.scroll_to_item_strict(0, ScrollStrategy::Top);
         self.files_scroll.scroll_to_item(0, ScrollStrategy::Top);
         cx.notify();
+    }
+
+    fn change_options(&mut self, options: DiffOptions, cx: &mut Context<Self>) {
+        if self.options == options {
+            return;
+        }
+        self.options = options;
+        if let Some(mut selection) = self.current.clone() {
+            let identity = self.identity.take();
+            self.clear("Loading diff…", cx);
+            self.identity = identity;
+            selection.id = self.page.selection;
+            selection.options = options;
+            self.current = Some(selection.clone());
+            self.handle.select(selection, self.page.clone());
+        }
+        cx.notify();
+    }
+
+    fn controls(&self, cx: &mut Context<Self>) -> AnyElement {
+        let mut bar = div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .px_2()
+            .py_1()
+            .text_size(px(12.));
+        for (id, label, version) in [
+            ("diff-mode", "Diff", DiffVersion::Diff),
+            ("old-mode", "Old version", DiffVersion::Old),
+            ("new-mode", "New version", DiffVersion::New),
+        ] {
+            bar = bar.child(
+                div()
+                    .id(id)
+                    .test_support()
+                    .cursor_pointer()
+                    .child(format!(
+                        "{} {label}",
+                        if self.options.version == version {
+                            "◉"
+                        } else {
+                            "○"
+                        }
+                    ))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.change_options(
+                            DiffOptions {
+                                version,
+                                ..this.options
+                            },
+                            cx,
+                        );
+                    })),
+            );
+        }
+        bar = bar.child("Lines of context:");
+        if let Some(input) = &self.context_input {
+            bar = bar.child(
+                div().w(px(80.)).child(
+                    gpui_kit::base::NumberInput::new(input)
+                        .controls_right()
+                        .input(Input::new(input)),
+                ),
+            );
+        }
+        bar.child(
+            Checkbox::new("ignore-space")
+                .label("Ignore space change")
+                .checked(self.options.ignore_space)
+                .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                    this.change_options(
+                        DiffOptions {
+                            ignore_space: *checked,
+                            ..this.options
+                        },
+                        cx,
+                    );
+                })),
+        )
+        .child(
+            Button::new("word-diff")
+                .label(match self.options.words {
+                    WordDiff::Lines => "Line diff ▾",
+                    WordDiff::Markup => "Markup words ▾",
+                    WordDiff::Color => "Color words ▾",
+                })
+                .dropdown_menu({
+                    let entity = cx.entity();
+                    move |mut menu, _, _| {
+                        for (label, words) in [
+                            ("Line diff", WordDiff::Lines),
+                            ("Markup words", WordDiff::Markup),
+                            ("Color words", WordDiff::Color),
+                        ] {
+                            let entity = entity.clone();
+                            menu =
+                                menu.item(PopupMenuItem::new(label).on_click(move |_, _, cx| {
+                                    entity.update(cx, |this, cx| {
+                                        this.change_options(
+                                            DiffOptions {
+                                                words,
+                                                ..this.options
+                                            },
+                                            cx,
+                                        )
+                                    });
+                                }));
+                        }
+                        menu
+                    }
+                }),
+        )
+        .into_any_element()
     }
 
     fn ensure(&mut self, range: Range<usize>) {
@@ -536,7 +661,32 @@ impl DiffPane {
 }
 
 impl Render for DiffPane {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.context_input.is_none() {
+            let input = cx.new(|cx| {
+                InputState::new(window, cx)
+                    .default_value("3")
+                    .step(1.)
+                    .min(0.)
+                    .max(10_000_000.)
+            });
+            cx.subscribe(&input, |this, input, event: &InputEvent, cx| {
+                if matches!(event, InputEvent::Change)
+                    && let Ok(context) = input.read(cx).value().parse::<u32>()
+                    && context <= 10_000_000
+                {
+                    this.change_options(
+                        DiffOptions {
+                            context,
+                            ..this.options
+                        },
+                        cx,
+                    );
+                }
+            })
+            .detach();
+            self.context_input = Some(input);
+        }
         self.layouts.borrow_mut().clear();
         let count = self.snapshot.as_ref().map_or(0, |s| s.count);
         let files = self
@@ -548,7 +698,9 @@ impl Render for DiffPane {
         div()
             .size_full()
             .flex()
+            .flex_col()
             .gap_2()
+            .child(self.controls(cx))
             .track_focus(&self.focus)
             .key_context("Diff")
             .on_mouse_up(

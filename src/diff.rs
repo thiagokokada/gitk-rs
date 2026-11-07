@@ -63,9 +63,57 @@ pub struct SelectionId(pub u64);
 
 #[derive(Clone)]
 pub struct DiffSelection {
+    pub options: DiffOptions,
     pub id: SelectionId,
     pub repository: PathBuf,
     pub source: DiffSource,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DiffVersion {
+    #[default]
+    Diff,
+    Old,
+    New,
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum WordDiff {
+    #[default]
+    Lines,
+    Markup,
+    Color,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DiffOptions {
+    pub version: DiffVersion,
+    pub context: u32,
+    pub ignore_space: bool,
+    pub words: WordDiff,
+}
+impl Default for DiffOptions {
+    fn default() -> Self {
+        Self {
+            version: DiffVersion::Diff,
+            context: 3,
+            ignore_space: false,
+            words: WordDiff::Lines,
+        }
+    }
+}
+impl DiffOptions {
+    fn args(self, numstat: bool) -> Vec<OsString> {
+        let mut args = Vec::new();
+        if !numstat {
+            args.push(format!("--unified={}", self.context).into());
+        }
+        if self.ignore_space {
+            args.push("-w".into());
+        }
+        if !numstat && self.words != WordDiff::Lines {
+            args.push("--word-diff=porcelain".into());
+        }
+        args
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -137,6 +185,7 @@ pub struct DiffDocument {
     added: u64,
     removed: u64,
     highlight_cache: Option<HighlightCache>,
+    word_spans: std::collections::HashMap<usize, Vec<(Range<usize>, bool)>>,
 }
 
 impl DiffDocument {
@@ -191,6 +240,9 @@ impl DiffDocument {
         let mut hunk = 0;
         let mut in_hunk = false;
         let mut notice = None;
+        let mut word_spans = std::collections::HashMap::new();
+        let mut words = String::new();
+        let mut spans = Vec::new();
         for command in 0..commands.len() {
             let args = commands.args(command, false);
             let mut stream = GitStream::spawn(
@@ -220,6 +272,58 @@ impl DiffDocument {
                     hunk = 0;
                     in_hunk = false;
                 }
+                if selection.options.words != WordDiff::Lines
+                    && in_hunk
+                    && !line.starts_with("@@")
+                    && !line.starts_with("diff --git ")
+                {
+                    if line == "~" {
+                        ensure!(
+                            index.len() < MAX_LINES
+                                && offset + words.len() as u64 + 2 <= MAX_DIFF_BYTES,
+                            "word diff exceeds preview limit"
+                        );
+                        let mut text = String::from(" ");
+                        text.push_str(&words);
+                        max_width = max_width.max(display_width_bound(&text));
+                        word_spans.insert(index.len(), std::mem::take(&mut spans));
+                        write_line(
+                            &mut output,
+                            &mut index,
+                            &mut offset,
+                            &text,
+                            LineKind::Context,
+                            file,
+                            hunk,
+                        )?;
+                        words.clear();
+                        continue;
+                    }
+                    if let Some(prefix @ (b' ' | b'+' | b'-')) = line.as_bytes().first().copied() {
+                        let hidden = (prefix == b'+'
+                            && selection.options.version == DiffVersion::Old)
+                            || (prefix == b'-' && selection.options.version == DiffVersion::New);
+                        if !hidden {
+                            let start = words.len() + 1;
+                            let markup = selection.options.words == WordDiff::Markup;
+                            if markup && prefix != b' ' {
+                                words.push_str(if prefix == b'+' { "{+" } else { "[-" });
+                            }
+                            words.push_str(&line[1..]);
+                            if markup && prefix != b' ' {
+                                words.push_str(if prefix == b'+' { "+}" } else { "-]" });
+                            }
+                            if prefix != b' ' {
+                                spans.push((start..words.len() + 1, prefix == b'+'));
+                            }
+                        }
+                        ensure!(
+                            words.len() as u64 <= MAX_DIFF_BYTES,
+                            "word diff line exceeds preview limit"
+                        );
+                        continue;
+                    }
+                }
                 let kind = if line.starts_with("@@") {
                     in_hunk = true;
                     hunk = index.len();
@@ -234,6 +338,11 @@ impl DiffDocument {
                 } else {
                     LineKind::Header
                 };
+                if (kind == LineKind::Added && selection.options.version == DiffVersion::Old)
+                    || (kind == LineKind::Removed && selection.options.version == DiffVersion::New)
+                {
+                    continue;
+                }
                 if index.len() >= MAX_LINES || offset + line.len() as u64 + 1 > MAX_DIFF_BYTES {
                     notice =
                         Some("Diff preview is limited to 256 MiB or one million lines.".into());
@@ -283,6 +392,7 @@ impl DiffDocument {
             added,
             removed,
             highlight_cache: None,
+            word_spans,
         })
     }
 
@@ -315,9 +425,31 @@ impl DiffDocument {
                 );
             }
             lines.push(DiffLine {
-                text,
+                text: text.clone(),
                 kind: self.index[index].kind,
-                spans: Vec::new(),
+                spans: self
+                    .word_spans
+                    .get(&index)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|(range, added)| {
+                        let end = range.end.min(text.len());
+                        (range.start < end).then_some(Span {
+                            range: range.start..end,
+                            color: if *added {
+                                if request.settings.dark {
+                                    0x80e090
+                                } else {
+                                    0x008000
+                                }
+                            } else if request.settings.dark {
+                                0xff9090
+                            } else {
+                                0xc00000
+                            },
+                        })
+                    })
+                    .collect(),
                 original_len,
             });
         }
@@ -344,6 +476,10 @@ impl DiffDocument {
         settings: DiffSettings,
         obsolete: impl Fn() -> bool,
     ) -> Result<bool> {
+        if !self.word_spans.is_empty() {
+            snapshot.highlighting = false;
+            return Ok(true);
+        }
         let mut cache = self.highlight_cache.take().unwrap_or_default();
         let result = cache.apply(self, snapshot, settings, obsolete);
         cache.limit_cursor();
@@ -463,6 +599,7 @@ fn diff_args(source: &DiffSource, numstat: bool) -> Vec<OsString> {
 struct DiffCommands {
     source: DiffSource,
     untracked: Vec<PathBuf>,
+    options: DiffOptions,
 }
 impl DiffCommands {
     fn new(selection: &DiffSelection, cancellation: &Cancellation) -> Result<Self> {
@@ -491,6 +628,7 @@ impl DiffCommands {
         }
         Ok(Self {
             source: selection.source.clone(),
+            options: selection.options,
             untracked,
         })
     }
@@ -502,7 +640,9 @@ impl DiffCommands {
     }
     fn args(&self, command: usize, numstat: bool) -> Vec<OsString> {
         if command == 0 {
-            return diff_args(&self.source, numstat);
+            let mut args = diff_args(&self.source, numstat);
+            args.extend(self.options.args(numstat));
+            return args;
         }
         let mut args = vec![
             "diff",
@@ -519,6 +659,7 @@ impl DiffCommands {
         if numstat {
             args.extend(["--numstat", "-z"].map(OsString::from));
         }
+        args.extend(self.options.args(numstat));
         args.extend([
             OsString::from("--"),
             OsString::from("/dev/null"),
@@ -876,6 +1017,7 @@ mod tests {
             .unwrap()
             .unwrap();
         DiffSelection {
+            options: Default::default(),
             id: SelectionId(id),
             repository: fixture.root().into(),
             source: DiffSource::Commit(Arc::new(commit)),
@@ -891,6 +1033,70 @@ mod tests {
                 dark: true,
             },
         }
+    }
+
+    #[test]
+    fn gitk_diff_options_filter_versions_context_whitespace_and_words() {
+        let fixture = Fixture::new();
+        fs::write(
+            fixture.root().join("file.txt"),
+            "first\nhello old world\nlast\n",
+        )
+        .unwrap();
+        fixture.git(&["add", "."]);
+        fixture.git(&["commit", "-qm", "old"]);
+        fs::write(
+            fixture.root().join("file.txt"),
+            "first\nhello new world\nlast\n",
+        )
+        .unwrap();
+        fixture.git(&["commit", "-qam", "new"]);
+        let mut selection = selected(&fixture, 1);
+        for version in [DiffVersion::Diff, DiffVersion::Old, DiffVersion::New] {
+            selection.options.version = version;
+            selection.options.context = 0;
+            let mut document = DiffDocument::load(&selection, &cancel()).unwrap();
+            let snapshot = document.page(&page(1)).unwrap();
+            assert_eq!(
+                snapshot.lines.iter().any(|l| l.text == "-hello old world"),
+                version != DiffVersion::New
+            );
+            assert_eq!(
+                snapshot.lines.iter().any(|l| l.text == "+hello new world"),
+                version != DiffVersion::Old
+            );
+            assert!(!snapshot.lines.iter().any(|l| l.text == " first"));
+            for words in [WordDiff::Markup, WordDiff::Color] {
+                selection.options.words = words;
+                let mut document = DiffDocument::load(&selection, &cancel()).unwrap();
+                let snapshot = document.page(&page(1)).unwrap();
+                let line = snapshot
+                    .lines
+                    .iter()
+                    .find(|l| l.text.contains("hello"))
+                    .unwrap();
+                assert_eq!(line.text.contains("old"), version != DiffVersion::New);
+                assert_eq!(line.text.contains("new"), version != DiffVersion::Old);
+                assert_eq!(
+                    line.text.contains("[-"),
+                    words == WordDiff::Markup && version != DiffVersion::New
+                );
+                assert!(!line.spans.is_empty());
+            }
+            selection.options.words = WordDiff::Lines;
+        }
+        fs::write(
+            fixture.root().join("file.txt"),
+            "first\nhello   new world\nlast\n",
+        )
+        .unwrap();
+        selection.source = DiffSource::Local { staged: false };
+        selection.options = DiffOptions {
+            ignore_space: true,
+            ..Default::default()
+        };
+        let document = DiffDocument::load(&selection, &cancel()).unwrap();
+        assert!(document.files.is_empty());
     }
 
     #[test]
@@ -1057,6 +1263,7 @@ mod tests {
         )
         .unwrap();
         let selection = DiffSelection {
+            options: Default::default(),
             id: SelectionId(1),
             repository: fixture.root().into(),
             source: DiffSource::Local { staged: false },
@@ -1105,6 +1312,7 @@ mod tests {
             .unwrap();
         assert!(!output.status.success());
         let selection = DiffSelection {
+            options: Default::default(),
             id: SelectionId(1),
             repository: fixture.root().into(),
             source: DiffSource::Local { staged: false },
