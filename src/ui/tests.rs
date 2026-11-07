@@ -588,7 +588,7 @@ fn graph_column_can_be_resized_without_changing_selection(cx: &mut TestAppContex
 }
 
 #[gpui_kit::test]
-fn reload_control_toggles_watching_and_refreshes_history(cx: &mut TestAppContext) {
+fn auto_reload_shortcut_toggles_watching_and_refreshes_history(cx: &mut TestAppContext) {
     let fixture = Fixture::new();
     let head = fixture.commit("base");
     let (app, cx) = open(&fixture, cx);
@@ -596,8 +596,8 @@ fn reload_control_toggles_watching_and_refreshes_history(cx: &mut TestAppContext
         selected(&app.view, cx).as_deref() == Some(head.as_str())
     });
     assert!(!cx.update(|_, cx| app.view.read(cx).config.watch));
-    let button = cx.update(|window, _| window.find("reload").bounds());
-    cx.simulate_click(button.center(), gpui_kit::Modifiers::default());
+    assert!(cx.update(|window, _| window.try_find("reload").is_none()));
+    cx.simulate_keystrokes("alt-r");
     assert!(cx.update(|_, cx| app.view.read(cx).config.watch));
     until(cx, |cx| {
         cx.update(|_, cx| app.view.read(cx).reload_selection.is_none())
@@ -606,8 +606,8 @@ fn reload_control_toggles_watching_and_refreshes_history(cx: &mut TestAppContext
     until(cx, |cx| {
         cx.update(|_, cx| !app.view.read(cx).local_rows.is_empty())
     });
-    let button = cx.update(|window, _| window.find("reload").bounds());
-    cx.simulate_click(button.center(), gpui_kit::Modifiers::default());
+    assert!(cx.update(|window, _| window.try_find("reload").is_none()));
+    cx.simulate_keystrokes("alt-r");
     assert!(!cx.update(|_, cx| app.view.read(cx).config.watch));
     until(cx, |cx| {
         cx.update(|_, cx| app.view.read(cx).reload_selection.is_none())
@@ -1955,4 +1955,58 @@ fn graph_paints_a_folded_column_at_the_maximum_lane_limit(cx: &mut TestAppContex
         assert_eq!(layout.column(last), last as usize);
         assert!(layout.is_collapsed(last));
     });
+}
+
+#[gpui_kit::test]
+fn repository_title_and_inline_filter_clear_controls(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    fixture.commit("base");
+    fixture.git(&["branch", "another"]);
+    let (app, cx) = open(&fixture, cx);
+    app.view.update(cx, |view, cx| {
+        view.change_repository(fixture.root().join("."), cx)
+    });
+    until(cx, |cx| {
+        cx.update(|_, cx| app.view.read(cx).workspace_snapshot.is_some())
+    });
+    assert_eq!(
+        cx.update(|_, cx| app.view.read(cx).title.clone()),
+        format!("gitk-rs - {}", fixture.root().display())
+    );
+    cx.update(|window, cx| {
+        app.view.update(cx, |view, cx| {
+            view.filter
+                .update(cx, |input, cx| input.set_value("no matches", window, cx));
+        })
+    });
+    until(cx, |cx| {
+        cx.update(|window, _| window.try_find("clean").is_some())
+    });
+    let clear = cx.update(|window, _| window.find("clean").bounds());
+    cx.simulate_click(clear.center(), gpui_kit::Modifiers::default());
+    assert!(cx.update(|_, cx| app.view.read(cx).filter.read(cx).value().is_empty()));
+    assert!(cx.update(|window, _| window.try_find("clear-filter").is_none()));
+    cx.update(|window, cx| {
+        app.view
+            .update(cx, |view, cx| view.open_branches(window, cx))
+    });
+    until(cx, |cx| {
+        cx.update(|_, cx| app.view.read(cx).branches.len() == 2)
+    });
+    cx.update(|window, cx| {
+        app.view.update(cx, |view, cx| {
+            view.branch_filter
+                .update(cx, |input, cx| input.set_value("another", window, cx));
+        })
+    });
+    until(cx, |cx| {
+        cx.update(|window, _| window.try_find("clean").is_some())
+    });
+    let clear = cx.update(|window, _| window.find("clean").bounds());
+    cx.simulate_click(clear.center(), gpui_kit::Modifiers::default());
+    assert!(cx.update(|_, cx| app.view.read(cx).branch_filter.read(cx).value().is_empty()));
+    assert_eq!(
+        cx.update(|_, cx| app.view.read(cx).filtered_branches.len()),
+        2
+    );
 }

@@ -14,10 +14,12 @@ use gitk_rs::{
     git::Commit,
 };
 use gpui_kit::component::{
+    Sizable,
     button::Button,
     checkbox::Checkbox,
     input::{Input, InputEvent, InputState},
     menu::{ContextMenuExt, DropdownMenu, PopupMenuItem},
+    radio::Radio,
     resizable::{h_resizable, resizable_panel},
     scroll::{Scrollbar, ScrollbarMode},
 };
@@ -97,6 +99,7 @@ enum DiffIdentity {
 }
 
 pub(super) struct DiffPane {
+    restore_position: Option<(Option<PathBuf>, f64)>,
     options: DiffOptions,
     current: Option<DiffSelection>,
     context_input: Option<Entity<InputState>>,
@@ -139,6 +142,23 @@ impl DiffPane {
                                 .or_else(|| snapshot.notice.clone())
                                 .unwrap_or_default();
                             this.snapshot = Some(snapshot);
+                            if let Some((path, fraction)) = this.restore_position.take() {
+                                let snapshot = this.snapshot.as_ref().unwrap();
+                                let section = path.as_ref().and_then(|path| {
+                                    snapshot.files.iter().position(|file| &file.path == path)
+                                });
+                                let start = section
+                                    .and_then(|i| snapshot.files[i].start_line)
+                                    .unwrap_or(0);
+                                let end = section
+                                    .and_then(|i| snapshot.files.get(i + 1))
+                                    .and_then(|file| file.start_line)
+                                    .unwrap_or(snapshot.count);
+                                let line = start
+                                    + ((end.saturating_sub(start + 1)) as f64 * fraction).round()
+                                        as usize;
+                                this.jump(line, cx);
+                            }
                             cx.notify();
                         }
                         if let Some(copy) = this.handle.take_copy()
@@ -160,6 +180,7 @@ impl DiffPane {
             }
         });
         Self {
+            restore_position: None,
             options: DiffOptions::default(),
             current: None,
             context_input: None,
@@ -272,6 +293,7 @@ impl DiffPane {
         self.handle.clear(self.page.selection);
         self.identity = None;
         self.current = None;
+        self.restore_position = None;
         self.snapshot = None;
         self.selected_file = None;
         self.file_jump_pending = false;
@@ -290,9 +312,33 @@ impl DiffPane {
         }
         self.options = options;
         if let Some(mut selection) = self.current.clone() {
+            let position = self
+                .snapshot
+                .as_ref()
+                .map(|snapshot| {
+                    let section = snapshot.files.iter().rposition(|file| {
+                        file.start_line
+                            .is_some_and(|line| line <= self.viewport.start)
+                    });
+                    let start = section
+                        .and_then(|i| snapshot.files[i].start_line)
+                        .unwrap_or(0);
+                    let end = section
+                        .and_then(|i| snapshot.files.get(i + 1))
+                        .and_then(|file| file.start_line)
+                        .unwrap_or(snapshot.count);
+                    let fraction = self.viewport.start.saturating_sub(start) as f64
+                        / end.saturating_sub(start + 1).max(1) as f64;
+                    (
+                        section.map(|i| snapshot.files[i].path.clone()),
+                        fraction.clamp(0., 1.),
+                    )
+                })
+                .or_else(|| self.restore_position.clone());
             let identity = self.identity.take();
             self.clear("Loading diff…", cx);
             self.identity = identity;
+            self.restore_position = position;
             selection.id = self.page.selection;
             selection.options = options;
             self.current = Some(selection.clone());
@@ -308,6 +354,7 @@ impl DiffPane {
             .gap_2()
             .px_2()
             .py_1()
+            .line_height(px(20.))
             .text_size(px(12.));
         for (id, label, version) in [
             ("diff-mode", "Diff", DiffVersion::Diff),
@@ -315,18 +362,10 @@ impl DiffPane {
             ("new-mode", "New version", DiffVersion::New),
         ] {
             bar = bar.child(
-                div()
-                    .id(id)
-                    .test_support()
-                    .cursor_pointer()
-                    .child(format!(
-                        "{} {label}",
-                        if self.options.version == version {
-                            "◉"
-                        } else {
-                            "○"
-                        }
-                    ))
+                Radio::new(id)
+                    .small()
+                    .label(label)
+                    .checked(self.options.version == version)
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.change_options(
                             DiffOptions {
@@ -344,12 +383,13 @@ impl DiffPane {
                 div().w(px(80.)).child(
                     gpui_kit::base::NumberInput::new(input)
                         .controls_right()
-                        .input(Input::new(input)),
+                        .input(Input::new(input).small()),
                 ),
             );
         }
         bar.child(
             Checkbox::new("ignore-space")
+                .small()
                 .label("Ignore space change")
                 .checked(self.options.ignore_space)
                 .on_click(cx.listener(|this, checked: &bool, _, cx| {
@@ -364,6 +404,7 @@ impl DiffPane {
         )
         .child(
             Button::new("word-diff")
+                .small()
                 .label(match self.options.words {
                     WordDiff::Lines => "Line diff ▾",
                     WordDiff::Markup => "Markup words ▾",

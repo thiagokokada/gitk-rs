@@ -180,7 +180,7 @@ impl HistoryWindow {
             Some(DialogKind::Branches) => {
                 body = body
                     .overflow_hidden()
-                    .child(Input::new(&self.branch_filter))
+                    .child(Input::new(&self.branch_filter).cleanable(true))
                     .child(
                         div()
                             .relative()

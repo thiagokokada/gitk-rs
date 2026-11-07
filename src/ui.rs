@@ -120,6 +120,7 @@ enum DialogKind {
 }
 
 struct HistoryWindow {
+    title: String,
     config: Config,
     preferences: Preferences,
     preferences_draft: Preferences,
@@ -323,6 +324,7 @@ impl HistoryWindow {
             )
         });
         Self {
+            title: String::new(),
             preferences_draft: preferences.clone(),
             graph_columns_input,
             batch_input,
@@ -1136,6 +1138,17 @@ fn paint_graph(
 
 impl Render for HistoryWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let repository = self
+            .workspace_snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.repository.as_ref());
+        if let Some(repository) = repository {
+            let title = format!("gitk-rs - {}", repository.root.display());
+            if self.title != title {
+                window.set_window_title(&title);
+                self.title = title;
+            }
+        }
         if std::mem::take(&mut self.restore_focus)
             || self.dialog.is_none() && self.dialog_focus.is_focused(window)
         {
@@ -1328,16 +1341,9 @@ impl Render for HistoryWindow {
             .bg(rgb(palette.background))
             .text_color(rgb(palette.foreground))
             .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .child(
-                        div()
-                            .flex_1()
-                            .truncate()
-                            .child(format!("Repository: {}", self.config.repository.display())),
-                    )
+                div().flex().items_center().gap_2()
+                    .child("Filter:")
+                    .child(div().flex_1().key_context("HistoryFilter").child(Input::new(&self.filter).cleanable(true)))
                     .child(
                         Button::new("application-menu")
                             .label("Menu")
@@ -1364,44 +1370,8 @@ impl Render for HistoryWindow {
                                         .menu("About", Box::new(About))
                                         .menu("Quit", Box::new(Quit))
                                 }
-                            }),
-                    ),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .child("Filter:")
-                    .child(div().flex_1().key_context("HistoryFilter").child(Input::new(&self.filter)))
-                    .child(
-                        div()
-                            .id("clear-filter")
-                            .px_3()
-                            .py_2()
-                            .bg(rgb(palette.panel))
-                            .cursor_pointer()
-                            .child("Clear")
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.filter
-                                    .update(cx, |input, cx| input.set_value("", window, cx))
-                            })),
-                    )
-                    .child(
-                        div()
-                            .id("reload")
-                            .test_support()
-                            .px_3()
-                            .py_2()
-                            .bg(rgb(palette.panel))
-                            .cursor_pointer()
-                            .child(if self.config.watch {
-                                "Reload (Auto On)"
-                            } else {
-                                "Reload (Auto Off)"
                             })
-                            .on_click(cx.listener(|this, _, _, cx| this.toggle_auto_reload(cx))),
-                    ),
+                    )
             )
             .child(
                 div().flex_1().min_h_0().child(

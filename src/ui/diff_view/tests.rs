@@ -339,6 +339,8 @@ fn diff_option_changes_replace_generation_and_reject_old_pages(cx: &mut TestAppC
     let pane = cx.update(|_, cx| app.view.read(cx).diff.clone());
     until(cx, |cx| cx.update(|_, cx| pane.read(cx).snapshot.is_some()));
     let radio = cx.update(|window, _| window.find("old-mode").bounds());
+    let words = cx.update(|window, _| window.find("word-diff").bounds());
+    assert!((radio.center().y - words.center().y).abs() <= px(1.));
     cx.simulate_click(radio.center(), Modifiers::default());
     assert_eq!(
         cx.update(|_, cx| pane.read(cx).options.version),
@@ -366,4 +368,57 @@ fn diff_option_changes_replace_generation_and_reject_old_pages(cx: &mut TestAppC
     });
     assert!(cx.update(|_, cx| pane.read(cx).selection.is_none()));
     assert!(cx.update(|_, cx| pane.read(cx).current.as_ref().unwrap().options.ignore_space));
+}
+
+#[gpui_kit::test]
+fn word_mode_changes_preserve_the_current_file_and_scroll_position(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    for word in ["old", "new"] {
+        let source: String = (0..600)
+            .map(|i| format!("let value_{i} = \"{word}\";\n"))
+            .collect();
+        std::fs::write(fixture.root().join("long.rs"), source).unwrap();
+        fixture.git(&["add", "."]);
+        fixture.git(&["commit", "-qm", word]);
+    }
+    let (app, cx) = open(&fixture, cx);
+    let pane = cx.update(|_, cx| app.view.read(cx).diff.clone());
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            pane.read(cx)
+                .snapshot
+                .as_ref()
+                .is_some_and(|s| s.count > 1000)
+        })
+    });
+    pane.update(cx, |pane, cx| pane.jump(700, cx));
+    until(cx, |cx| {
+        cx.update(|_, cx| pane.read(cx).viewport.start >= 700)
+    });
+    for words in [
+        super::WordDiff::Markup,
+        super::WordDiff::Color,
+        super::WordDiff::Lines,
+    ] {
+        pane.update(cx, |pane, cx| {
+            pane.change_options(
+                super::DiffOptions {
+                    words,
+                    ..pane.options
+                },
+                cx,
+            )
+        });
+        until(cx, |cx| {
+            cx.update(|_, cx| {
+                let pane = pane.read(cx);
+                pane.restore_position.is_none()
+                    && pane.viewport.start > 250
+                    && pane.selected_file == Some(1)
+                    && pane.snapshot.as_ref().is_some_and(|s| {
+                        s.request == pane.page.id && s.selection == pane.page.selection
+                    })
+            })
+        });
+    }
 }
