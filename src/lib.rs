@@ -15,3 +15,5 @@ mod test_support;
 
 pub mod preferences;
 pub mod workspace;
+
+mod settings_file;

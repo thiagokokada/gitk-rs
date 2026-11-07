@@ -120,6 +120,7 @@ fn history_selection_highlighting_and_copy_across_unloaded_lines() {
     let handle = diff.handle();
     handle.select(
         DiffSelection {
+            options: Default::default(),
             id: SelectionId(1),
             repository: fixture.root().into(),
             source: DiffSource::Commit(commit),
@@ -371,6 +372,7 @@ fn opening_a_subdirectory_still_includes_untracked_files_at_the_repository_root(
     let handle = engine.handle();
     handle.select(
         DiffSelection {
+            options: Default::default(),
             id: SelectionId(1),
             repository: nested,
             source: DiffSource::Local { staged: false },

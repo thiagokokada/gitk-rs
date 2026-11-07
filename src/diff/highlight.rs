@@ -195,7 +195,10 @@ impl HighlightCache {
             self.parser_bytes = 0;
             return Ok(Vec::new());
         }
-        let code = &text[1..];
+        let word_ranges = document.word_spans.get(&index);
+        let (old_code, old_map) = project_words(&text, word_ranges, document.word_markup, false);
+        let (new_code, new_map) = project_words(&text, word_ranges, document.word_markup, true);
+        let code = &new_code;
         self.parser_bytes = self
             .parser_bytes
             .saturating_add(code.len().saturating_add(1));
@@ -205,17 +208,38 @@ impl HighlightCache {
         if self.old.is_none() {
             self.old = Some(CodeHighlighter::new(
                 file.old_path.as_deref().unwrap_or(&file.path),
-                code,
+                &old_code,
                 dark,
             ));
             self.new = Some(CodeHighlighter::new(&file.path, code, dark));
+        }
+        if word_ranges.is_some() {
+            let old = self
+                .old
+                .as_mut()
+                .unwrap()
+                .line(&old_code)
+                .unwrap_or_default();
+            let new = self
+                .new
+                .as_mut()
+                .unwrap()
+                .line(&new_code)
+                .unwrap_or_default();
+            let mut spans = mapped_spans(old, &old_map, !document.old_version);
+            if !document.old_version {
+                spans.extend(mapped_spans(new, &new_map, false));
+            }
+            spans.sort_by_key(|span| span.range.start);
+            return Ok(spans);
         }
         let spans = match location.kind {
             LineKind::Added => self.new.as_mut().unwrap().line(code),
             LineKind::Removed => self.old.as_mut().unwrap().line(code),
             _ => {
-                let _ = self.old.as_mut().unwrap().line(code);
-                self.new.as_mut().unwrap().line(code)
+                let old = self.old.as_mut().unwrap().line(code);
+                let new = self.new.as_mut().unwrap().line(code);
+                if document.old_version { old } else { new }
             }
         };
         Ok(spans
@@ -227,5 +251,87 @@ impl HighlightCache {
                 span
             })
             .collect())
+    }
+}
+
+// Reconstruct each side before parsing so delimiters, deleted quotes and markup
+// cannot corrupt the new-side syntax state. Maps use UTF-8 byte offsets.
+struct WordMap {
+    source: std::ops::Range<usize>,
+    display: std::ops::Range<usize>,
+    removed: bool,
+}
+fn project_words(
+    text: &str,
+    words: Option<&Vec<(std::ops::Range<usize>, bool)>>,
+    markup: bool,
+    new: bool,
+) -> (String, Vec<WordMap>) {
+    let mut code = String::new();
+    let mut map = Vec::new();
+    let mut cursor = 1;
+    let mut append = |range: std::ops::Range<usize>, removed| {
+        if range.is_empty() {
+            return;
+        }
+        let start = code.len();
+        code.push_str(&text[range.clone()]);
+        map.push(WordMap {
+            source: start..code.len(),
+            display: range,
+            removed,
+        });
+    };
+    for (range, added) in words.into_iter().flatten() {
+        append(cursor..range.start, false);
+        if *added == new {
+            let trim = if markup { 2 } else { 0 };
+            append(range.start + trim..range.end - trim, !added);
+        }
+        cursor = range.end;
+    }
+    append(cursor..text.len(), false);
+    (code, map)
+}
+fn mapped_spans(spans: Vec<Span>, map: &[WordMap], removed_only: bool) -> Vec<Span> {
+    let mut result = Vec::new();
+    for entry in map {
+        if removed_only && !entry.removed {
+            continue;
+        }
+        for span in &spans {
+            let start = span.range.start.max(entry.source.start);
+            let end = span.range.end.min(entry.source.end);
+            if start < end {
+                result.push(Span {
+                    range: entry.display.start + start - entry.source.start
+                        ..entry.display.start + end - entry.source.start,
+                    color: span.color,
+                });
+            }
+        }
+    }
+    result
+}
+
+#[cfg(test)]
+mod word_tests {
+    use super::*;
+
+    #[test]
+    fn projection_excludes_opposite_side_and_markup_preserving_unicode_offsets() {
+        let text = " let λ = [-\"old\"-]{+42+};";
+        let removed = text.find("[-").unwrap()..text.find("{+").unwrap();
+        let added = removed.end..text.find(';').unwrap();
+        let words = vec![(removed, false), (added, true)];
+        let (old, old_map) = project_words(text, Some(&words), true, false);
+        let (new, new_map) = project_words(text, Some(&words), true, true);
+        assert_eq!(old, "let λ = \"old\";");
+        assert_eq!(new, "let λ = 42;");
+        for (source, map) in [(old, old_map), (new, new_map)] {
+            for entry in map {
+                assert_eq!(source[entry.source], text[entry.display]);
+            }
+        }
     }
 }

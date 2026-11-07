@@ -278,3 +278,116 @@ fn cursor_input_budget_counts_blank_line_separators() {
         expected
     );
 }
+
+#[test]
+fn word_modes_preserve_syntax_colors_and_overlay_changes_across_pages_and_themes() {
+    use super::{DiffVersion, WordDiff};
+    let fixture = Fixture::new();
+    for value in ["old", "new"] {
+        fs::write(
+            fixture.root().join("file.rs"),
+            format!("fn main() {{\n    let text = \"{value}\";\n    let number = 42;\n}}\n"),
+        )
+        .unwrap();
+        fixture.git(&["add", "."]);
+        fixture.git(&["commit", "-qm", value]);
+    }
+    for words in [WordDiff::Markup, WordDiff::Color] {
+        for version in [DiffVersion::Diff, DiffVersion::Old, DiffVersion::New] {
+            let mut selection = selected(&fixture, 1);
+            selection.options.words = words;
+            selection.options.version = version;
+            let mut document = DiffDocument::load(&selection, &Cancellation::default()).unwrap();
+            for dark in [true, false, true] {
+                let snapshot = assert_fresh_range(&mut document, 0..256, dark);
+                let context = snapshot
+                    .lines
+                    .iter()
+                    .find(|line| line.text.contains("let number"))
+                    .unwrap();
+                assert!(
+                    context.spans.len() > 1,
+                    "unchanged code must retain syntax colors"
+                );
+                let changed = snapshot
+                    .lines
+                    .iter()
+                    .find(|line| line.text.contains("let text"))
+                    .unwrap();
+                let keyword = changed.text.find("let").unwrap();
+                assert!(
+                    changed
+                        .spans
+                        .iter()
+                        .any(|span| span.range.contains(&keyword))
+                );
+                for word in ["old", "new"] {
+                    if let Some(start) = changed.text.find(word) {
+                        let color = match (word, dark) {
+                            ("old", true) => 0xff9090,
+                            ("old", false) => 0xc00000,
+                            (_, true) => 0x80e090,
+                            (_, false) => 0x008000,
+                        };
+                        assert!(
+                            changed
+                                .spans
+                                .iter()
+                                .any(|span| span.range.contains(&start) && span.color == color)
+                        );
+                    }
+                }
+                let mut request = page(1);
+                request.range = snapshot
+                    .lines
+                    .iter()
+                    .position(|line| line.text.contains("let number"))
+                    .unwrap()..256;
+                request.settings.dark = dark;
+                assert_fresh_range(&mut document, request.range, dark);
+            }
+        }
+    }
+}
+
+#[test]
+fn word_syntax_tracks_multiline_state_on_the_selected_side() {
+    use super::{DiffVersion, WordDiff};
+    use crate::syntax::CodeHighlighter;
+    let fixture = Fixture::new();
+    for (label, source) in [
+        ("old", "/* comment\nlet value = 42;\n*/\n"),
+        ("new", "// comment\nlet value = 42;\n// end\n"),
+    ] {
+        fs::write(fixture.root().join("file.rs"), source).unwrap();
+        fixture.git(&["add", "."]);
+        fixture.git(&["commit", "-qm", label]);
+    }
+    for words in [WordDiff::Lines, WordDiff::Markup, WordDiff::Color] {
+        for version in [DiffVersion::Diff, DiffVersion::Old, DiffVersion::New] {
+            let mut selection = selected(&fixture, 1);
+            selection.options.words = words;
+            selection.options.version = version;
+            let mut document = DiffDocument::load(&selection, &Cancellation::default()).unwrap();
+            let snapshot = assert_fresh_range(&mut document, 0..256, true);
+            let line = snapshot
+                .lines
+                .iter()
+                .find(|line| line.text.contains("let value"))
+                .unwrap();
+            let opening = if version == DiffVersion::Old {
+                "/* comment"
+            } else {
+                "// comment"
+            };
+            let mut parser = CodeHighlighter::new(std::path::Path::new("file.rs"), opening, true);
+            parser.line(opening).unwrap();
+            let mut expected = parser.line("let value = 42;").unwrap();
+            for span in &mut expected {
+                span.range.start += 1;
+                span.range.end += 1;
+            }
+            assert_eq!(line.spans, expected, "{words:?} {version:?}");
+        }
+    }
+}

@@ -44,7 +44,7 @@ impl HistoryWindow {
         .detach();
     }
     pub(super) fn change_repository(&mut self, path: std::path::PathBuf, cx: &mut Context<Self>) {
-        self.config.repository = path;
+        self.config.repository = std::path::absolute(&path).unwrap_or(path);
         self.workspace_generation.0 += 1;
         self.workspace_snapshot = None;
         self.local_rows.clear();
@@ -180,7 +180,7 @@ impl HistoryWindow {
             Some(DialogKind::Branches) => {
                 body = body
                     .overflow_hidden()
-                    .child(Input::new(&self.branch_filter))
+                    .child(Input::new(&self.branch_filter).cleanable(true))
                     .child(
                         div()
                             .relative()
@@ -608,7 +608,10 @@ impl HistoryWindow {
         let save = cx.background_executor().spawn(async move {
             path.as_ref()
                 .map_or_else(|| preferences.save(), |path| preferences.save_to(path))
-                .map_err(|e| format!("{e:#}"))
+                .map_err(|error| {
+                    eprintln!("gitk-rs: save preferences: {error:#}");
+                    format!("{error:#}")
+                })
         });
         cx.spawn(async move |this, cx| {
             let result = save.await;

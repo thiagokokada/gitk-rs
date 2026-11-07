@@ -7,7 +7,7 @@ use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
-    io::{Read, Write},
+    io::Read,
     path::{Path, PathBuf},
 };
 
@@ -115,13 +115,7 @@ impl Preferences {
     }
     pub fn save_to(&self, path: &Path) -> Result<()> {
         self.validate()?;
-        let parent = path.parent().context("preferences directory is missing")?;
-        fs::create_dir_all(parent)?;
-        let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
-        temporary.write_all(toml::to_string_pretty(self)?.as_bytes())?;
-        temporary.as_file().sync_all()?;
-        temporary.persist(path)?;
-        Ok(())
+        crate::settings_file::write(path, toml::to_string_pretty(self)?.as_bytes())
     }
 }
 #[cfg(test)]
@@ -153,6 +147,29 @@ mod tests {
             .validate()
             .is_err()
         );
+    }
+
+    #[test]
+    fn read_only_preferences_are_not_replaced_by_atomic_save() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("preferences.toml");
+        let original = Preferences::default();
+        original.save_to(&path).unwrap();
+        let bytes = fs::read(&path).unwrap();
+        let permissions = fs::metadata(&path).unwrap().permissions();
+        let mut readonly = permissions.clone();
+        readonly.set_readonly(true);
+        fs::set_permissions(&path, readonly).unwrap();
+        let changed = Preferences {
+            font_size: 19.,
+            ..original.clone()
+        };
+        assert!(changed.save_to(&path).is_err());
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        assert_eq!(Preferences::load_from(&path).unwrap(), original);
+        fs::set_permissions(&path, permissions).unwrap();
+        changed.save_to(&path).unwrap();
+        assert_eq!(Preferences::load_from(&path).unwrap(), changed);
     }
 
     #[test]

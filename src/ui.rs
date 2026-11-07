@@ -35,8 +35,8 @@ use gpui_kit::component::{
 use gpui_kit::{
     AnyElement, App, Bounds, Context, Entity, FocusHandle, Focusable, KeyBinding, PathBuilder,
     ScrollHandle, ScrollStrategy, SharedString, Subscription, Task, TestSupportExt,
-    UniformListDecoration, UniformListScrollHandle, Window, WindowBounds, WindowOptions, actions,
-    canvas, div, fill, point, prelude::*, px, rgb, size, uniform_list,
+    TitlebarOptions, UniformListDecoration, UniformListScrollHandle, Window, WindowBounds,
+    WindowOptions, actions, canvas, div, fill, point, prelude::*, px, rgb, size, uniform_list,
 };
 use preference_dialog::{FontCatalogGeneration, FontChoices};
 use std::{
@@ -120,6 +120,7 @@ enum DialogKind {
 }
 
 struct HistoryWindow {
+    title: String,
     config: Config,
     preferences: Preferences,
     preferences_draft: Preferences,
@@ -175,13 +176,15 @@ struct HistoryWindow {
     preserve_filter_selection: bool,
     viewport: Range<usize>,
     graph_layout: GraphLayout,
+    layout_handle: DiffHandle,
+    history_height: f32,
     graph_width: f32,
     graph_resize: Option<(gpui_kit::Pixels, f32)>,
 }
 
 impl HistoryWindow {
     fn new(
-        config: Config,
+        mut config: Config,
         timing: Timing,
         services: WindowServices,
         preferences: Preferences,
@@ -189,12 +192,14 @@ impl HistoryWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        config.repository = std::path::absolute(&config.repository).unwrap_or(config.repository);
         apply_fonts(&preferences, cx);
         let WindowServices {
             history,
             workspace,
             diff: diff_handle,
         } = services;
+        let layout = diff_handle.initial_layout();
         let ui_font_select = cx.new(|cx| {
             SelectState::new(
                 SearchableVec::new(vec![SharedString::from(preferences.ui_font.clone())]),
@@ -307,7 +312,7 @@ impl HistoryWindow {
         });
         let diff = cx.new(|cx| {
             diff_view::DiffPane::new(
-                diff_handle,
+                diff_handle.clone(),
                 DiffSettings {
                     syntax: config.syntax,
                     dark: config.theme == Theme::Dark,
@@ -323,6 +328,7 @@ impl HistoryWindow {
             )
         });
         Self {
+            title: String::new(),
             preferences_draft: preferences.clone(),
             graph_columns_input,
             batch_input,
@@ -378,7 +384,12 @@ impl HistoryWindow {
             preserve_filter_selection: false,
             viewport: 0..10,
             graph_layout: GraphLayout::default(),
-            graph_width: 280.,
+            layout_handle: diff_handle,
+            history_height: layout.history_height,
+            graph_width: layout.graph_width.clamp(
+                160.,
+                (f32::from(window.viewport_size().width) - 540.).clamp(160., 720.),
+            ),
             graph_resize: None,
         }
     }
@@ -422,8 +433,12 @@ impl HistoryWindow {
             && (snapshot.eof && snapshot.visible == 0
                 || snapshot.error.is_some() && self.selected.is_none())
         {
-            self.diff
-                .update(cx, |diff, cx| diff.clear(&self.detail, cx));
+            let message = if snapshot.error.is_some() {
+                "No commit selected."
+            } else {
+                &self.detail
+            };
+            self.diff.update(cx, |diff, cx| diff.clear(message, cx));
         }
         let restoring = self.request.restore.is_some();
         let restored = snapshot.restored.clone();
@@ -585,9 +600,6 @@ impl HistoryWindow {
                     self.pending_selection = Some(index);
                 }
             }
-        }
-        if let Some(error) = &snapshot.error {
-            self.operation_message = error.clone();
         }
         self.workspace_snapshot = Some(snapshot);
         if self.snapshot.as_ref().is_some_and(|s| s.visible == 0)
@@ -778,27 +790,40 @@ impl HistoryWindow {
     }
 
     fn status_text(&self) -> String {
-        let mut status = self.snapshot.as_ref().map_or_else(
-            || "loading commits…".into(),
-            |s| {
-                if let Some(error) = &s.error {
-                    return error.clone();
-                }
-                format!(
-                    "showing {} / {} loaded commits on {}{}{}",
-                    s.visible,
-                    s.loaded,
-                    s.branch,
-                    if s.eof {
-                        " — end of history"
-                    } else {
-                        " — more available"
-                    },
-                    if s.filtering { " — filtering…" } else { "" }
-                )
-            },
-        );
-        if !self.operation_message.is_empty() && self.dialog.is_none() {
+        // History and workspace probe the same repository independently. Prefer
+        // one repository error in the status bar; operation failures remain separate.
+        let repository_error = self
+            .snapshot
+            .as_ref()
+            .and_then(|s| s.error.as_ref())
+            .or_else(|| {
+                self.workspace_snapshot
+                    .as_ref()
+                    .and_then(|s| s.error.as_ref())
+            });
+        let mut status = repository_error.cloned().unwrap_or_else(|| {
+            self.snapshot.as_ref().map_or_else(
+                || "loading commits…".into(),
+                |s| {
+                    format!(
+                        "showing {} / {} loaded commits on {}{}{}",
+                        s.visible,
+                        s.loaded,
+                        s.branch,
+                        if s.eof {
+                            " — end of history"
+                        } else {
+                            " — more available"
+                        },
+                        if s.filtering { " — filtering…" } else { "" }
+                    )
+                },
+            )
+        });
+        if !self.operation_message.is_empty()
+            && self.dialog.is_none()
+            && repository_error != Some(&self.operation_message)
+        {
             status.push_str("  — ");
             status.push_str(&self.operation_message);
         }
@@ -1134,8 +1159,22 @@ fn paint_graph(
     }
 }
 
+fn repository_title(path: &std::path::Path) -> String {
+    format!("{} — gitk-rs", path.display())
+}
+
 impl Render for HistoryWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let repository = self
+            .workspace_snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.repository.as_ref());
+        let path = repository.map_or(&self.config.repository, |repository| &repository.root);
+        let title = repository_title(path);
+        if self.title != title {
+            window.set_window_title(&title);
+            self.title = title;
+        }
         if std::mem::take(&mut self.restore_focus)
             || self.dialog.is_none() && self.dialog_focus.is_focused(window)
         {
@@ -1171,7 +1210,11 @@ impl Render for HistoryWindow {
                     cx.notify();
                 }
             }))
-            .on_mouse_up(gpui_kit::MouseButton::Left, cx.listener(|this, _, _, _| this.graph_resize = None))
+            .on_mouse_up(gpui_kit::MouseButton::Left, cx.listener(|this, _, _, _| {
+                if this.graph_resize.take().is_some() {
+                    this.layout_handle.save_layout(gitk_rs::diff::options::LayoutChange::GraphWidth(this.graph_width));
+                }
+            }))
             .track_focus(&self.focus)
             .key_context("GitHistory")
             .on_action(|_: &Quit, _, cx| cx.quit())
@@ -1328,16 +1371,9 @@ impl Render for HistoryWindow {
             .bg(rgb(palette.background))
             .text_color(rgb(palette.foreground))
             .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .child(
-                        div()
-                            .flex_1()
-                            .truncate()
-                            .child(format!("Repository: {}", self.config.repository.display())),
-                    )
+                div().flex().items_center().gap_2()
+                    .child("Filter:")
+                    .child(div().flex_1().key_context("HistoryFilter").child(Input::new(&self.filter).cleanable(true)))
                     .child(
                         Button::new("application-menu")
                             .label("Menu")
@@ -1364,50 +1400,20 @@ impl Render for HistoryWindow {
                                         .menu("About", Box::new(About))
                                         .menu("Quit", Box::new(Quit))
                                 }
-                            }),
-                    ),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .child("Filter:")
-                    .child(div().flex_1().key_context("HistoryFilter").child(Input::new(&self.filter)))
-                    .child(
-                        div()
-                            .id("clear-filter")
-                            .px_3()
-                            .py_2()
-                            .bg(rgb(palette.panel))
-                            .cursor_pointer()
-                            .child("Clear")
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.filter
-                                    .update(cx, |input, cx| input.set_value("", window, cx))
-                            })),
-                    )
-                    .child(
-                        div()
-                            .id("reload")
-                            .test_support()
-                            .px_3()
-                            .py_2()
-                            .bg(rgb(palette.panel))
-                            .cursor_pointer()
-                            .child(if self.config.watch {
-                                "Reload (Auto On)"
-                            } else {
-                                "Reload (Auto Off)"
                             })
-                            .on_click(cx.listener(|this, _, _, cx| this.toggle_auto_reload(cx))),
-                    ),
+                    )
             )
             .child(
                 div().flex_1().min_h_0().child(
                     v_resizable("main-split")
+                        .on_resize(cx.listener(|this, state: &Entity<gpui_kit::base::ResizableState>, _, cx| {
+                            if let Some(height) = state.read(cx).sizes().first() {
+                                this.history_height = f32::from(*height);
+                                this.layout_handle.save_layout(gitk_rs::diff::options::LayoutChange::HistoryHeight(this.history_height));
+                            }
+                        }))
                         .child(
-                            resizable_panel().size(px(265.)).child(
+                            resizable_panel().size(px(self.history_height.min(f32::from(window.viewport_size().height) * 0.7))).child(
                                 section()
                                     .size_full()
                                     // Keep the scrollbar above Kit's overlapping resize handle.
@@ -1686,7 +1692,9 @@ fn bind_keys(cx: &mut App) {
     ]);
 }
 
-pub fn run(config: Config, preferences: Preferences, launched: Instant) {
+pub fn run(mut config: Config, preferences: Preferences, launched: Instant) {
+    config.repository = std::path::absolute(&config.repository).unwrap_or(config.repository);
+    let initial_title = repository_title(&config.repository);
     let guard = TimingGuard::start(config.timings, launched);
     let timing = guard.timing();
     let request = Request {
@@ -1709,7 +1717,12 @@ pub fn run(config: Config, preferences: Preferences, launched: Instant) {
         watch: config.watch,
     });
     let workspace = workspace_engine.handle();
-    let diff_engine = DiffEngine::spawn();
+    let options_path = gitk_rs::diff::options::path()
+        .map_err(|error| {
+            eprintln!("gitk-rs: diff options: {error:#}");
+        })
+        .ok();
+    let diff_engine = DiffEngine::with_options_file(options_path);
     let diff_handle = diff_engine.handle();
     gpui_kit::application()
         .with_assets(gpui_kit::assets::Assets)
@@ -1749,12 +1762,15 @@ pub fn run(config: Config, preferences: Preferences, launched: Instant) {
             if let Err(error) = gpui_kit::open_window(
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(bounds)),
+                    titlebar: Some(TitlebarOptions {
+                        title: Some(initial_title.into()),
+                        ..Default::default()
+                    }),
+                    app_id: Some("gitk-rs".into()),
                     ..Default::default()
                 },
                 cx,
                 move |window, cx| {
-                    window.set_window_title("gitk-rs");
-                    window.set_app_id("gitk-rs");
                     timing.mark(Phase::WindowCreated);
                     cx.new(|cx| {
                         HistoryWindow::new(

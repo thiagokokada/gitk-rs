@@ -1,5 +1,5 @@
 use crate::ui::tests::{Fixture, open, selected, until};
-use gpui_kit::{Modifiers, TestAppContext, point, px, test::TestWindowExt};
+use gpui_kit::{AppContext, Modifiers, TestAppContext, point, px, test::TestWindowExt};
 
 #[gpui_kit::test]
 fn ref_refresh_preserves_local_diff_page_and_text_selection(cx: &mut TestAppContext) {
@@ -328,4 +328,246 @@ fn alt_commit_navigation_works_with_history_and_diff_focus(cx: &mut TestAppConte
         assert_eq!(selected(&app.view, cx).as_deref(), Some(newer.as_str()));
         assert!(cx.update(|window, _| focus.is_focused(window)));
     }
+}
+
+#[gpui_kit::test]
+fn diff_option_changes_replace_generation_and_reject_old_pages(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    fixture.commit("base");
+    fixture.commit("changed");
+    let (app, cx) = open(&fixture, cx);
+    let pane = cx.update(|_, cx| app.view.read(cx).diff.clone());
+    until(cx, |cx| cx.update(|_, cx| pane.read(cx).snapshot.is_some()));
+    let radio = cx.update(|window, _| window.find("old-mode").bounds());
+    let words = cx.update(|window, _| window.find("word-diff").bounds());
+    let toolbar = cx.update(|window, _| window.find("diff-options").bounds());
+    let padding = cx.update(|window, _| window.rem_size() * 0.5);
+    let content = cx.update(|window, _| window.find("diff-content").bounds());
+    assert!(
+        (content.top() - toolbar.bottom()).abs() <= px(1.),
+        "extra gap below toolbar"
+    );
+    assert!(
+        toolbar.size.height + px(1.) >= words.size.height + padding,
+        "toolbar {toolbar:?}; word control {words:?}"
+    );
+    assert!(
+        (toolbar.center().y - radio.center().y).abs() <= px(1.),
+        "toolbar {toolbar:?}; radio {radio:?}"
+    );
+    assert!((radio.center().y - words.center().y).abs() <= px(1.));
+    cx.simulate_click(radio.center(), Modifiers::default());
+    assert_eq!(
+        cx.update(|_, cx| pane.read(cx).options.version),
+        super::DiffVersion::Old
+    );
+    let old = cx.update(|_, cx| pane.read(cx).page.selection);
+    pane.update(cx, |pane, cx| {
+        pane.change_options(
+            super::DiffOptions {
+                version: super::DiffVersion::Old,
+                context: 0,
+                words: super::WordDiff::Markup,
+                ignore_space: true,
+            },
+            cx,
+        )
+    });
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            let pane = pane.read(cx);
+            pane.snapshot
+                .as_ref()
+                .is_some_and(|s| s.selection != old && s.selection == pane.page.selection)
+        })
+    });
+    assert!(cx.update(|_, cx| pane.read(cx).selection.is_none()));
+    assert!(cx.update(|_, cx| pane.read(cx).current.as_ref().unwrap().options.ignore_space));
+}
+
+#[gpui_kit::test]
+fn word_mode_changes_preserve_the_current_file_and_scroll_position(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    for word in ["old", "new"] {
+        let source: String = (0..600)
+            .map(|i| format!("let value_{i} = \"{word}\";\n"))
+            .collect();
+        std::fs::write(fixture.root().join("long.rs"), source).unwrap();
+        fixture.git(&["add", "."]);
+        fixture.git(&["commit", "-qm", word]);
+    }
+    let (app, cx) = open(&fixture, cx);
+    let pane = cx.update(|_, cx| app.view.read(cx).diff.clone());
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            pane.read(cx)
+                .snapshot
+                .as_ref()
+                .is_some_and(|s| s.count > 1000)
+        })
+    });
+    pane.update(cx, |pane, cx| pane.jump(700, cx));
+    until(cx, |cx| {
+        cx.update(|_, cx| pane.read(cx).viewport.start >= 700)
+    });
+    for words in [
+        super::WordDiff::Markup,
+        super::WordDiff::Color,
+        super::WordDiff::Lines,
+    ] {
+        pane.update(cx, |pane, cx| {
+            pane.change_options(
+                super::DiffOptions {
+                    words,
+                    ..pane.options
+                },
+                cx,
+            )
+        });
+        until(cx, |cx| {
+            cx.update(|_, cx| {
+                let pane = pane.read(cx);
+                pane.restore_position.is_none()
+                    && pane.viewport.start > 250
+                    && pane.selected_file == Some(1)
+                    && pane.snapshot.as_ref().is_some_and(|s| {
+                        s.request == pane.page.id && s.selection == pane.page.selection
+                    })
+            })
+        });
+    }
+}
+
+#[gpui_kit::test]
+fn opening_a_non_repository_shows_one_error_and_recovers(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    fixture.commit("base");
+    let invalid = tempfile::tempdir().unwrap();
+    let (app, cx) = open(&fixture, cx);
+    let pane = cx.update(|_, cx| app.view.read(cx).diff.clone());
+    app.view.update(cx, |view, cx| {
+        view.change_repository(invalid.path().to_owned(), cx)
+    });
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            let view = app.view.read(cx);
+            view.snapshot.as_ref().is_some_and(|s| s.error.is_some())
+                && view
+                    .workspace_snapshot
+                    .as_ref()
+                    .is_some_and(|s| s.error.is_some())
+        })
+    });
+    let status = cx.update(|_, cx| app.view.read(cx).status_text());
+    assert_eq!(
+        status.matches("not a git repository").count(),
+        1,
+        "{status}"
+    );
+    assert!(cx.update(|_, cx| app.view.read(cx).operation_message.is_empty()));
+    assert_eq!(
+        cx.update(|_, cx| pane.read(cx).message.clone()),
+        "No commit selected."
+    );
+    app.view.update(cx, |view, cx| {
+        view.change_repository(fixture.root().to_owned(), cx)
+    });
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            let view = app.view.read(cx);
+            view.snapshot
+                .as_ref()
+                .is_some_and(|s| s.error.is_none() && s.loaded > 0)
+                && view
+                    .workspace_snapshot
+                    .as_ref()
+                    .is_some_and(|s| s.error.is_none())
+                && pane
+                    .read(cx)
+                    .snapshot
+                    .as_ref()
+                    .is_some_and(|s| s.error.is_none())
+        })
+    });
+    assert!(
+        !cx.update(|_, cx| app.view.read(cx).status_text())
+            .contains("not a git repository")
+    );
+}
+
+#[gpui_kit::test]
+fn diff_options_restore_and_save_independently_of_preferences(cx: &mut TestAppContext) {
+    use gitk_rs::diff::{DiffEngine, DiffSettings, options};
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("state.toml");
+    let saved = super::DiffOptions {
+        context: 19,
+        version: super::DiffVersion::Old,
+        words: super::WordDiff::Color,
+        ignore_space: true,
+    };
+    options::save_to(saved, &path).unwrap();
+    let engine = DiffEngine::with_options_file(Some(path.clone()));
+    let fixture = Fixture::new();
+    fixture.commit("base");
+    let (app, cx) = open(&fixture, cx);
+    let pane = cx.update(|_, cx| {
+        cx.new(|cx| {
+            super::DiffPane::new(
+                engine.handle(),
+                DiffSettings {
+                    syntax: true,
+                    dark: true,
+                },
+                cx,
+            )
+        })
+    });
+    app.view.update(cx, |view, cx| {
+        view.diff = pane.clone();
+        cx.notify();
+    });
+    until(cx, |cx| {
+        cx.update(|_, cx| pane.read(cx).context_input.is_some())
+    });
+    assert_eq!(cx.update(|_, cx| pane.read(cx).options), saved);
+    assert_eq!(
+        cx.update(|_, cx| pane
+            .read(cx)
+            .context_input
+            .as_ref()
+            .unwrap()
+            .read(cx)
+            .value()
+            .to_string()),
+        "19"
+    );
+    let changed = super::DiffOptions {
+        context: 23,
+        words: super::WordDiff::Markup,
+        ..saved
+    };
+    pane.update(cx, |pane, cx| pane.change_options(changed, cx));
+    drop(engine);
+    assert_eq!(options::load_from(&path).unwrap(), changed);
+    assert!(!root.path().join("preferences.toml").exists());
+    let permissions = std::fs::metadata(&path).unwrap().permissions();
+    let mut readonly = permissions.clone();
+    readonly.set_readonly(true);
+    std::fs::set_permissions(&path, readonly).unwrap();
+    let engine = DiffEngine::with_options_file(Some(path.clone()));
+    pane.update(cx, |pane, cx| {
+        pane.handle = engine.handle();
+        pane.change_options(
+            super::DiffOptions {
+                context: 31,
+                ..changed
+            },
+            cx,
+        );
+    });
+    drop(engine);
+    assert_eq!(cx.update(|_, cx| pane.read(cx).options.context), 31);
+    assert_eq!(options::load_from(&path).unwrap(), changed);
+    std::fs::set_permissions(&path, permissions).unwrap();
 }

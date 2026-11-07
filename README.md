@@ -12,6 +12,7 @@ A lightweight Git history explorer for Linux and macOS, written in Rust with
 - Commit history with a branch graph, author and date columns
 - Background loading and filtering to browse large repositories
 - Syntax-highlighted diffs with support for more than 200 languages
+- Diff, old/new sides, adjustable context, whitespace filtering and word diffs
 - File list to jump between changes, with text selection and copying
 - Staged, unstaged and untracked changes
 - Branch switching, automatic refresh and keyboard navigation
@@ -47,7 +48,7 @@ For more command-line options:
 ./gitk-rs --help
 ```
 
-Preferences are saved as `gitk-rs/preferences.toml` in the OS configuration
+Apply in Preferences saves `gitk-rs/preferences.toml` in the OS configuration
 directory (`~/.config` on Linux or `~/Library/Application Support` on macOS).
 For example:
 
@@ -63,6 +64,8 @@ syntax = true
 watch = true
 # batch = 1000 # Omit to stream all history.
 ```
+UI state configuration is remembered automatically in a separate
+`gitk-rs/state.toml` file.
 
 ## Development
 

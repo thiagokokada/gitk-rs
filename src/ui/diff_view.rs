@@ -7,13 +7,19 @@ use super::{
 };
 use gitk_rs::{
     diff::{
-        CopyRequest, DiffHandle, DiffPage, DiffSelection, DiffSettings, DiffSnapshot, DiffSource,
-        LineKind, SelectionId, TextPoint, TextSelection, selection::DisplayText,
+        CopyRequest, DiffHandle, DiffOptions, DiffPage, DiffSelection, DiffSettings, DiffSnapshot,
+        DiffSource, DiffVersion, LineKind, SelectionId, TextPoint, TextSelection, WordDiff,
+        selection::DisplayText,
     },
     git::Commit,
 };
 use gpui_kit::component::{
-    menu::{ContextMenuExt, PopupMenuItem},
+    Sizable,
+    button::Button,
+    checkbox::Checkbox,
+    input::{Input, InputEvent, InputState},
+    menu::{ContextMenuExt, DropdownMenu, PopupMenuItem},
+    radio::Radio,
     resizable::{h_resizable, resizable_panel},
     scroll::{Scrollbar, ScrollbarMode},
 };
@@ -93,6 +99,11 @@ enum DiffIdentity {
 }
 
 pub(super) struct DiffPane {
+    restore_position: Option<(Option<PathBuf>, f64)>,
+    file_list_width: f32,
+    options: DiffOptions,
+    current: Option<DiffSelection>,
+    context_input: Option<Entity<InputState>>,
     handle: DiffHandle,
     focus: FocusHandle,
     settings: DiffSettings,
@@ -115,6 +126,8 @@ pub(super) struct DiffPane {
 
 impl DiffPane {
     pub(super) fn new(handle: DiffHandle, settings: DiffSettings, cx: &mut Context<Self>) -> Self {
+        let options = handle.initial_options();
+        let layout = handle.initial_layout();
         let poll = cx.spawn(async |this, cx| {
             loop {
                 cx.background_executor()
@@ -132,6 +145,23 @@ impl DiffPane {
                                 .or_else(|| snapshot.notice.clone())
                                 .unwrap_or_default();
                             this.snapshot = Some(snapshot);
+                            if let Some((path, fraction)) = this.restore_position.take() {
+                                let snapshot = this.snapshot.as_ref().unwrap();
+                                let section = path.as_ref().and_then(|path| {
+                                    snapshot.files.iter().position(|file| &file.path == path)
+                                });
+                                let start = section
+                                    .and_then(|i| snapshot.files[i].start_line)
+                                    .unwrap_or(0);
+                                let end = section
+                                    .and_then(|i| snapshot.files.get(i + 1))
+                                    .and_then(|file| file.start_line)
+                                    .unwrap_or(snapshot.count);
+                                let line = start
+                                    + ((end.saturating_sub(start + 1)) as f64 * fraction).round()
+                                        as usize;
+                                this.jump(line, cx);
+                            }
                             cx.notify();
                         }
                         if let Some(copy) = this.handle.take_copy()
@@ -153,6 +183,11 @@ impl DiffPane {
             }
         });
         Self {
+            restore_position: None,
+            options,
+            file_list_width: layout.file_list_width,
+            current: None,
+            context_input: None,
             handle,
             focus: cx.focus_handle(),
             settings,
@@ -222,14 +257,14 @@ impl DiffPane {
         }
         self.clear("Loading diff…", cx);
         self.identity = Some(identity);
-        self.handle.select(
-            DiffSelection {
-                id: self.page.selection,
-                repository,
-                source: DiffSource::Commit(commit),
-            },
-            self.page.clone(),
-        );
+        let selection = DiffSelection {
+            options: self.options,
+            id: self.page.selection,
+            repository,
+            source: DiffSource::Commit(commit),
+        };
+        self.current = Some(selection.clone());
+        self.handle.select(selection, self.page.clone());
     }
 
     pub(super) fn load_local(
@@ -245,14 +280,14 @@ impl DiffPane {
         }
         self.clear("Loading local changes…", cx);
         self.identity = Some(identity);
-        self.handle.select(
-            DiffSelection {
-                id: self.page.selection,
-                repository,
-                source: DiffSource::Local { staged },
-            },
-            self.page.clone(),
-        );
+        let selection = DiffSelection {
+            options: self.options,
+            id: self.page.selection,
+            repository,
+            source: DiffSource::Local { staged },
+        };
+        self.current = Some(selection.clone());
+        self.handle.select(selection, self.page.clone());
     }
 
     pub(super) fn clear(&mut self, message: &str, cx: &mut Context<Self>) {
@@ -261,6 +296,8 @@ impl DiffPane {
         self.page.range = 0..128;
         self.handle.clear(self.page.selection);
         self.identity = None;
+        self.current = None;
+        self.restore_position = None;
         self.snapshot = None;
         self.selected_file = None;
         self.file_jump_pending = false;
@@ -271,6 +308,143 @@ impl DiffPane {
         self.scroll.scroll_to_item_strict(0, ScrollStrategy::Top);
         self.files_scroll.scroll_to_item(0, ScrollStrategy::Top);
         cx.notify();
+    }
+
+    fn change_options(&mut self, options: DiffOptions, cx: &mut Context<Self>) {
+        if self.options == options {
+            return;
+        }
+        self.options = options;
+        self.handle.save_options(options);
+        if let Some(mut selection) = self.current.clone() {
+            let position = self
+                .snapshot
+                .as_ref()
+                .map(|snapshot| {
+                    let section = snapshot.files.iter().rposition(|file| {
+                        file.start_line
+                            .is_some_and(|line| line <= self.viewport.start)
+                    });
+                    let start = section
+                        .and_then(|i| snapshot.files[i].start_line)
+                        .unwrap_or(0);
+                    let end = section
+                        .and_then(|i| snapshot.files.get(i + 1))
+                        .and_then(|file| file.start_line)
+                        .unwrap_or(snapshot.count);
+                    let fraction = self.viewport.start.saturating_sub(start) as f64
+                        / end.saturating_sub(start + 1).max(1) as f64;
+                    (
+                        section.map(|i| snapshot.files[i].path.clone()),
+                        fraction.clamp(0., 1.),
+                    )
+                })
+                .or_else(|| self.restore_position.clone());
+            let identity = self.identity.take();
+            self.clear("Loading diff…", cx);
+            self.identity = identity;
+            self.restore_position = position;
+            selection.id = self.page.selection;
+            selection.options = options;
+            self.current = Some(selection.clone());
+            self.handle.select(selection, self.page.clone());
+        }
+        cx.notify();
+    }
+
+    fn controls(&self, cx: &mut Context<Self>) -> AnyElement {
+        let mut bar = div()
+            .id("diff-options")
+            .test_support()
+            .flex_shrink_0()
+            .flex()
+            .items_center()
+            .gap_2()
+            .px_2()
+            .py_1()
+            .line_height(px(20.))
+            .text_size(px(12.));
+        for (id, label, version) in [
+            ("diff-mode", "Diff", DiffVersion::Diff),
+            ("old-mode", "Old version", DiffVersion::Old),
+            ("new-mode", "New version", DiffVersion::New),
+        ] {
+            bar = bar.child(
+                Radio::new(id)
+                    .small()
+                    .label(label)
+                    .checked(self.options.version == version)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.change_options(
+                            DiffOptions {
+                                version,
+                                ..this.options
+                            },
+                            cx,
+                        );
+                    })),
+            );
+        }
+        bar = bar.child("Lines of context:");
+        if let Some(input) = &self.context_input {
+            bar = bar.child(
+                div().w(px(80.)).child(
+                    gpui_kit::base::NumberInput::new(input)
+                        .controls_right()
+                        .input(Input::new(input).small()),
+                ),
+            );
+        }
+        bar.child(
+            Checkbox::new("ignore-space")
+                .small()
+                .label("Ignore space change")
+                .checked(self.options.ignore_space)
+                .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                    this.change_options(
+                        DiffOptions {
+                            ignore_space: *checked,
+                            ..this.options
+                        },
+                        cx,
+                    );
+                })),
+        )
+        .child(
+            Button::new("word-diff")
+                .small()
+                .label(match self.options.words {
+                    WordDiff::Lines => "Line diff ▾",
+                    WordDiff::Markup => "Markup words ▾",
+                    WordDiff::Color => "Color words ▾",
+                })
+                .dropdown_menu({
+                    let entity = cx.entity();
+                    move |mut menu, _, _| {
+                        for (label, words) in [
+                            ("Line diff", WordDiff::Lines),
+                            ("Markup words", WordDiff::Markup),
+                            ("Color words", WordDiff::Color),
+                        ] {
+                            let entity = entity.clone();
+                            menu =
+                                menu.item(PopupMenuItem::new(label).on_click(move |_, _, cx| {
+                                    entity.update(cx, |this, cx| {
+                                        this.change_options(
+                                            DiffOptions {
+                                                words,
+                                                ..this.options
+                                            },
+                                            cx,
+                                        )
+                                    });
+                                }));
+                        }
+                        menu
+                    }
+                }),
+        )
+        .into_any_element()
     }
 
     fn ensure(&mut self, range: Range<usize>) {
@@ -536,7 +710,32 @@ impl DiffPane {
 }
 
 impl Render for DiffPane {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.context_input.is_none() {
+            let input = cx.new(|cx| {
+                InputState::new(window, cx)
+                    .default_value(self.options.context.to_string())
+                    .step(1.)
+                    .min(0.)
+                    .max(10_000_000.)
+            });
+            cx.subscribe(&input, |this, input, event: &InputEvent, cx| {
+                if matches!(event, InputEvent::Change)
+                    && let Ok(context) = input.read(cx).value().parse::<u32>()
+                    && context <= 10_000_000
+                {
+                    this.change_options(
+                        DiffOptions {
+                            context,
+                            ..this.options
+                        },
+                        cx,
+                    );
+                }
+            })
+            .detach();
+            self.context_input = Some(input);
+        }
         self.layouts.borrow_mut().clear();
         let count = self.snapshot.as_ref().map_or(0, |s| s.count);
         let files = self
@@ -545,10 +744,14 @@ impl Render for DiffPane {
             .map(|s| s.files.clone())
             .unwrap_or_default();
         let palette = Palette::for_dark(self.settings.dark);
+        let file_width = px(self
+            .file_list_width
+            .min(f32::from(window.viewport_size().width) * 0.7));
         div()
             .size_full()
             .flex()
-            .gap_2()
+            .flex_col()
+            .child(self.controls(cx))
             .track_focus(&self.focus)
             .key_context("Diff")
             .on_mouse_up(
@@ -579,6 +782,18 @@ impl Render for DiffPane {
             .on_action(cx.listener(|this, _: &LinesUp, _, cx| this.scroll_lines(-18, cx)))
             .child(
                 h_resizable("diff-split")
+                    .on_resize(cx.listener(
+                        |this, state: &Entity<gpui_kit::base::ResizableState>, _, cx| {
+                            if let Some(width) = state.read(cx).sizes().get(1) {
+                                this.file_list_width = f32::from(*width);
+                                this.handle.save_layout(
+                                    gitk_rs::diff::options::LayoutChange::FileListWidth(
+                                        this.file_list_width,
+                                    ),
+                                );
+                            }
+                        },
+                    ))
                     .child(
                         resizable_panel().child(
                             div()
@@ -589,6 +804,8 @@ impl Render for DiffPane {
                                 .flex_col()
                                 .border_1()
                                 .border_color(rgb(palette.border))
+                                .id("diff-content")
+                                .test_support()
                                 .font_family(self.font.clone())
                                 .child(
                                     div()
@@ -628,7 +845,7 @@ impl Render for DiffPane {
                         ),
                     )
                     .child(
-                        resizable_panel().size(px(280.)).child(
+                        resizable_panel().size(file_width).child(
                             div()
                                 .w_full()
                                 .h_full()

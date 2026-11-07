@@ -25,6 +25,15 @@ fn open_with_batch<'a>(
     batch: Option<usize>,
     cx: &'a mut TestAppContext,
 ) -> (Harness, &'a mut VisualTestContext) {
+    open_with_state(fixture, batch, None, cx)
+}
+
+fn open_with_state<'a>(
+    fixture: &Fixture,
+    batch: Option<usize>,
+    state_path: Option<std::path::PathBuf>,
+    cx: &'a mut TestAppContext,
+) -> (Harness, &'a mut VisualTestContext) {
     let config = Config {
         repository: fixture.root().into(),
         watch: false,
@@ -49,7 +58,8 @@ fn open_with_batch<'a>(
         repository: config.repository.clone(),
         watch: false,
     });
-    let diff = DiffEngine::spawn();
+    let restoring_layout = state_path.is_some();
+    let diff = DiffEngine::with_options_file(state_path);
     cx.update(|cx| {
         gpui_kit::init(cx);
         gpui_kit::component::Theme::change(ThemeMode::Dark, None, cx);
@@ -58,7 +68,7 @@ fn open_with_batch<'a>(
     let mut view = None;
     let preferences_directory = tempfile::tempdir().unwrap();
     let preferences_path = preferences_directory.path().join("preferences.toml");
-    let (_, cx) = cx.add_window_view(|window, cx| {
+    let build = |window: &mut Window, cx: &mut Context<gpui_kit::base::Root>| {
         let entity = cx.new(|cx| {
             let preferences = Preferences::default().with_config(&config);
             let mut view = HistoryWindow::new(
@@ -80,7 +90,15 @@ fn open_with_batch<'a>(
         });
         view = Some(entity.clone());
         gpui_kit::base::Root::new(entity, window, cx)
-    });
+    };
+    let cx = if restoring_layout {
+        // Start at the target size: resizing an already rendered maximized
+        // window legitimately scales GPUI's split panes proportionally.
+        let handle = cx.open_window(size(px(1280.), px(850.)), build);
+        VisualTestContext::from_window(handle.into(), cx).into_mut()
+    } else {
+        cx.add_window_view(build).1
+    };
     cx.simulate_resize(size(px(1280.), px(850.)));
     (
         Harness {
@@ -588,7 +606,7 @@ fn graph_column_can_be_resized_without_changing_selection(cx: &mut TestAppContex
 }
 
 #[gpui_kit::test]
-fn reload_control_toggles_watching_and_refreshes_history(cx: &mut TestAppContext) {
+fn auto_reload_shortcut_toggles_watching_and_refreshes_history(cx: &mut TestAppContext) {
     let fixture = Fixture::new();
     let head = fixture.commit("base");
     let (app, cx) = open(&fixture, cx);
@@ -596,8 +614,8 @@ fn reload_control_toggles_watching_and_refreshes_history(cx: &mut TestAppContext
         selected(&app.view, cx).as_deref() == Some(head.as_str())
     });
     assert!(!cx.update(|_, cx| app.view.read(cx).config.watch));
-    let button = cx.update(|window, _| window.find("reload").bounds());
-    cx.simulate_click(button.center(), gpui_kit::Modifiers::default());
+    assert!(cx.update(|window, _| window.try_find("reload").is_none()));
+    cx.simulate_keystrokes("alt-r");
     assert!(cx.update(|_, cx| app.view.read(cx).config.watch));
     until(cx, |cx| {
         cx.update(|_, cx| app.view.read(cx).reload_selection.is_none())
@@ -606,8 +624,8 @@ fn reload_control_toggles_watching_and_refreshes_history(cx: &mut TestAppContext
     until(cx, |cx| {
         cx.update(|_, cx| !app.view.read(cx).local_rows.is_empty())
     });
-    let button = cx.update(|window, _| window.find("reload").bounds());
-    cx.simulate_click(button.center(), gpui_kit::Modifiers::default());
+    assert!(cx.update(|window, _| window.try_find("reload").is_none()));
+    cx.simulate_keystrokes("alt-r");
     assert!(!cx.update(|_, cx| app.view.read(cx).config.watch));
     until(cx, |cx| {
         cx.update(|_, cx| app.view.read(cx).reload_selection.is_none())
@@ -1955,4 +1973,218 @@ fn graph_paints_a_folded_column_at_the_maximum_lane_limit(cx: &mut TestAppContex
         assert_eq!(layout.column(last), last as usize);
         assert!(layout.is_collapsed(last));
     });
+}
+
+#[gpui_kit::test]
+fn repository_title_and_inline_filter_clear_controls(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    fixture.commit("base");
+    fixture.git(&["branch", "another"]);
+    let (app, cx) = open(&fixture, cx);
+    // Git resolves symlinks (including macOS /var -> /private/var) in its root.
+    let aliases = tempfile::tempdir().unwrap();
+    let alias = aliases.path().join("repository");
+    std::os::unix::fs::symlink(fixture.root(), &alias).unwrap();
+    app.view
+        .update(cx, |view, cx| view.change_repository(alias.join("."), cx));
+    until(cx, |cx| {
+        cx.update(|_, cx| app.view.read(cx).workspace_snapshot.is_some())
+    });
+    assert_eq!(
+        cx.update(|_, cx| app.view.read(cx).title.clone()),
+        format!(
+            "{} — gitk-rs",
+            fixture.root().canonicalize().unwrap().display()
+        )
+    );
+    cx.update(|window, cx| {
+        app.view.update(cx, |view, cx| {
+            view.filter
+                .update(cx, |input, cx| input.set_value("no matches", window, cx));
+        })
+    });
+    until(cx, |cx| {
+        cx.update(|window, _| window.try_find("clean").is_some())
+    });
+    let clear = cx.update(|window, _| window.find("clean").bounds());
+    cx.simulate_click(clear.center(), gpui_kit::Modifiers::default());
+    assert!(cx.update(|_, cx| app.view.read(cx).filter.read(cx).value().is_empty()));
+    assert!(cx.update(|window, _| window.try_find("clear-filter").is_none()));
+    cx.update(|window, cx| {
+        app.view
+            .update(cx, |view, cx| view.open_branches(window, cx))
+    });
+    until(cx, |cx| {
+        cx.update(|_, cx| app.view.read(cx).branches.len() == 2)
+    });
+    cx.update(|window, cx| {
+        app.view.update(cx, |view, cx| {
+            view.branch_filter
+                .update(cx, |input, cx| input.set_value("another", window, cx));
+        })
+    });
+    until(cx, |cx| {
+        cx.update(|window, _| window.try_find("clean").is_some())
+    });
+    let clear = cx.update(|window, _| window.find("clean").bounds());
+    cx.simulate_click(clear.center(), gpui_kit::Modifiers::default());
+    assert!(cx.update(|_, cx| app.view.read(cx).branch_filter.read(cx).value().is_empty()));
+    assert_eq!(
+        cx.update(|_, cx| app.view.read(cx).filtered_branches.len()),
+        2
+    );
+}
+
+#[gpui_kit::test]
+fn repository_caption_updates_even_when_opening_the_directory_fails(cx: &mut TestAppContext) {
+    let first = Fixture::new();
+    first.commit("first");
+    let second = Fixture::new();
+    second.commit("second");
+    let invalid = tempfile::tempdir().unwrap();
+    let (app, cx) = open(&first, cx);
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            app.view.read(cx).title == repository_title(&first.root().canonicalize().unwrap())
+        })
+    });
+    app.view.update(cx, |view, cx| {
+        view.change_repository(invalid.path().to_owned(), cx)
+    });
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            let view = app.view.read(cx);
+            view.title == repository_title(invalid.path())
+                && view
+                    .workspace_snapshot
+                    .as_ref()
+                    .is_some_and(|s| s.error.is_some())
+        })
+    });
+    app.view.update(cx, |view, cx| {
+        view.change_repository(second.root().to_owned(), cx)
+    });
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            app.view.read(cx).title == repository_title(&second.root().canonicalize().unwrap())
+        })
+    });
+}
+
+#[gpui_kit::test]
+fn resized_columns_and_panes_are_saved_and_restored(cx: &mut TestAppContext) {
+    use gitk_rs::diff::options::{self, Layout, State};
+    let settings = tempfile::tempdir().unwrap();
+    let path = settings.path().join("state.toml");
+    let fixture = Fixture::new();
+    fixture.commit("base");
+    options::save_state_to(
+        State {
+            layout: Layout {
+                graph_width: 320.,
+                history_height: 300.,
+                file_list_width: 310.,
+            },
+            ..Default::default()
+        },
+        &path,
+    )
+    .unwrap();
+    let saved = {
+        let (app, cx) = open_with_state(&fixture, Some(1000), Some(path.clone()), cx);
+        until(cx, |cx| {
+            cx.update(|_, cx| app.view.read(cx).selected.is_some())
+        });
+        assert_eq!(cx.update(|_, cx| app.view.read(cx).graph_width), 320.);
+        assert_eq!(
+            cx.update(|window, _| window.find("files-scrollbar-viewport").bounds().size.width)
+                + px(2.),
+            px(310.)
+        );
+        let graph = cx.update(|window, _| window.find("graph-divider").bounds().center());
+        let history = cx.update(|window, _| {
+            window
+                .within("main-split")
+                .find_all(("resizable-handle", 0_usize))
+                .into_iter()
+                .map(|element| element.bounds())
+                .find(|bounds| bounds.size.width > bounds.size.height)
+                .unwrap()
+                .center()
+        });
+        for (origin, delta) in [
+            (graph, point(px(70.), px(0.))),
+            (history, point(px(0.), px(50.))),
+        ] {
+            cx.simulate_mouse_down(
+                origin,
+                gpui_kit::MouseButton::Left,
+                gpui_kit::Modifiers::default(),
+            );
+            cx.simulate_mouse_move(
+                origin + delta,
+                Some(gpui_kit::MouseButton::Left),
+                gpui_kit::Modifiers::default(),
+            );
+            // GPUI starts the drag on the first move; the next move resizes.
+            cx.simulate_mouse_move(
+                origin + delta,
+                Some(gpui_kit::MouseButton::Left),
+                gpui_kit::Modifiers::default(),
+            );
+            cx.simulate_mouse_up(
+                origin + delta,
+                gpui_kit::MouseButton::Left,
+                gpui_kit::Modifiers::default(),
+            );
+        }
+        let files = cx.update(|window, _| {
+            window
+                .within("diff-split")
+                .find(("resizable-handle", 0_usize))
+                .bounds()
+                .center()
+        });
+        cx.simulate_mouse_down(
+            files,
+            gpui_kit::MouseButton::Left,
+            gpui_kit::Modifiers::default(),
+        );
+        cx.simulate_mouse_move(
+            files - point(px(60.), px(0.)),
+            Some(gpui_kit::MouseButton::Left),
+            gpui_kit::Modifiers::default(),
+        );
+        cx.simulate_mouse_move(
+            files - point(px(60.), px(0.)),
+            Some(gpui_kit::MouseButton::Left),
+            gpui_kit::Modifiers::default(),
+        );
+        cx.simulate_mouse_up(
+            files - point(px(60.), px(0.)),
+            gpui_kit::MouseButton::Left,
+            gpui_kit::Modifiers::default(),
+        );
+        drop(app);
+        let saved = options::load_state_from(&path).unwrap();
+        assert_eq!(saved.layout.graph_width, 390.);
+        assert!(saved.layout.history_height > 340., "{:?}", saved.layout);
+        assert!(saved.layout.file_list_width > 360., "{:?}", saved.layout);
+        saved
+    };
+    let (app, cx) = open_with_state(&fixture, Some(1000), Some(path.clone()), cx);
+    until(cx, |cx| {
+        cx.update(|_, cx| app.view.read(cx).selected.is_some())
+    });
+    assert_eq!(
+        cx.update(|_, cx| app.view.read(cx).graph_width),
+        saved.layout.graph_width
+    );
+    assert_eq!(
+        cx.update(|_, cx| app.view.read(cx).history_height),
+        saved.layout.history_height
+    );
+    let width = cx.update(|window, _| window.find("files-scrollbar-viewport").bounds().size.width);
+    assert!((width + px(2.) - px(saved.layout.file_list_width)).abs() <= px(1.));
+    assert!(!settings.path().join("preferences.toml").exists());
 }
