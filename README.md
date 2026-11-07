@@ -50,7 +50,6 @@ For more command-line options:
 
 Apply in Preferences saves `gitk-rs/preferences.toml` in the OS configuration
 directory (`~/.config` on Linux or `~/Library/Application Support` on macOS).
-Diff controls are remembered automatically in a separate `gitk-rs/state.toml` file.
 For example:
 
 ```toml
@@ -65,6 +64,8 @@ syntax = true
 watch = true
 # batch = 1000 # Omit to stream all history.
 ```
+UI state configuration is remembered automatically in a separate
+`gitk-rs/state.toml` file.
 
 ## Development
 
