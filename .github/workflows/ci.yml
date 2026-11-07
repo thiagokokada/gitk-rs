@@ -57,7 +57,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: cargo-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust.outputs.version }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'vendor/**') }}
+          key: cargo-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust.outputs.version }}-${{ hashFiles('Cargo.lock', 'Cargo.toml') }}
           restore-keys: |
             cargo-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust.outputs.version }}-
 
@@ -86,16 +86,14 @@ jobs:
           persist-credentials: false
 
       - uses: cachix/install-nix-action@v31
-        with:
-          extra_nix_config: ${{ runner.os == 'Linux' && 'extra-system-features = kvm nixos-test' || '' }}
 
       - name: Cache Nix store
         uses: nix-community/cache-nix-action@v7
         with:
           # Save each commit's store; restore earlier compiled dependencies.
-          primary-key: nix-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('flake.lock', 'Cargo.lock', 'Cargo.toml', 'vendor/**') }}-${{ github.sha }}
+          primary-key: nix-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('flake.lock', 'Cargo.lock', 'Cargo.toml') }}-${{ github.sha }}
           restore-prefixes-first-match: |
-            nix-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('flake.lock', 'Cargo.lock', 'Cargo.toml', 'vendor/**') }}-
+            nix-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('flake.lock', 'Cargo.lock', 'Cargo.toml') }}-
             nix-v1-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Build package and run Rust tests
@@ -109,7 +107,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          nix build .#gui-smoke --out-link result-gui-smoke --print-build-logs 2>&1 | tee gui-smoke-build.log
+          nix build .#gui-smoke --no-link --print-build-logs 2>&1 | tee gui-smoke-build.log
 
       - name: Upload GUI smoke screenshots and logs
         if: always() && runner.os == 'Linux'
