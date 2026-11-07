@@ -1963,15 +1963,21 @@ fn repository_title_and_inline_filter_clear_controls(cx: &mut TestAppContext) {
     fixture.commit("base");
     fixture.git(&["branch", "another"]);
     let (app, cx) = open(&fixture, cx);
-    app.view.update(cx, |view, cx| {
-        view.change_repository(fixture.root().join("."), cx)
-    });
+    // Git resolves symlinks (including macOS /var -> /private/var) in its root.
+    let aliases = tempfile::tempdir().unwrap();
+    let alias = aliases.path().join("repository");
+    std::os::unix::fs::symlink(fixture.root(), &alias).unwrap();
+    app.view
+        .update(cx, |view, cx| view.change_repository(alias.join("."), cx));
     until(cx, |cx| {
         cx.update(|_, cx| app.view.read(cx).workspace_snapshot.is_some())
     });
     assert_eq!(
         cx.update(|_, cx| app.view.read(cx).title.clone()),
-        format!("gitk-rs - {}", fixture.root().display())
+        format!(
+            "gitk-rs - {}",
+            fixture.root().canonicalize().unwrap().display()
+        )
     );
     cx.update(|window, cx| {
         app.view.update(cx, |view, cx| {
