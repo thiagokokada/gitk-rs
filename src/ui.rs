@@ -176,6 +176,8 @@ struct HistoryWindow {
     preserve_filter_selection: bool,
     viewport: Range<usize>,
     graph_layout: GraphLayout,
+    layout_handle: DiffHandle,
+    history_height: f32,
     graph_width: f32,
     graph_resize: Option<(gpui_kit::Pixels, f32)>,
 }
@@ -197,6 +199,7 @@ impl HistoryWindow {
             workspace,
             diff: diff_handle,
         } = services;
+        let layout = diff_handle.initial_layout();
         let ui_font_select = cx.new(|cx| {
             SelectState::new(
                 SearchableVec::new(vec![SharedString::from(preferences.ui_font.clone())]),
@@ -309,7 +312,7 @@ impl HistoryWindow {
         });
         let diff = cx.new(|cx| {
             diff_view::DiffPane::new(
-                diff_handle,
+                diff_handle.clone(),
                 DiffSettings {
                     syntax: config.syntax,
                     dark: config.theme == Theme::Dark,
@@ -381,7 +384,12 @@ impl HistoryWindow {
             preserve_filter_selection: false,
             viewport: 0..10,
             graph_layout: GraphLayout::default(),
-            graph_width: 280.,
+            layout_handle: diff_handle,
+            history_height: layout.history_height,
+            graph_width: layout.graph_width.clamp(
+                160.,
+                (f32::from(window.viewport_size().width) - 540.).clamp(160., 720.),
+            ),
             graph_resize: None,
         }
     }
@@ -1202,7 +1210,11 @@ impl Render for HistoryWindow {
                     cx.notify();
                 }
             }))
-            .on_mouse_up(gpui_kit::MouseButton::Left, cx.listener(|this, _, _, _| this.graph_resize = None))
+            .on_mouse_up(gpui_kit::MouseButton::Left, cx.listener(|this, _, _, _| {
+                if this.graph_resize.take().is_some() {
+                    this.layout_handle.save_layout(gitk_rs::diff::options::LayoutChange::GraphWidth(this.graph_width));
+                }
+            }))
             .track_focus(&self.focus)
             .key_context("GitHistory")
             .on_action(|_: &Quit, _, cx| cx.quit())
@@ -1394,8 +1406,14 @@ impl Render for HistoryWindow {
             .child(
                 div().flex_1().min_h_0().child(
                     v_resizable("main-split")
+                        .on_resize(cx.listener(|this, state: &Entity<gpui_kit::base::ResizableState>, _, cx| {
+                            if let Some(height) = state.read(cx).sizes().first() {
+                                this.history_height = f32::from(*height);
+                                this.layout_handle.save_layout(gitk_rs::diff::options::LayoutChange::HistoryHeight(this.history_height));
+                            }
+                        }))
                         .child(
-                            resizable_panel().size(px(265.)).child(
+                            resizable_panel().size(px(self.history_height.min(f32::from(window.viewport_size().height) * 0.7))).child(
                                 section()
                                     .size_full()
                                     // Keep the scrollbar above Kit's overlapping resize handle.

@@ -25,6 +25,15 @@ fn open_with_batch<'a>(
     batch: Option<usize>,
     cx: &'a mut TestAppContext,
 ) -> (Harness, &'a mut VisualTestContext) {
+    open_with_state(fixture, batch, None, cx)
+}
+
+fn open_with_state<'a>(
+    fixture: &Fixture,
+    batch: Option<usize>,
+    state_path: Option<std::path::PathBuf>,
+    cx: &'a mut TestAppContext,
+) -> (Harness, &'a mut VisualTestContext) {
     let config = Config {
         repository: fixture.root().into(),
         watch: false,
@@ -49,7 +58,8 @@ fn open_with_batch<'a>(
         repository: config.repository.clone(),
         watch: false,
     });
-    let diff = DiffEngine::spawn();
+    let restoring_layout = state_path.is_some();
+    let diff = DiffEngine::with_options_file(state_path);
     cx.update(|cx| {
         gpui_kit::init(cx);
         gpui_kit::component::Theme::change(ThemeMode::Dark, None, cx);
@@ -58,7 +68,7 @@ fn open_with_batch<'a>(
     let mut view = None;
     let preferences_directory = tempfile::tempdir().unwrap();
     let preferences_path = preferences_directory.path().join("preferences.toml");
-    let (_, cx) = cx.add_window_view(|window, cx| {
+    let build = |window: &mut Window, cx: &mut Context<gpui_kit::base::Root>| {
         let entity = cx.new(|cx| {
             let preferences = Preferences::default().with_config(&config);
             let mut view = HistoryWindow::new(
@@ -80,7 +90,15 @@ fn open_with_batch<'a>(
         });
         view = Some(entity.clone());
         gpui_kit::base::Root::new(entity, window, cx)
-    });
+    };
+    let cx = if restoring_layout {
+        // Start at the target size: resizing an already rendered maximized
+        // window legitimately scales GPUI's split panes proportionally.
+        let handle = cx.open_window(size(px(1280.), px(850.)), build);
+        VisualTestContext::from_window(handle.into(), cx).into_mut()
+    } else {
+        cx.add_window_view(build).1
+    };
     cx.simulate_resize(size(px(1280.), px(850.)));
     (
         Harness {
@@ -2051,4 +2069,122 @@ fn repository_caption_updates_even_when_opening_the_directory_fails(cx: &mut Tes
             app.view.read(cx).title == repository_title(&second.root().canonicalize().unwrap())
         })
     });
+}
+
+#[gpui_kit::test]
+fn resized_columns_and_panes_are_saved_and_restored(cx: &mut TestAppContext) {
+    use gitk_rs::diff::options::{self, Layout, State};
+    let settings = tempfile::tempdir().unwrap();
+    let path = settings.path().join("state.toml");
+    let fixture = Fixture::new();
+    fixture.commit("base");
+    options::save_state_to(
+        State {
+            layout: Layout {
+                graph_width: 320.,
+                history_height: 300.,
+                file_list_width: 310.,
+            },
+            ..Default::default()
+        },
+        &path,
+    )
+    .unwrap();
+    let saved = {
+        let (app, cx) = open_with_state(&fixture, Some(1000), Some(path.clone()), cx);
+        until(cx, |cx| {
+            cx.update(|_, cx| app.view.read(cx).selected.is_some())
+        });
+        assert_eq!(cx.update(|_, cx| app.view.read(cx).graph_width), 320.);
+        assert_eq!(
+            cx.update(|window, _| window.find("files-scrollbar-viewport").bounds().size.width)
+                + px(2.),
+            px(310.)
+        );
+        let graph = cx.update(|window, _| window.find("graph-divider").bounds().center());
+        let history = cx.update(|window, _| {
+            window
+                .within("main-split")
+                .find_all(("resizable-handle", 0_usize))
+                .into_iter()
+                .map(|element| element.bounds())
+                .find(|bounds| bounds.size.width > bounds.size.height)
+                .unwrap()
+                .center()
+        });
+        for (origin, delta) in [
+            (graph, point(px(70.), px(0.))),
+            (history, point(px(0.), px(50.))),
+        ] {
+            cx.simulate_mouse_down(
+                origin,
+                gpui_kit::MouseButton::Left,
+                gpui_kit::Modifiers::default(),
+            );
+            cx.simulate_mouse_move(
+                origin + delta,
+                Some(gpui_kit::MouseButton::Left),
+                gpui_kit::Modifiers::default(),
+            );
+            // GPUI starts the drag on the first move; the next move resizes.
+            cx.simulate_mouse_move(
+                origin + delta,
+                Some(gpui_kit::MouseButton::Left),
+                gpui_kit::Modifiers::default(),
+            );
+            cx.simulate_mouse_up(
+                origin + delta,
+                gpui_kit::MouseButton::Left,
+                gpui_kit::Modifiers::default(),
+            );
+        }
+        let files = cx.update(|window, _| {
+            window
+                .within("diff-split")
+                .find(("resizable-handle", 0_usize))
+                .bounds()
+                .center()
+        });
+        cx.simulate_mouse_down(
+            files,
+            gpui_kit::MouseButton::Left,
+            gpui_kit::Modifiers::default(),
+        );
+        cx.simulate_mouse_move(
+            files - point(px(60.), px(0.)),
+            Some(gpui_kit::MouseButton::Left),
+            gpui_kit::Modifiers::default(),
+        );
+        cx.simulate_mouse_move(
+            files - point(px(60.), px(0.)),
+            Some(gpui_kit::MouseButton::Left),
+            gpui_kit::Modifiers::default(),
+        );
+        cx.simulate_mouse_up(
+            files - point(px(60.), px(0.)),
+            gpui_kit::MouseButton::Left,
+            gpui_kit::Modifiers::default(),
+        );
+        drop(app);
+        let saved = options::load_state_from(&path).unwrap();
+        assert_eq!(saved.layout.graph_width, 390.);
+        assert!(saved.layout.history_height > 340., "{:?}", saved.layout);
+        assert!(saved.layout.file_list_width > 360., "{:?}", saved.layout);
+        saved
+    };
+    let (app, cx) = open_with_state(&fixture, Some(1000), Some(path.clone()), cx);
+    until(cx, |cx| {
+        cx.update(|_, cx| app.view.read(cx).selected.is_some())
+    });
+    assert_eq!(
+        cx.update(|_, cx| app.view.read(cx).graph_width),
+        saved.layout.graph_width
+    );
+    assert_eq!(
+        cx.update(|_, cx| app.view.read(cx).history_height),
+        saved.layout.history_height
+    );
+    let width = cx.update(|window, _| window.find("files-scrollbar-viewport").bounds().size.width);
+    assert!((width + px(2.) - px(saved.layout.file_list_width)).abs() <= px(1.));
+    assert!(!settings.path().join("preferences.toml").exists());
 }

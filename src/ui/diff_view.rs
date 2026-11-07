@@ -100,6 +100,7 @@ enum DiffIdentity {
 
 pub(super) struct DiffPane {
     restore_position: Option<(Option<PathBuf>, f64)>,
+    file_list_width: f32,
     options: DiffOptions,
     current: Option<DiffSelection>,
     context_input: Option<Entity<InputState>>,
@@ -126,6 +127,7 @@ pub(super) struct DiffPane {
 impl DiffPane {
     pub(super) fn new(handle: DiffHandle, settings: DiffSettings, cx: &mut Context<Self>) -> Self {
         let options = handle.initial_options();
+        let layout = handle.initial_layout();
         let poll = cx.spawn(async |this, cx| {
             loop {
                 cx.background_executor()
@@ -183,6 +185,7 @@ impl DiffPane {
         Self {
             restore_position: None,
             options,
+            file_list_width: layout.file_list_width,
             current: None,
             context_input: None,
             handle,
@@ -741,6 +744,9 @@ impl Render for DiffPane {
             .map(|s| s.files.clone())
             .unwrap_or_default();
         let palette = Palette::for_dark(self.settings.dark);
+        let file_width = px(self
+            .file_list_width
+            .min(f32::from(window.viewport_size().width) * 0.7));
         div()
             .size_full()
             .flex()
@@ -776,6 +782,18 @@ impl Render for DiffPane {
             .on_action(cx.listener(|this, _: &LinesUp, _, cx| this.scroll_lines(-18, cx)))
             .child(
                 h_resizable("diff-split")
+                    .on_resize(cx.listener(
+                        |this, state: &Entity<gpui_kit::base::ResizableState>, _, cx| {
+                            if let Some(width) = state.read(cx).sizes().get(1) {
+                                this.file_list_width = f32::from(*width);
+                                this.handle.save_layout(
+                                    gitk_rs::diff::options::LayoutChange::FileListWidth(
+                                        this.file_list_width,
+                                    ),
+                                );
+                            }
+                        },
+                    ))
                     .child(
                         resizable_panel().child(
                             div()
@@ -827,7 +845,7 @@ impl Render for DiffPane {
                         ),
                     )
                     .child(
-                        resizable_panel().size(px(280.)).child(
+                        resizable_panel().size(file_width).child(
                             div()
                                 .w_full()
                                 .h_full()

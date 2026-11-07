@@ -785,7 +785,8 @@ pub(crate) fn path_from_bytes(bytes: Vec<u8>) -> Result<PathBuf> {
 }
 
 struct DiffMailbox {
-    options: Option<DiffOptions>,
+    state: options::State,
+    save_state: bool,
     selection: Option<DiffSelection>,
     page: Option<DiffPage>,
     copy: Option<CopyRequest>,
@@ -799,7 +800,7 @@ struct DiffMailbox {
 
 struct DiffShared {
     options_path: Option<PathBuf>,
-    initial_options: DiffOptions,
+    initial_state: options::State,
     mailbox: Mutex<DiffMailbox>,
     changed: Condvar,
 }
@@ -819,17 +820,18 @@ impl DiffEngine {
 
     /// Load startup state before opening the UI; subsequent writes run on the worker.
     pub fn with_options_file(path: Option<PathBuf>) -> Self {
-        let initial_options = path.as_ref().map_or_else(DiffOptions::default, |path| {
-            options::load_from(path).unwrap_or_else(|error| {
-                eprintln!("gitk-rs: load diff options {}: {error:#}", path.display());
-                DiffOptions::default()
+        let initial_state = path.as_ref().map_or_else(options::State::default, |path| {
+            options::load_state_from(path).unwrap_or_else(|error| {
+                eprintln!("gitk-rs: load state {}: {error:#}", path.display());
+                options::State::default()
             })
         });
         let shared = Arc::new(DiffShared {
             options_path: path,
-            initial_options,
+            initial_state,
             mailbox: Mutex::new(DiffMailbox {
-                options: None,
+                state: initial_state,
+                save_state: false,
                 selection: None,
                 page: None,
                 copy: None,
@@ -871,13 +873,30 @@ impl Drop for DiffEngine {
 
 impl DiffHandle {
     pub fn initial_options(&self) -> DiffOptions {
-        self.shared.initial_options
+        self.shared.initial_state.diff
     }
     pub fn save_options(&self, options: DiffOptions) {
         if self.shared.options_path.is_none() {
             return;
         }
-        self.shared.mailbox.lock().unwrap().options = Some(options);
+        let mut mailbox = self.shared.mailbox.lock().unwrap();
+        mailbox.state.diff = options;
+        mailbox.save_state = true;
+        drop(mailbox);
+        self.shared.changed.notify_one();
+    }
+
+    pub fn initial_layout(&self) -> options::Layout {
+        self.shared.initial_state.layout
+    }
+    pub fn save_layout(&self, change: options::LayoutChange) {
+        if self.shared.options_path.is_none() {
+            return;
+        }
+        let mut mailbox = self.shared.mailbox.lock().unwrap();
+        mailbox.state.layout.apply(change);
+        mailbox.save_state = true;
+        drop(mailbox);
         self.shared.changed.notify_one();
     }
 
@@ -978,7 +997,7 @@ fn diff_worker(shared: Arc<DiffShared>) {
             while mailbox.selection.is_none()
                 && mailbox.page.is_none()
                 && mailbox.copy.is_none()
-                && mailbox.options.is_none()
+                && !mailbox.save_state
                 && !mailbox.clear
                 && !mailbox.stopped
             {
@@ -991,15 +1010,15 @@ fn diff_worker(shared: Arc<DiffShared>) {
                 mailbox.copy.take(),
                 mailbox.cancellation.clone(),
                 clear,
-                mailbox.options.take(),
+                std::mem::take(&mut mailbox.save_state).then_some(mailbox.state),
                 mailbox.stopped,
             )
         };
         if let Some(options) = options
             && let Some(path) = &shared.options_path
-            && let Err(error) = options::save_to(options, path)
+            && let Err(error) = options::save_state_to(options, path)
         {
-            eprintln!("gitk-rs: save diff options {}: {error:#}", path.display());
+            eprintln!("gitk-rs: save state {}: {error:#}", path.display());
         }
         if stopped {
             break;
