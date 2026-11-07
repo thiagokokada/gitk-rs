@@ -424,8 +424,12 @@ impl HistoryWindow {
             && (snapshot.eof && snapshot.visible == 0
                 || snapshot.error.is_some() && self.selected.is_none())
         {
-            self.diff
-                .update(cx, |diff, cx| diff.clear(&self.detail, cx));
+            let message = if snapshot.error.is_some() {
+                "No commit selected."
+            } else {
+                &self.detail
+            };
+            self.diff.update(cx, |diff, cx| diff.clear(message, cx));
         }
         let restoring = self.request.restore.is_some();
         let restored = snapshot.restored.clone();
@@ -587,9 +591,6 @@ impl HistoryWindow {
                     self.pending_selection = Some(index);
                 }
             }
-        }
-        if let Some(error) = &snapshot.error {
-            self.operation_message = error.clone();
         }
         self.workspace_snapshot = Some(snapshot);
         if self.snapshot.as_ref().is_some_and(|s| s.visible == 0)
@@ -780,27 +781,40 @@ impl HistoryWindow {
     }
 
     fn status_text(&self) -> String {
-        let mut status = self.snapshot.as_ref().map_or_else(
-            || "loading commits…".into(),
-            |s| {
-                if let Some(error) = &s.error {
-                    return error.clone();
-                }
-                format!(
-                    "showing {} / {} loaded commits on {}{}{}",
-                    s.visible,
-                    s.loaded,
-                    s.branch,
-                    if s.eof {
-                        " — end of history"
-                    } else {
-                        " — more available"
-                    },
-                    if s.filtering { " — filtering…" } else { "" }
-                )
-            },
-        );
-        if !self.operation_message.is_empty() && self.dialog.is_none() {
+        // History and workspace probe the same repository independently. Prefer
+        // one repository error in the status bar; operation failures remain separate.
+        let repository_error = self
+            .snapshot
+            .as_ref()
+            .and_then(|s| s.error.as_ref())
+            .or_else(|| {
+                self.workspace_snapshot
+                    .as_ref()
+                    .and_then(|s| s.error.as_ref())
+            });
+        let mut status = repository_error.cloned().unwrap_or_else(|| {
+            self.snapshot.as_ref().map_or_else(
+                || "loading commits…".into(),
+                |s| {
+                    format!(
+                        "showing {} / {} loaded commits on {}{}{}",
+                        s.visible,
+                        s.loaded,
+                        s.branch,
+                        if s.eof {
+                            " — end of history"
+                        } else {
+                            " — more available"
+                        },
+                        if s.filtering { " — filtering…" } else { "" }
+                    )
+                },
+            )
+        });
+        if !self.operation_message.is_empty()
+            && self.dialog.is_none()
+            && repository_error != Some(&self.operation_message)
+        {
             status.push_str("  — ");
             status.push_str(&self.operation_message);
         }

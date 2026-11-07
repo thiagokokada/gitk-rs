@@ -437,3 +437,60 @@ fn word_mode_changes_preserve_the_current_file_and_scroll_position(cx: &mut Test
         });
     }
 }
+
+#[gpui_kit::test]
+fn opening_a_non_repository_shows_one_error_and_recovers(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    fixture.commit("base");
+    let invalid = tempfile::tempdir().unwrap();
+    let (app, cx) = open(&fixture, cx);
+    let pane = cx.update(|_, cx| app.view.read(cx).diff.clone());
+    app.view.update(cx, |view, cx| {
+        view.change_repository(invalid.path().to_owned(), cx)
+    });
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            let view = app.view.read(cx);
+            view.snapshot.as_ref().is_some_and(|s| s.error.is_some())
+                && view
+                    .workspace_snapshot
+                    .as_ref()
+                    .is_some_and(|s| s.error.is_some())
+        })
+    });
+    let status = cx.update(|_, cx| app.view.read(cx).status_text());
+    assert_eq!(
+        status.matches("not a git repository").count(),
+        1,
+        "{status}"
+    );
+    assert!(cx.update(|_, cx| app.view.read(cx).operation_message.is_empty()));
+    assert_eq!(
+        cx.update(|_, cx| pane.read(cx).message.clone()),
+        "No commit selected."
+    );
+    app.view.update(cx, |view, cx| {
+        view.change_repository(fixture.root().to_owned(), cx)
+    });
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            let view = app.view.read(cx);
+            view.snapshot
+                .as_ref()
+                .is_some_and(|s| s.error.is_none() && s.loaded > 0)
+                && view
+                    .workspace_snapshot
+                    .as_ref()
+                    .is_some_and(|s| s.error.is_none())
+                && pane
+                    .read(cx)
+                    .snapshot
+                    .as_ref()
+                    .is_some_and(|s| s.error.is_none())
+        })
+    });
+    assert!(
+        !cx.update(|_, cx| app.view.read(cx).status_text())
+            .contains("not a git repository")
+    );
+}
