@@ -744,6 +744,46 @@ fn branch_protection_and_selected_ancestor_survive_switch(cx: &mut TestAppContex
 }
 
 #[gpui_kit::test]
+fn end_of_history_notice_expires_without_changing_eof_or_repeating(cx: &mut TestAppContext) {
+    let fixture = history_fixture(20);
+    let (app, cx) = open(&fixture, cx);
+    until(cx, |cx| {
+        cx.update(|_, cx| app.view.read(cx).status_text().contains("end of history"))
+    });
+    let generation = cx.update(|_, cx| app.view.read(cx).request.generation);
+    cx.background_executor.advance_clock(Duration::from_secs(2));
+    cx.run_until_parked();
+    cx.simulate_keystrokes("f5");
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            let view = app.view.read(cx);
+            view.end_of_history_generation != Some(generation)
+                && view.status_text().contains("end of history")
+        })
+    });
+    cx.background_executor.advance_clock(Duration::from_secs(1));
+    cx.run_until_parked();
+    assert!(cx.update(|_, cx| app.view.read(cx).status_text().contains("end of history")));
+    cx.background_executor.advance_clock(Duration::from_secs(3));
+    cx.run_until_parked();
+    app.view.update(cx, |view, _| {
+        assert!(view.snapshot.as_ref().unwrap().eof);
+        assert!(!view.status_text().contains("end of history"));
+        assert!(!view.status_text().contains("more available"));
+        view.submit();
+    });
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            let view = app.view.read(cx);
+            view.snapshot
+                .as_ref()
+                .is_some_and(|s| s.request_id == view.request.id)
+        })
+    });
+    assert!(cx.update(|_, cx| !app.view.read(cx).status_text().contains("end of history")));
+}
+
+#[gpui_kit::test]
 fn branch_switch_message_timer_preserves_newer_operations(cx: &mut TestAppContext) {
     let fixture = Fixture::new();
     fixture.commit("root");

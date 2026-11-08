@@ -183,6 +183,8 @@ struct HistoryWindow {
     operation_message: String,
     request: Request,
     snapshot: Option<Snapshot>,
+    end_of_history_generation: Option<Generation>,
+    show_end_of_history: bool,
     selected: Option<(usize, Arc<Entry>)>,
     pending_selection: Option<usize>,
     filter: Entity<InputState>,
@@ -391,6 +393,8 @@ impl HistoryWindow {
             history,
             request,
             snapshot: None,
+            end_of_history_generation: None,
+            show_end_of_history: false,
             selected: None,
             pending_selection: Some(0),
             filter,
@@ -502,6 +506,24 @@ impl HistoryWindow {
         }
         let restoring = self.request.restore.is_some();
         let restored = snapshot.restored.clone();
+        if snapshot.error.is_none()
+            && snapshot.eof
+            && self.end_of_history_generation != Some(snapshot.generation)
+        {
+            let generation = snapshot.generation;
+            self.end_of_history_generation = Some(generation);
+            self.show_end_of_history = true;
+            cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(Duration::from_secs(3)).await;
+                let _ = this.update(cx, |this, cx| {
+                    if this.end_of_history_generation == Some(generation) {
+                        this.show_end_of_history = false;
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+        }
         self.snapshot = Some(snapshot);
         if restoring {
             self.request.restore = None;
@@ -875,10 +897,14 @@ impl HistoryWindow {
                         s.visible,
                         s.loaded,
                         s.branch,
-                        if s.eof {
+                        if !s.eof {
+                            " — more available"
+                        } else if self.show_end_of_history
+                            && self.end_of_history_generation == Some(s.generation)
+                        {
                             " — end of history"
                         } else {
-                            " — more available"
+                            ""
                         },
                         if s.filtering { " — filtering…" } else { "" }
                     )
