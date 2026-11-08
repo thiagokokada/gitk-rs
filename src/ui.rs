@@ -16,6 +16,7 @@ use gitk_rs::{
         Restore as HistoryRestore, Snapshot,
     },
     preferences::Preferences,
+    search::Query,
     timing::{Phase, Timing, TimingGuard},
     workspace::{
         Operation, WorkspaceEngine, WorkspaceGeneration, WorkspaceHandle, WorkspaceRequest,
@@ -267,11 +268,13 @@ impl HistoryWindow {
             });
         let focus = cx.focus_handle();
         focus.focus(window, cx);
-        let filter =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Hash, author or commit message"));
+        let filter = cx.new(|cx| {
+            InputState::new(window, cx).placeholder("Search commits, e.g. author:alice path:ci.yml")
+        });
         let subscription = cx.subscribe_in(&filter, window, |this, input, event, _, cx| {
             if matches!(event, InputEvent::Change) {
                 let query = input.read(cx).value().to_string();
+                cx.notify();
                 this.filter_task = Some(cx.spawn(async move |this, cx| {
                     cx.background_executor()
                         .timer(Duration::from_millis(120))
@@ -1396,13 +1399,14 @@ impl Render for HistoryWindow {
                                         .menu("Preferences…", Box::new(OpenPreferences))
                                         .menu_with_check("Light theme", light, Box::new(ToggleTheme))
                                         .separator()
-                                        .menu("Keyboard shortcuts", Box::new(Help))
+                                        .menu("Help", Box::new(Help))
                                         .menu("About", Box::new(About))
                                         .menu("Quit", Box::new(Quit))
                                 }
                             })
                     )
             )
+            .children(search_feedback(self.filter.read(cx).value().as_ref(), palette))
             .child(
                 div().flex_1().min_h_0().child(
                     v_resizable("main-split")
@@ -1797,4 +1801,43 @@ pub fn run(mut config: Config, preferences: Preferences, launched: Instant) {
     drop(engine);
     drop(diff_engine);
     drop(workspace_engine);
+}
+
+/// Feedback uses the same parser as history; a badge only appears for a valid query.
+fn search_feedback(value: &str, palette: &Palette) -> Option<AnyElement> {
+    let feedback = div().flex().flex_wrap().gap_2().text_size(px(12.));
+    match Query::parse(value) {
+        Err(error) => Some(
+            feedback
+                .child(
+                    div()
+                        .id("search-error")
+                        .test_support()
+                        .text_color(rgb(palette.removed_text))
+                        .child(error.to_string()),
+                )
+                .into_any_element(),
+        ),
+        Ok(query) if query.filters.is_empty() => None,
+        Ok(query) => Some(
+            feedback
+                .child("All filters:")
+                .children(
+                    query
+                        .filters
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, filter)| {
+                            div()
+                                .id(SharedString::from(format!("search-filter-{index}")))
+                                .test_support()
+                                .px_2()
+                                .rounded_sm()
+                                .bg(rgb(palette.selection))
+                                .child(filter)
+                        }),
+                )
+                .into_any_element(),
+        ),
+    }
 }

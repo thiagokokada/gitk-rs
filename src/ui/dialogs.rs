@@ -158,7 +158,7 @@ impl HistoryWindow {
     pub(super) fn dialog_element(&self, cx: &mut Context<Self>) -> AnyElement {
         let title = match self.dialog {
             Some(DialogKind::Branches) => "Switch local branch",
-            Some(DialogKind::Help) => "Keyboard shortcuts",
+            Some(DialogKind::Help) => "Help",
             Some(DialogKind::Preferences) => "Preferences",
             Some(DialogKind::OpenRepository) => "Open repository by path",
             _ => "About gitk-rs",
@@ -687,7 +687,7 @@ const SHORTCUT_GROUPS: &[ShortcutGroup] = &[
             ("/", "Focus the filter box"),
             ("Escape", "Leave the filter box"),
             ("F5", "Reload commits"),
-            ("F1 / ?", "Show keyboard shortcuts (? outside text inputs)"),
+            ("F1 / ?", "Show help (? outside text inputs)"),
             (command_shortcut!("O"), "Open repository"),
             (command_shortcut!("Shift+O"), "Open repository by path"),
             (
@@ -721,7 +721,7 @@ const SHORTCUT_GROUPS: &[ShortcutGroup] = &[
         ],
     },
     ShortcutGroup {
-        title: "Shortcuts dialog",
+        title: "Help dialog",
         shortcuts: &[
             ("Up / Down", "Scroll up / down one line"),
             ("PageUp / PageDown", "Scroll up / down one page"),
@@ -734,6 +734,52 @@ const SHORTCUT_GROUPS: &[ShortcutGroup] = &[
             ("Escape", "Close the dialog"),
             ("Enter", "Open repository in the path input"),
             (command_shortcut!("Enter"), "Apply and save preferences"),
+        ],
+    },
+    ShortcutGroup {
+        title: "Commit search",
+        shortcuts: &[
+            ("author:text", "Author name or email, e.g. author:alice"),
+            (
+                "committer:text",
+                "Committer name or email, e.g. committer:bob",
+            ),
+            (
+                "message:text / hash:text",
+                "Full message or commit hash substring",
+            ),
+            (
+                "path:text",
+                "Changed path substring, e.g. path:ci.yml; merges compare with their first parent",
+            ),
+            (
+                "before:YYYY-MM-DD",
+                "Author's recorded calendar day strictly before this date",
+            ),
+            (
+                "after:YYYY-MM-DD",
+                "Author's recorded calendar day strictly after this date",
+            ),
+            (
+                "merge:true / merge:false",
+                "Include merges / exclude merges",
+            ),
+            (
+                "Combine filters",
+                "All qualifiers must match; text and path matching ignore case",
+            ),
+            (
+                "Values with spaces",
+                "Use double quotes, e.g. author:\"Alice Smith\"",
+            ),
+            (
+                "Plain text",
+                "Search hash, author and full message as a contiguous phrase",
+            ),
+            (
+                "Badges and status",
+                "Badges confirm valid filters; filtering means results are still arriving",
+            ),
         ],
     },
     ShortcutGroup {

@@ -7,6 +7,7 @@ pub mod diff;
 pub mod git;
 pub mod graph;
 pub mod history;
+pub mod search;
 pub mod syntax;
 pub mod timing;
 

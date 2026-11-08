@@ -2188,3 +2188,57 @@ fn resized_columns_and_panes_are_saved_and_restored(cx: &mut TestAppContext) {
     assert!((width + px(2.) - px(saved.layout.file_list_width)).abs() <= px(1.));
     assert!(!settings.path().join("preferences.toml").exists());
 }
+
+#[gpui_kit::test]
+fn metadata_search_shows_badges_errors_and_recovers(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    fixture.commit("needle");
+    fixture.commit("other");
+    let (app, cx) = open(&fixture, cx);
+    until(cx, |cx| {
+        cx.update(|_, cx| app.view.read(cx).snapshot.as_ref().is_some_and(|s| s.eof))
+    });
+    assert!(cx.update(|window, _| window.try_find("author:text").is_none()));
+    cx.simulate_keystrokes("/");
+    cx.simulate_input("author:fixture message:needle path:file.txt");
+    until(cx, |cx| {
+        cx.update(|window, cx| {
+            window.try_find("search-filter-0").is_some()
+                && app.view.read(cx).snapshot.as_ref().is_some_and(|s| {
+                    s.visible == 1 && s.rows[0].commit.summary() == "needle" && !s.filtering
+                })
+        })
+    });
+    cx.simulate_keystrokes("ctrl-a ctrl-k");
+    cx.simulate_input("before:nope");
+    until(cx, |cx| {
+        cx.update(|window, cx| {
+            window.try_find("search-error").is_some()
+                && app
+                    .view
+                    .read(cx)
+                    .snapshot
+                    .as_ref()
+                    .is_some_and(|s| s.error.is_some())
+        })
+    });
+    cx.simulate_keystrokes("ctrl-a ctrl-k");
+    cx.simulate_input("author:fixture");
+    until(cx, |cx| {
+        cx.update(|window, cx| {
+            window.try_find("search-error").is_none()
+                && app
+                    .view
+                    .read(cx)
+                    .snapshot
+                    .as_ref()
+                    .is_some_and(|s| s.error.is_none() && s.visible == 2)
+        })
+    });
+    cx.simulate_keystrokes("f1");
+    cx.refresh().unwrap();
+    cx.update(|window, _| {
+        assert!(window.find("Commit search").bounds().size.height > px(0.));
+        assert!(window.find("author:text").bounds().size.height > px(0.));
+    });
+}
