@@ -706,6 +706,10 @@ const SHORTCUT_GROUPS: &[ShortcutGroup] = &[
             ("/", "Focus the filter box"),
             ("Escape", "Leave the filter box"),
             ("F5", "Reload commits"),
+            (
+                "Alt+X",
+                "Toggle regex search (including while typing in the filter)",
+            ),
             ("F1 / ?", "Show help (? outside text inputs)"),
             (command_shortcut!("O"), "Open repository"),
             (command_shortcut!("Shift+O"), "Open repository by path"),

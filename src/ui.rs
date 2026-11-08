@@ -61,6 +61,7 @@ actions!(
         HistoryPageUp,
         HistoryPageDown,
         ToggleWatch,
+        ToggleRegex,
         OpenRepository,
         OpenRepositoryPath,
         OpenBranches,
@@ -1313,6 +1314,9 @@ impl Render for HistoryWindow {
                     )));
                 }
             }))
+            .on_action(cx.listener(|this, _: &ToggleRegex, _, cx| {
+                this.set_search_regex(!this.request.regex, cx);
+            }))
             .on_action(cx.listener(|this, _: &ToggleWatch, _, cx| {
                 this.toggle_auto_reload(cx);
             }))
@@ -1409,7 +1413,7 @@ impl Render for HistoryWindow {
                     .child(div().flex_1().key_context("HistoryFilter").child(Input::new(&self.filter).cleanable(true)))
                     .child(Checkbox::new("search-regex")
                         .label("Regex")
-                        .tooltip("Use regular expressions for text and path filters. Turn off for literal search.")
+                        .tooltip("Toggle regex with Alt+X. Turn off for literal text and path searches.")
                         .checked(self.request.regex)
                         .on_click(cx.listener(|this, checked: &bool, _, cx| this.set_search_regex(*checked, cx))))
                     .child(
@@ -1602,6 +1606,7 @@ fn bind_keys(cx: &mut App) {
             ToggleTheme,
             Some("GitHistory && !Input && !Dialog"),
         ),
+        KeyBinding::new("alt-x", ToggleRegex, Some("GitHistory && !Dialog")),
         KeyBinding::new(
             "alt-r",
             ToggleWatch,

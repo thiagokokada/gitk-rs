@@ -2303,8 +2303,15 @@ fn regex_toggle_refilters_reports_errors_and_restores_saved_state(cx: &mut TestA
                     .is_some_and(|s| s.visible == 1 && !s.filtering)
             })
         });
-        let toggle = cx.update(|window, _| window.find("search-regex").bounds().center());
-        cx.simulate_click(toggle, gpui_kit::Modifiers::default());
+        cx.simulate_keystrokes("alt-x");
+        assert!(cx.update(|window, cx| {
+            app.view
+                .read(cx)
+                .filter
+                .read(cx)
+                .focus_handle(cx)
+                .is_focused(window)
+        }));
         until(cx, |cx| {
             cx.update(|_, cx| {
                 let view = app.view.read(cx);
@@ -2314,7 +2321,9 @@ fn regex_toggle_refilters_reports_errors_and_restores_saved_state(cx: &mut TestA
                     })
             })
         });
-        cx.simulate_keystrokes("/ ctrl-a ctrl-k");
+        cx.simulate_keystrokes("f1 alt-x");
+        assert!(cx.update(|_, cx| app.view.read(cx).request.regex));
+        cx.simulate_keystrokes("escape / ctrl-a ctrl-k");
         cx.simulate_input("message:[");
         until(cx, |cx| {
             cx.update(|window, cx| {
@@ -2340,8 +2349,7 @@ fn regex_toggle_refilters_reports_errors_and_restores_saved_state(cx: &mut TestA
         });
         cx.simulate_keystrokes("/ ctrl-a ctrl-k");
         cx.simulate_input("author:Fixture");
-        let toggle = cx.update(|window, _| window.find("search-regex").bounds().center());
-        cx.simulate_click(toggle, gpui_kit::Modifiers::default());
+        cx.simulate_keystrokes("escape alt-x");
         until(cx, |cx| {
             cx.update(|_, cx| {
                 let view = app.view.read(cx);

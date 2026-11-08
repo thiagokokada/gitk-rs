@@ -30,15 +30,16 @@ Unqualified text searches the hash, author name/email, and full message as one
 contiguous phrase, preserving the original plain-text filter behavior. By default,
 all text and path metacharacters are literal.
 
-Enable **Regex** next to the filter box to interpret text and path values as
-regular expressions, for example:
+Enable **Regex** next to the filter box, or press **Alt+X**, to interpret text
+and path values as regular expressions. The shortcut also works while typing
+in the filter box. For example:
 
 ```text
 author:Alice|Bob path:\.ya?ml$ message:^fix
 author:"Alice Smith|Bob Jones" after:2026-01-01
 ```
 
-Turn **Regex** off to force literal substring searches, including characters such
+Turn **Regex** off (or press **Alt+X** again) to force literal substring searches, including characters such
 as `.`, `*`, `[`, and `\`. Double quotes group values with spaces in either mode;
 they do not disable regex. Escape a quote inside a value with `\"`. Backslashes
 in patterns such as `\S+` are preserved. Quote an unqualified expression containing
