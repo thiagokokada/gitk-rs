@@ -378,7 +378,11 @@ impl HistoryWindow {
                                             .child("The quick brown fox jumps over the lazy dog.")
                                             .child("AaBbCc 0123456789"),
                                     )
-                                    .child("Fixed-width preview")
+                                    .child(
+                                        div()
+                                            .font_family(system_fonts::resolve(&draft.fixed_font, cx))
+                                            .child("Fixed-width preview"),
+                                    )
                                     .child(
                                         div()
                                             .id("fixed-font-preview")
