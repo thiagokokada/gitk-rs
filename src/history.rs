@@ -1,5 +1,5 @@
-//! Go-style streamed history. Loaded entries live once in memory. The GUI receives
-//! only nearby Arc references; neither history nor filter results persist on disk.
+//! Loaded entries live once in memory. The GUI receives only nearby Arc
+//! references; neither history nor filter results persist on disk.
 use crate::{
     git::{Cancellation, Commit, CommitId, GitStream, Repository, run_bytes},
     graph::{GraphBuilder, GraphRow},
