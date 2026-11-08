@@ -286,6 +286,39 @@ fn history_pages_settle_after_scrolling_beyond_the_first_page(cx: &mut TestAppCo
 }
 
 #[gpui_kit::test]
+fn unchanged_head_reload_retains_rows_and_selection(cx: &mut TestAppContext) {
+    let fixture = history_fixture(20);
+    let (app, cx) = open(&fixture, cx);
+    until(cx, |cx| {
+        cx.update(|_, cx| app.view.read(cx).snapshot.as_ref().is_some_and(|s| s.eof))
+    });
+    app.view
+        .update_in(cx, |view, window, cx| view.select(8, window, cx));
+    let (before, generation) = cx.update(|_, cx| {
+        let view = app.view.read(cx);
+        (view.cached(8).unwrap(), view.request.generation)
+    });
+    cx.simulate_keystrokes("f5");
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            let view = app.view.read(cx);
+            view.snapshot
+                .as_ref()
+                .is_some_and(|s| s.generation != generation)
+                && view.reload_selection.is_none()
+        })
+    });
+    cx.update(|_, cx| {
+        let view = app.view.read(cx);
+        assert!(Arc::ptr_eq(&before, &view.cached(8).unwrap()));
+        assert_eq!(
+            view.selected.as_ref().unwrap().1.commit.id,
+            before.commit.id
+        );
+    });
+}
+
+#[gpui_kit::test]
 fn consecutive_reload_before_layout_preserves_the_restored_top_commit(cx: &mut TestAppContext) {
     let fixture = history_fixture(100);
     let (app, cx) = open(&fixture, cx);
@@ -300,7 +333,7 @@ fn consecutive_reload_before_layout_preserves_the_restored_top_commit(cx: &mut T
         cx.update(|_, cx| app.view.read(cx).viewport.start == 50)
     });
     let top = cx.update(|_, cx| app.view.read(cx).cached(50).unwrap().commit.id.clone());
-    fixture.commit("new tip");
+    fixture.append_history(600, false, "new tip");
     app.view.update(cx, |view, cx| view.reload(cx));
     // Receive the restored rows without running layout or workspace polling.
     // This reproduces a second HEAD update arriving before the next frame.
@@ -357,6 +390,18 @@ fn deep_reload_keeps_selected_commit_and_top_visible_commit(cx: &mut TestAppCont
     app.view
         .update_in(cx, |view, window, cx| view.select(1620, window, cx));
     let chosen = selected(&app.view, cx).unwrap();
+    let author = cx.update(|_, cx| {
+        app.view
+            .read(cx)
+            .selected
+            .as_ref()
+            .unwrap()
+            .1
+            .commit
+            .author
+            .name
+            .clone()
+    });
     app.view.update(cx, |view, cx| {
         view.scroll.scroll_to_item_strict(1800, ScrollStrategy::Top);
         cx.notify();
@@ -384,6 +429,20 @@ fn deep_reload_keeps_selected_commit_and_top_visible_commit(cx: &mut TestAppCont
         })
     });
     assert_eq!(selected(&app.view, cx).as_deref(), Some(chosen.as_str()));
+    cx.update(|_, cx| {
+        assert!(Arc::ptr_eq(
+            &author,
+            &app.view
+                .read(cx)
+                .selected
+                .as_ref()
+                .unwrap()
+                .1
+                .commit
+                .author
+                .name
+        ));
+    });
     assert_eq!(
         cx.update(|_, cx| {
             let view = app.view.read(cx);
@@ -449,7 +508,7 @@ fn deep_reload_keeps_selected_commit_and_top_visible_commit(cx: &mut TestAppCont
                 > revision
         })
     });
-    fixture.commit("automatic tip");
+    fixture.append_history(600, false, "automatic tip");
     until(cx, |cx| {
         cx.update(|_, cx| {
             let view = app.view.read(cx);
@@ -461,6 +520,20 @@ fn deep_reload_keeps_selected_commit_and_top_visible_commit(cx: &mut TestAppCont
         })
     });
     assert_eq!(selected(&app.view, cx).as_deref(), Some(chosen.as_str()));
+    cx.update(|_, cx| {
+        assert!(Arc::ptr_eq(
+            &author,
+            &app.view
+                .read(cx)
+                .selected
+                .as_ref()
+                .unwrap()
+                .1
+                .commit
+                .author
+                .name
+        ));
+    });
     assert_eq!(
         cx.update(|_, cx| {
             let view = app.view.read(cx);

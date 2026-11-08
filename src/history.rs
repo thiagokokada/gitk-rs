@@ -18,6 +18,7 @@ use std::{
 
 pub const PAGE_ROWS: usize = 512;
 const BATCH_BYTES: usize = 2 * 1024 * 1024;
+const RELOAD_STEP_COMMITS: usize = 256;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Generation(pub u64);
@@ -52,7 +53,7 @@ pub struct Restored {
     pub pending: bool,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Entry {
     pub ordinal: usize,
     pub commit: Commit,
@@ -97,6 +98,8 @@ struct SharedState {
     snapshot: Option<Snapshot>,
     cancellation: Cancellation,
     generation: Generation,
+    repository: PathBuf,
+    graph_columns: usize,
     stopped: bool,
 }
 
@@ -120,6 +123,8 @@ impl HistoryEngine {
         let shared = Arc::new(Shared {
             state: Mutex::new(SharedState {
                 generation: initial.generation,
+                repository: initial.repository.clone(),
+                graph_columns: initial.graph_columns,
                 request: Some(initial),
                 snapshot: None,
                 cancellation: Cancellation::default(),
@@ -160,12 +165,23 @@ impl HistoryHandle {
     pub fn request(&self, request: Request) {
         let old = {
             let mut state = self.shared.state.lock().unwrap();
-            if request.generation != state.generation {
+            // A UI generation invalidates snapshots, not necessarily the Git
+            // traversal. Let the worker inspect HEAD before replacing a stream.
+            if request.repository != state.repository
+                || request.graph_columns != state.graph_columns
+            {
                 state.cancellation.store(true, Ordering::Release);
                 state.cancellation = Cancellation::default();
-                state.generation = request.generation;
             }
-            state.request.replace(request)
+            let snapshot = if request.generation != state.generation {
+                state.snapshot.take()
+            } else {
+                None
+            };
+            state.generation = request.generation;
+            state.repository = request.repository.clone();
+            state.graph_columns = request.graph_columns;
+            (state.request.replace(request), snapshot)
         };
         drop(old);
         self.shared.changed.notify_one();
@@ -203,38 +219,66 @@ fn run(shared: Arc<Shared>) {
             }
             (state.cancellation.clone(), state.request.take())
         };
+        let mut reload = false;
         if let Some(request) = incoming {
             if current
                 .as_ref()
                 .is_none_or(|previous| previous.generation != request.generation)
             {
-                // Git cleanup must happen outside the shared UI mailbox lock.
-                session = None;
+                reload = true;
+                if failed
+                    || current.as_ref().is_none_or(|previous| {
+                        previous.repository != request.repository
+                            || previous.graph_columns != request.graph_columns
+                    })
+                {
+                    // Git cleanup must happen outside the shared UI mailbox lock.
+                    session = None;
+                }
                 failed = false;
             }
             current = Some(request);
         }
         let request = current.as_ref().unwrap();
-        let result = (|| -> Result<(Snapshot, bool)> {
+        let result = (|| -> Result<(Option<Snapshot>, bool)> {
             if failed {
                 return Ok((
-                    empty_snapshot(
+                    Some(empty_snapshot(
                         request,
                         Some("Reload to retry the failed history operation.".into()),
-                    ),
+                    )),
                     false,
                 ));
+            }
+            if reload
+                && let Some(retained) = session.as_mut()
+                && !retained.refresh(request)?
+            {
+                session = None;
             }
             if session.is_none() {
                 session = Some(Session::open(request, cancel.clone())?);
             }
-            let session = session.as_mut().unwrap();
-            let work = session.step(request)?;
-            Ok((session.snapshot(request), work))
+            match session.as_mut().unwrap().advance_reload()? {
+                ReloadProgress::Pending => return Ok((None, true)),
+                ReloadProgress::Replace => {
+                    session = Some(Session::open(request, cancel.clone())?);
+                }
+                ReloadProgress::Ready => (),
+            }
+            let retained = session.as_mut().unwrap();
+            let work = retained.step(request)?;
+            // Do not restore the viewport using the old HEAD or an incomplete
+            // prefix filter. Keep the existing UI snapshot until reconciliation.
+            let snapshot = (retained.prefix_search.is_none() || retained.query_error.is_some())
+                .then(|| retained.snapshot(request));
+            Ok((snapshot, work))
         })();
         match result {
             Ok((snapshot, pending)) => {
-                publish(&shared, snapshot);
+                if let Some(snapshot) = snapshot {
+                    publish(&shared, snapshot);
+                }
                 work = pending;
             }
             Err(error) => {
@@ -367,6 +411,76 @@ impl Drop for PathSearch {
     }
 }
 
+enum ReloadProgress {
+    Pending,
+    Ready,
+    Replace,
+}
+
+struct LinearReload {
+    repository: Repository,
+    stream: GitStream,
+    old_head: CommitId,
+    expected: CommitId,
+    entries: Vec<Arc<Entry>>,
+    graph: GraphBuilder,
+    strings: HashSet<Arc<str>>,
+}
+
+impl LinearReload {
+    fn step(
+        &mut self,
+        retained_strings: &HashSet<Arc<str>>,
+        cancellation: &Cancellation,
+    ) -> Result<ReloadProgress> {
+        let mut bytes = 0;
+        for _ in 0..RELOAD_STEP_COMMITS {
+            ensure!(
+                !cancellation.load(Ordering::Acquire),
+                "Git operation cancelled"
+            );
+            let Some(mut commit) = self.stream.next_commit()? else {
+                return Ok(ReloadProgress::Replace);
+            };
+            if commit.id != self.expected || commit.parents.len() != 1 {
+                return Ok(ReloadProgress::Replace);
+            }
+            bytes += commit.memory_bytes();
+            self.expected = commit.parents[0].clone();
+            for signature in [&mut commit.author, &mut commit.committer] {
+                for value in [&mut signature.name, &mut signature.email] {
+                    if let Some(shared) = retained_strings
+                        .get(value.as_ref())
+                        .or_else(|| self.strings.get(value.as_ref()))
+                    {
+                        *value = shared.clone();
+                    } else {
+                        self.strings.insert(value.clone());
+                    }
+                }
+            }
+            self.entries.push(Arc::new(Entry {
+                ordinal: self.entries.len(),
+                graph: self.graph.push(&commit),
+                commit,
+            }));
+            if self.expected == self.old_head {
+                return Ok(ReloadProgress::Ready);
+            }
+            if bytes >= BATCH_BYTES {
+                break;
+            }
+        }
+        Ok(ReloadProgress::Pending)
+    }
+}
+
+struct PrefixSearch {
+    range: Range<usize>,
+    suffix_matches: Vec<usize>,
+    suffix_candidates: Vec<(CommitId, usize)>,
+}
+
 struct Session {
     repository: Repository,
     stream: Option<GitStream>,
@@ -390,11 +504,15 @@ struct Session {
     restore: Option<Restore>,
     restore_ordinals: [Option<usize>; 2],
     restore_reachable: [bool; 2],
+    reusable: bool,
+    reload: Option<LinearReload>,
+    prefix_search: Option<PrefixSearch>,
 }
 
 impl Session {
     fn open(request: &Request, cancellation: Cancellation) -> Result<Self> {
         let repository = Repository::open(&request.repository, &cancellation)?;
+        let reusable = history_reusable(&repository, &cancellation)?;
         let stream = repository
             .head
             .as_ref()
@@ -424,7 +542,136 @@ impl Session {
             restore: None,
             restore_ordinals: [None; 2],
             restore_reachable: [false; 2],
+            reusable,
+            reload: None,
+            prefix_search: None,
         })
+    }
+
+    /// Revalidate traversal inputs on the worker before carrying data into a
+    /// new UI generation. Retain both loaded entries and the unread stream.
+    fn refresh(&mut self, request: &Request) -> Result<bool> {
+        self.reload = None;
+        if self.prefix_search.take().is_some() {
+            // An unfinished reconciliation was superseded. Keep the commits,
+            // and let step rebuild the new request's search in bounded chunks.
+            self.query.clear();
+            self.paths = None;
+            self.path_pending.clear();
+            self.candidates.clear();
+            self.matches.clear();
+            self.scanned = 0;
+        }
+        if self.cancellation.load(Ordering::Acquire) || self.query_error.is_some() {
+            return Ok(false);
+        }
+        let repository = Repository::open(&request.repository, &self.cancellation)?;
+        if !self.reusable
+            || repository.root != self.repository.root
+            || repository.git_dir != self.repository.git_dir
+            || repository.common_dir != self.repository.common_dir
+            || !history_reusable(&repository, &self.cancellation)?
+        {
+            return Ok(false);
+        }
+        if repository.head != self.repository.head {
+            let Some(old_head) = self.repository.head.clone() else {
+                return Ok(false);
+            };
+            let Some(expected) = repository.head.clone() else {
+                return Ok(false);
+            };
+            if self.entries.is_empty() {
+                return Ok(false);
+            }
+            self.reload = Some(LinearReload {
+                stream: repository.log(self.cancellation.clone())?,
+                repository,
+                old_head,
+                expected,
+                entries: Vec::new(),
+                graph: GraphBuilder::new(request.graph_columns),
+                strings: HashSet::new(),
+            });
+            return Ok(true);
+        }
+        self.repository = repository;
+        self.refs_loaded = false;
+        Ok(true)
+    }
+
+    fn advance_reload(&mut self) -> Result<ReloadProgress> {
+        let Some(mut reload) = self.reload.take() else {
+            return Ok(ReloadProgress::Ready);
+        };
+        match reload.step(&self.strings, &self.cancellation)? {
+            ReloadProgress::Pending => {
+                self.reload = Some(reload);
+                Ok(ReloadProgress::Pending)
+            }
+            ReloadProgress::Replace => Ok(ReloadProgress::Replace),
+            ReloadProgress::Ready => {
+                self.repository = reload.repository;
+                self.refs_loaded = false;
+                self.strings.extend(reload.strings);
+                self.prepend(reload.entries);
+                Ok(ReloadProgress::Ready)
+            }
+        }
+    }
+
+    fn prepend(&mut self, prefix: Vec<Arc<Entry>>) {
+        let offset = prefix.len();
+        // This single-lane prefix leaves the graph builder at the old HEAD in
+        // precisely its original state, except for the incoming edge at that row.
+        Arc::make_mut(&mut self.entries[0]).graph.incoming = true;
+        for entry in &mut self.entries {
+            Arc::make_mut(entry).ordinal += offset;
+        }
+        for ordinal in &mut self.matches {
+            *ordinal += offset;
+        }
+        for ordinal in self.candidates.values_mut() {
+            *ordinal += offset;
+        }
+        self.scanned += offset;
+
+        self.entries.splice(0..0, prefix);
+
+        if !self.query.is_empty() {
+            // Filter the prefix separately before joining the known suffix.
+            // This avoids both a delta-sized candidate queue and repeated
+            // insertion of prefix matches at the front of a large suffix.
+            self.paths = None;
+            self.paths = self
+                .parsed
+                .path
+                .as_ref()
+                .map(|path| PathSearch::start(&self.repository, path));
+            let mut suffix_candidates: Vec<_> = self.candidates.drain().collect();
+            suffix_candidates.sort_unstable_by_key(|(_, ordinal)| *ordinal);
+            self.path_pending.clear();
+            self.prefix_search = Some(PrefixSearch {
+                range: 0..offset,
+                suffix_matches: std::mem::take(&mut self.matches),
+                suffix_candidates,
+            });
+        }
+        self.restore = None;
+        self.restore_ordinals = [None; 2];
+        self.restore_reachable = [false; 2];
+    }
+
+    fn intern(&mut self, commit: &mut Commit) {
+        for signature in [&mut commit.author, &mut commit.committer] {
+            for value in [&mut signature.name, &mut signature.email] {
+                if let Some(shared) = self.strings.get(value.as_ref()) {
+                    *value = shared.clone();
+                } else {
+                    self.strings.insert(value.clone());
+                }
+            }
+        }
     }
 
     fn step(&mut self, request: &Request) -> Result<bool> {
@@ -457,6 +704,7 @@ impl Session {
         }
         let query = request.query.trim().to_owned();
         if self.query != query || self.regex != request.regex {
+            self.prefix_search = None;
             self.query = query;
             self.regex = request.regex;
             self.matches.clear();
@@ -490,7 +738,10 @@ impl Session {
                             .remove(&id)
                             .ok_or_else(|| anyhow::anyhow!("Unexpected path-search commit"))?;
                         if matched {
-                            self.matches.push(ordinal);
+                            // A reload can queue new prefix candidates before
+                            // the remaining suffix has finished filtering.
+                            let position = self.matches.partition_point(|i| *i < ordinal);
+                            self.matches.insert(position, ordinal);
                         }
                     }
                     Ok(Err(error)) => {
@@ -532,9 +783,45 @@ impl Session {
                 return Ok(true);
             }
         }
-        if !self.query.is_empty() && self.scanned < self.entries.len() {
-            let end = (self.scanned + 1000).min(self.entries.len());
-            for index in self.scanned..end {
+        if self
+            .prefix_search
+            .as_ref()
+            .is_some_and(|prefix| prefix.range.is_empty())
+        {
+            if self.path_pending.is_empty()
+                && let Some(paths) = &mut self.paths
+            {
+                // diff-tree can buffer the last decision until stdin closes.
+                paths.input.take();
+            }
+            if !self.candidates.is_empty() || !self.path_pending.is_empty() {
+                thread::sleep(Duration::from_millis(5));
+                return Ok(true);
+            }
+            let mut prefix = self.prefix_search.take().unwrap();
+            self.paths = None;
+            self.paths = self
+                .parsed
+                .path
+                .as_ref()
+                .map(|path| PathSearch::start(&self.repository, path));
+            self.matches.append(&mut prefix.suffix_matches);
+            for (id, ordinal) in prefix.suffix_candidates {
+                self.path_pending.push(id.clone());
+                self.candidates.insert(id, ordinal);
+            }
+            if !self.path_pending.is_empty() {
+                return Ok(true);
+            }
+        }
+        let scan = self
+            .prefix_search
+            .as_ref()
+            .map(|prefix| prefix.range.clone())
+            .unwrap_or(self.scanned..self.entries.len());
+        if !self.query.is_empty() && !scan.is_empty() {
+            let end = (scan.start + 1000).min(scan.end);
+            for index in scan.start..end {
                 let commit = &self.entries[index].commit;
                 if self.parsed.matches(commit) {
                     if self.paths.is_some() {
@@ -545,7 +832,11 @@ impl Session {
                     }
                 }
             }
-            self.scanned = end;
+            if let Some(prefix) = &mut self.prefix_search {
+                prefix.range.start = end;
+            } else {
+                self.scanned = end;
+            }
             return Ok(true);
         }
         // Publish a small first viewport before ref discovery or further batches.
@@ -627,15 +918,7 @@ impl Session {
             bytes += commit.memory_bytes();
             // Share repeated identities within this history generation. Full
             // messages and exact timestamps remain available for search/details.
-            for signature in [&mut commit.author, &mut commit.committer] {
-                for value in [&mut signature.name, &mut signature.email] {
-                    if let Some(shared) = self.strings.get(value.as_ref()) {
-                        *value = shared.clone();
-                    } else {
-                        self.strings.insert(value.clone());
-                    }
-                }
-            }
+            self.intern(&mut commit);
             let graph = self.graph.push(&commit);
             let ordinal = self.entries.len();
             if let Some(restore) = &self.restore {
@@ -746,6 +1029,37 @@ impl Session {
     }
 }
 
+fn history_reusable(repository: &Repository, cancel: &Cancellation) -> Result<bool> {
+    // These inputs can change ancestry while the HEAD object ID stays the same.
+    // Disable reuse rather than retaining a second traversal-metadata cache.
+    if ["GIT_REPLACE_REF_BASE", "GIT_GRAFT_FILE", "GIT_SHALLOW_FILE"]
+        .iter()
+        .any(|name| std::env::var_os(name).is_some())
+        || repository.git_dir.join("info/grafts").try_exists()?
+        || repository.common_dir.join("info/grafts").try_exists()?
+    {
+        return Ok(false);
+    }
+    let shallow = run_bytes(
+        &repository.root,
+        &["rev-parse", "--is-shallow-repository"],
+        cancel,
+        &[0],
+    )?;
+    let replacements = run_bytes(
+        &repository.root,
+        &[
+            "for-each-ref",
+            "--count=1",
+            "--format=%(objectname)",
+            "refs/replace/",
+        ],
+        cancel,
+        &[0],
+    )?;
+    Ok(shallow == b"false\n" && replacements.is_empty())
+}
+
 fn load_refs(repository: &Repository, cancel: &Cancellation) -> Result<Refs> {
     let mut refs = Refs::new();
     let mut stream = repository.refs(cancel.clone())?;
@@ -814,6 +1128,418 @@ mod tests {
             anchor: None,
             restore: None,
         }
+    }
+
+    fn refresh(session: &mut Session, request: &Request) -> bool {
+        if !session.refresh(request).unwrap() {
+            return false;
+        }
+        loop {
+            match session.advance_reload().unwrap() {
+                ReloadProgress::Pending => (),
+                ReloadProgress::Ready => return true,
+                ReloadProgress::Replace => return false,
+            }
+        }
+    }
+
+    #[test]
+    fn unchanged_head_keeps_entries_search_and_partial_stream() {
+        let fixture = Fixture::new();
+        for i in 0..90 {
+            fixture.git(&["commit", "--allow-empty", "-m", &format!("commit {i}")]);
+        }
+        let mut request = request(&fixture);
+        request.batch = Some(1);
+        request.range = 0..1;
+        let mut session = Session::open(&request, Cancellation::default()).unwrap();
+        while session.step(&request).unwrap() {}
+        assert!(!session.eof);
+        let before = session.entries.clone();
+        request.query = "message:commit".into();
+        while session.step(&request).unwrap() {}
+        let scanned = session.scanned;
+        let matches = session.matches.clone();
+        fixture.git(&["checkout", "-qb", "same-head"]);
+        fixture.git(&["tag", "new-label"]);
+        request.generation = Generation(2);
+        assert!(refresh(&mut session, &request));
+        assert_eq!(session.scanned, scanned);
+        assert_eq!(session.matches, matches);
+        for (old, retained) in before.iter().zip(&session.entries) {
+            assert!(Arc::ptr_eq(old, retained));
+        }
+        assert_eq!(session.repository.branch, "same-head");
+        while session.step(&request).unwrap() {}
+        assert!(
+            session
+                .refs
+                .values()
+                .flatten()
+                .any(|label| label.name == "new-label")
+        );
+        request.batch = None;
+        while session.step(&request).unwrap() {}
+        assert!(session.eof);
+        assert_eq!(session.entries.len(), 90);
+        assert_eq!(
+            session
+                .entries
+                .iter()
+                .map(|e| &e.commit.id)
+                .collect::<HashSet<_>>()
+                .len(),
+            90
+        );
+    }
+
+    #[test]
+    fn worker_reload_reuses_completed_history_and_rejects_old_snapshots() {
+        let fixture = Fixture::new();
+        fixture.commit("retained");
+        let mut request = request(&fixture);
+        let engine = HistoryEngine::spawn(request.clone());
+        let handle = engine.handle();
+        let wait = |generation| {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                if let Some(snapshot) = handle.take_snapshot() {
+                    assert_eq!(snapshot.generation, generation);
+                    assert!(snapshot.error.is_none());
+                    if snapshot.eof {
+                        break snapshot;
+                    }
+                }
+                assert!(Instant::now() < deadline);
+                thread::sleep(Duration::from_millis(5));
+            }
+        };
+        let before = wait(request.generation);
+        request.generation = Generation(2);
+        handle.request(request.clone());
+        let after = wait(request.generation);
+        assert!(Arc::ptr_eq(&before.rows[0], &after.rows[0]));
+        request.generation = Generation(3);
+        request.graph_columns = 1;
+        handle.request(request.clone());
+        let rebuilt = wait(request.generation);
+        assert!(!Arc::ptr_eq(&after.rows[0], &rebuilt.rows[0]));
+    }
+
+    #[test]
+    fn traversal_overrides_disable_same_head_reuse() {
+        let fixture = Fixture::new();
+        let root = fixture.commit("root");
+        let head = fixture.commit("tip");
+        let request = request(&fixture);
+        let mut session = Session::open(&request, Cancellation::default()).unwrap();
+        while session.step(&request).unwrap() {}
+        fixture.git(&["replace", &head, &root]);
+        assert!(!refresh(&mut session, &request));
+        let mut replaced = Session::open(&request, Cancellation::default()).unwrap();
+        fixture.git(&["replace", "-d", &head]);
+        assert!(!refresh(&mut replaced, &request));
+        std::fs::write(fixture.root().join(".git/info/grafts"), "").unwrap();
+        assert!(!refresh(&mut session, &request));
+        std::fs::remove_file(fixture.root().join(".git/info/grafts")).unwrap();
+        std::fs::write(fixture.root().join(".git/shallow"), format!("{head}\n")).unwrap();
+        assert!(!refresh(&mut session, &request));
+    }
+
+    fn assert_same_history(actual: &Session, expected: &Session) {
+        assert_eq!(actual.entries.len(), expected.entries.len());
+        for (actual, expected) in actual.entries.iter().zip(&expected.entries) {
+            assert_eq!(actual.ordinal, expected.ordinal);
+            assert_eq!(actual.commit.id, expected.commit.id);
+            assert_eq!(actual.commit.message, expected.commit.message);
+            assert_eq!(actual.graph, expected.graph);
+        }
+        assert_eq!(actual.matches, expected.matches);
+        assert_eq!(actual.eof, expected.eof);
+    }
+
+    #[test]
+    fn linear_reload_retains_messages_and_continues_partial_history() {
+        let fixture = Fixture::new();
+        for i in 0..90 {
+            fixture.git(&["commit", "--allow-empty", "-m", &format!("commit {i}")]);
+        }
+        let mut request = request(&fixture);
+        request.batch = Some(1);
+        request.range = 0..1;
+        let mut session = Session::open(&request, Cancellation::default()).unwrap();
+        while session.step(&request).unwrap() {}
+        assert!(!session.eof);
+        let loaded = session.entries.len();
+        let message = session.entries[1].commit.message.as_ptr();
+        let old_tip = session.entries[0].clone();
+        fixture.commit("new tip one");
+        fixture.commit("new tip two");
+        request.generation = Generation(2);
+        request.restore = Some(Restore {
+            selected: Some(old_tip.commit.id.clone()),
+            top: Some(old_tip.commit.id.clone()),
+        });
+        assert!(refresh(&mut session, &request));
+        assert_eq!(session.entries.len(), loaded + 2);
+        assert_eq!(session.entries[3].commit.message.as_ptr(), message);
+        assert!(!old_tip.graph.incoming);
+        assert!(session.entries[2].graph.incoming);
+        while session.step(&request).unwrap() {}
+        let restored = session.snapshot(&request).restored.unwrap();
+        assert_eq!(restored.selected.unwrap().0, 2);
+        assert_eq!(restored.top, Some(2));
+        request.batch = None;
+        while session.step(&request).unwrap() {}
+        // Repeated updates also reuse a completed stream.
+        fixture.commit("third tip");
+        assert!(refresh(&mut session, &request));
+        while session.step(&request).unwrap() {}
+        let mut fresh = Session::open(&request, Cancellation::default()).unwrap();
+        while fresh.step(&request).unwrap() {}
+        assert_same_history(&session, &fresh);
+    }
+
+    #[test]
+    fn linear_reload_reconciles_metadata_and_completed_or_pending_path_search() {
+        let fixture = Fixture::new();
+        fixture.commit("root");
+        fixture.commit("matching change");
+        fixture.git(&["commit", "--allow-empty", "-m", "unrelated"]);
+        for query in [
+            "message:matching",
+            "path:file.txt",
+            "path:file.txt message:matching",
+        ] {
+            for complete in [false, true] {
+                let mut request = request(&fixture);
+                request.query = query.into();
+                let mut session = Session::open(&request, Cancellation::default()).unwrap();
+                // Leave candidates pending in the path worker in one case.
+                for _ in 0..3 {
+                    session.step(&request).unwrap();
+                }
+                if complete {
+                    while session.step(&request).unwrap() {}
+                }
+                fixture.commit(&format!("matching new change {query} {complete}"));
+                request.generation = Generation(2);
+                assert!(refresh(&mut session, &request));
+                while session.step(&request).unwrap() {}
+                assert!(session.candidates.is_empty());
+                let mut fresh = Session::open(&request, Cancellation::default()).unwrap();
+                while fresh.step(&request).unwrap() {}
+                assert_same_history(&session, &fresh);
+                assert!(session.matches.windows(2).all(|pair| pair[0] < pair[1]));
+            }
+        }
+    }
+
+    #[test]
+    fn linear_prefix_preserves_graph_geometry_above_an_existing_merge() {
+        let fixture = Fixture::new();
+        fixture.commit("root");
+        fixture.git(&["checkout", "-qb", "side"]);
+        fixture.git(&["commit", "--allow-empty", "-m", "side"]);
+        fixture.git(&["checkout", "main"]);
+        fixture.commit("main");
+        fixture.git(&["merge", "--no-ff", "side", "-m", "merge"]);
+        for cap in [1, 2, 256] {
+            let mut request = request(&fixture);
+            request.graph_columns = cap;
+            let mut session = Session::open(&request, Cancellation::default()).unwrap();
+            while session.step(&request).unwrap() {}
+            fixture.commit(&format!("linear tip {cap}"));
+            assert!(refresh(&mut session, &request));
+            while session.step(&request).unwrap() {}
+            let mut fresh = Session::open(&request, Cancellation::default()).unwrap();
+            while fresh.step(&request).unwrap() {}
+            assert_same_history(&session, &fresh);
+        }
+    }
+
+    #[test]
+    fn nonlinear_updates_leave_retained_history_untouched() {
+        let fixture = Fixture::new();
+        let root = fixture.commit("root");
+        fixture.git(&["checkout", "-qb", "side"]);
+        fixture.git(&["commit", "--allow-empty", "-m", "side"]);
+        fixture.git(&["checkout", "main"]);
+        fixture.commit("tip");
+        let request = request(&fixture);
+        let mut session = Session::open(&request, Cancellation::default()).unwrap();
+        while session.step(&request).unwrap() {}
+        let before = session.entries.clone();
+        fixture.git(&["merge", "--no-ff", "side", "-m", "merge"]);
+        assert!(!refresh(&mut session, &request));
+        fixture.git(&["checkout", "side"]);
+        assert!(!refresh(&mut session, &request));
+        fixture.git(&["checkout", "--detach", &root]);
+        assert!(!refresh(&mut session, &request));
+        for (old, retained) in before.iter().zip(&session.entries) {
+            assert!(Arc::ptr_eq(old, retained));
+        }
+        assert_eq!(before.len(), session.entries.len());
+    }
+
+    #[test]
+    fn linear_reload_yields_across_commit_and_byte_budgets() {
+        for (count, message) in [(513, "new".to_owned()), (4, "x".repeat(750 * 1024))] {
+            let fixture = Fixture::new();
+            fixture.commit("root");
+            let mut request = request(&fixture);
+            let mut session = Session::open(&request, Cancellation::default()).unwrap();
+            while session.step(&request).unwrap() {}
+            let before = session.entries[0].clone();
+            fixture.append_history(count, false, &message);
+            request.generation = Generation(2);
+            assert!(session.refresh(&request).unwrap());
+            assert!(matches!(
+                session.advance_reload().unwrap(),
+                ReloadProgress::Pending
+            ));
+            let provisional = session.reload.as_ref().unwrap().entries.len();
+            assert!(provisional <= RELOAD_STEP_COMMITS && provisional < count);
+            assert_eq!(session.entries.len(), 1);
+            assert!(Arc::ptr_eq(&before, &session.entries[0]));
+            loop {
+                match session.advance_reload().unwrap() {
+                    ReloadProgress::Pending => (),
+                    ReloadProgress::Ready => break,
+                    ReloadProgress::Replace => panic!("linear delta must be retained"),
+                }
+            }
+            assert_eq!(session.entries.len(), count + 1);
+            assert!(Arc::ptr_eq(
+                &before.commit.author.name,
+                &session.entries[count].commit.author.name
+            ));
+            request.batch = None;
+            while session.step(&request).unwrap() {}
+            let mut fresh = Session::open(&request, Cancellation::default()).unwrap();
+            while fresh.step(&request).unwrap() {}
+            assert_same_history(&session, &fresh);
+        }
+    }
+
+    #[test]
+    fn large_prefix_search_keeps_queues_bounded_and_preserves_the_suffix() {
+        for (count, complete) in [(9000, true), (513, false)] {
+            let fixture = Fixture::new();
+            fixture.commit("root");
+            fixture.append_history(3, true, "old");
+            let mut request = request(&fixture);
+            request.query = "path:ci.yml".into();
+            request.batch = None;
+            let mut session = Session::open(&request, Cancellation::default()).unwrap();
+            for _ in 0..3 {
+                session.step(&request).unwrap();
+            }
+            if complete {
+                while session.step(&request).unwrap() {}
+            }
+            let message = session.entries[0].commit.message.as_ptr();
+            fixture.append_history(count, true, "new");
+            request.generation = Generation(2);
+            assert!(refresh(&mut session, &request));
+            let deadline = Instant::now() + Duration::from_secs(30);
+            while session.step(&request).unwrap() {
+                assert!(session.candidates.len() <= 5096);
+                assert!(session.path_pending.len() <= 5096);
+                assert!(Instant::now() < deadline, "prefix search did not finish");
+            }
+            assert!(session.prefix_search.is_none());
+            assert_eq!(session.entries[count].commit.message.as_ptr(), message);
+            assert_eq!(session.matches.len(), count + 3);
+            let mut fresh = Session::open(&request, Cancellation::default()).unwrap();
+            while fresh.step(&request).unwrap() {}
+            assert_same_history(&session, &fresh);
+        }
+    }
+
+    #[test]
+    fn superseded_and_cancelled_probes_do_not_modify_the_retained_suffix() {
+        let fixture = Fixture::new();
+        let root = fixture.commit("root");
+        let mut request = request(&fixture);
+        let mut session = Session::open(&request, Cancellation::default()).unwrap();
+        while session.step(&request).unwrap() {}
+        let before = session.entries[0].clone();
+        let tip = fixture.append_history(600, false, "new");
+        assert!(session.refresh(&request).unwrap());
+        assert!(matches!(
+            session.advance_reload().unwrap(),
+            ReloadProgress::Pending
+        ));
+        fixture.git(&["update-ref", "refs/heads/main", &root]);
+        request.generation = Generation(2);
+        assert!(refresh(&mut session, &request));
+        assert!(session.reload.is_none());
+        assert!(Arc::ptr_eq(&before, &session.entries[0]));
+        assert_eq!(session.entries.len(), 1);
+        fixture.git(&["update-ref", "refs/heads/main", &tip]);
+        assert!(session.refresh(&request).unwrap());
+        assert!(matches!(
+            session.advance_reload().unwrap(),
+            ReloadProgress::Pending
+        ));
+        session.cancellation.store(true, Ordering::Release);
+        assert!(session.advance_reload().is_err());
+        assert!(session.reload.is_none());
+        assert!(Arc::ptr_eq(&before, &session.entries[0]));
+        assert_eq!(session.entries.len(), 1);
+    }
+
+    #[test]
+    fn nonlinear_history_found_after_multiple_steps_leaves_the_suffix_untouched() {
+        let fixture = Fixture::new();
+        let root = fixture.commit("root");
+        fixture.commit("old tip");
+        let request = request(&fixture);
+        let mut session = Session::open(&request, Cancellation::default()).unwrap();
+        while session.step(&request).unwrap() {}
+        let before = session.entries.clone();
+        fixture.git(&["update-ref", "refs/heads/main", &root]);
+        fixture.append_history(600, false, "divergent");
+        assert!(session.refresh(&request).unwrap());
+        for _ in 0..2 {
+            assert!(matches!(
+                session.advance_reload().unwrap(),
+                ReloadProgress::Pending
+            ));
+        }
+        assert!(matches!(
+            session.advance_reload().unwrap(),
+            ReloadProgress::Replace
+        ));
+        assert!(session.reload.is_none());
+        assert_eq!(before.len(), session.entries.len());
+        for (old, retained) in before.iter().zip(&session.entries) {
+            assert!(Arc::ptr_eq(old, retained));
+        }
+    }
+
+    #[test]
+    fn superseded_prefix_search_adopts_the_latest_query() {
+        let fixture = Fixture::new();
+        fixture.commit("root");
+        let mut request = request(&fixture);
+        request.query = "path:ci.yml".into();
+        request.batch = None;
+        let mut session = Session::open(&request, Cancellation::default()).unwrap();
+        while session.step(&request).unwrap() {}
+        fixture.append_history(600, true, "new");
+        assert!(refresh(&mut session, &request));
+        session.step(&request).unwrap();
+        assert!(session.prefix_search.is_some());
+        request.generation = Generation(2);
+        assert!(refresh(&mut session, &request));
+        request.query = "message:root".into();
+        while session.step(&request).unwrap() {}
+        assert_eq!(session.matches, vec![600]);
+        let mut fresh = Session::open(&request, Cancellation::default()).unwrap();
+        while fresh.step(&request).unwrap() {}
+        assert_same_history(&session, &fresh);
     }
 
     /// Opt-in, history-only memory probe. Does not modify the repository.
