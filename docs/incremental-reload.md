@@ -6,7 +6,7 @@ repository state can safely use it. No persistent cache is needed.
 
 ## Milestones
 
-- [ ] Retain history when the repository and HEAD are unchanged. Refresh branch
+- [x] Retain history when the repository and HEAD are unchanged. Refresh branch
   labels and refs, preserve completed searches and an unfinished Git stream, and
   still reject snapshots from obsolete UI generations. Repository changes,
   graph configuration changes, and failed sessions must start fresh.
@@ -48,3 +48,9 @@ work; no timing or memory improvements are claimed without measurements.
 Use the pinned Nix toolchain for format, clippy, all Rust tests (including
 headless GPUI), build, and flake checks as required by AGENTS.md. Native Wayland
 and X11 smoke tests and large-repository memory probes remain opt-in.
+
+The unchanged-HEAD milestone passed all-target tests (151 passed, three opt-in
+tests ignored) and clippy with warnings denied. Tests cover retained entry
+identity, an unfinished traversal, completed metadata search, ref labels,
+replacement refs, grafts, shallow boundaries, graph configuration replacement,
+generation rejection, and F5 selection restoration.

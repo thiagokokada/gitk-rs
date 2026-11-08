@@ -286,6 +286,39 @@ fn history_pages_settle_after_scrolling_beyond_the_first_page(cx: &mut TestAppCo
 }
 
 #[gpui_kit::test]
+fn unchanged_head_reload_retains_rows_and_selection(cx: &mut TestAppContext) {
+    let fixture = history_fixture(20);
+    let (app, cx) = open(&fixture, cx);
+    until(cx, |cx| {
+        cx.update(|_, cx| app.view.read(cx).snapshot.as_ref().is_some_and(|s| s.eof))
+    });
+    app.view
+        .update_in(cx, |view, window, cx| view.select(8, window, cx));
+    let (before, generation) = cx.update(|_, cx| {
+        let view = app.view.read(cx);
+        (view.cached(8).unwrap(), view.request.generation)
+    });
+    cx.simulate_keystrokes("f5");
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            let view = app.view.read(cx);
+            view.snapshot
+                .as_ref()
+                .is_some_and(|s| s.generation != generation)
+                && view.reload_selection.is_none()
+        })
+    });
+    cx.update(|_, cx| {
+        let view = app.view.read(cx);
+        assert!(Arc::ptr_eq(&before, &view.cached(8).unwrap()));
+        assert_eq!(
+            view.selected.as_ref().unwrap().1.commit.id,
+            before.commit.id
+        );
+    });
+}
+
+#[gpui_kit::test]
 fn consecutive_reload_before_layout_preserves_the_restored_top_commit(cx: &mut TestAppContext) {
     let fixture = history_fixture(100);
     let (app, cx) = open(&fixture, cx);

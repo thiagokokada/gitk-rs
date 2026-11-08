@@ -97,6 +97,8 @@ struct SharedState {
     snapshot: Option<Snapshot>,
     cancellation: Cancellation,
     generation: Generation,
+    repository: PathBuf,
+    graph_columns: usize,
     stopped: bool,
 }
 
@@ -120,6 +122,8 @@ impl HistoryEngine {
         let shared = Arc::new(Shared {
             state: Mutex::new(SharedState {
                 generation: initial.generation,
+                repository: initial.repository.clone(),
+                graph_columns: initial.graph_columns,
                 request: Some(initial),
                 snapshot: None,
                 cancellation: Cancellation::default(),
@@ -160,12 +164,23 @@ impl HistoryHandle {
     pub fn request(&self, request: Request) {
         let old = {
             let mut state = self.shared.state.lock().unwrap();
-            if request.generation != state.generation {
+            // A UI generation invalidates snapshots, not necessarily the Git
+            // traversal. Let the worker inspect HEAD before replacing a stream.
+            if request.repository != state.repository
+                || request.graph_columns != state.graph_columns
+            {
                 state.cancellation.store(true, Ordering::Release);
                 state.cancellation = Cancellation::default();
-                state.generation = request.generation;
             }
-            state.request.replace(request)
+            let snapshot = if request.generation != state.generation {
+                state.snapshot.take()
+            } else {
+                None
+            };
+            state.generation = request.generation;
+            state.repository = request.repository.clone();
+            state.graph_columns = request.graph_columns;
+            (state.request.replace(request), snapshot)
         };
         drop(old);
         self.shared.changed.notify_one();
@@ -203,13 +218,22 @@ fn run(shared: Arc<Shared>) {
             }
             (state.cancellation.clone(), state.request.take())
         };
+        let mut reload = false;
         if let Some(request) = incoming {
             if current
                 .as_ref()
                 .is_none_or(|previous| previous.generation != request.generation)
             {
-                // Git cleanup must happen outside the shared UI mailbox lock.
-                session = None;
+                reload = true;
+                if failed
+                    || current.as_ref().is_none_or(|previous| {
+                        previous.repository != request.repository
+                            || previous.graph_columns != request.graph_columns
+                    })
+                {
+                    // Git cleanup must happen outside the shared UI mailbox lock.
+                    session = None;
+                }
                 failed = false;
             }
             current = Some(request);
@@ -224,6 +248,12 @@ fn run(shared: Arc<Shared>) {
                     ),
                     false,
                 ));
+            }
+            if reload
+                && let Some(retained) = session.as_mut()
+                && !retained.refresh(request)?
+            {
+                session = None;
             }
             if session.is_none() {
                 session = Some(Session::open(request, cancel.clone())?);
@@ -390,11 +420,13 @@ struct Session {
     restore: Option<Restore>,
     restore_ordinals: [Option<usize>; 2],
     restore_reachable: [bool; 2],
+    reusable: bool,
 }
 
 impl Session {
     fn open(request: &Request, cancellation: Cancellation) -> Result<Self> {
         let repository = Repository::open(&request.repository, &cancellation)?;
+        let reusable = history_reusable(&repository, &cancellation)?;
         let stream = repository
             .head
             .as_ref()
@@ -424,7 +456,29 @@ impl Session {
             restore: None,
             restore_ordinals: [None; 2],
             restore_reachable: [false; 2],
+            reusable,
         })
+    }
+
+    /// Revalidate traversal inputs on the worker before carrying data into a
+    /// new UI generation. Retain both loaded entries and the unread stream.
+    fn refresh(&mut self, request: &Request) -> Result<bool> {
+        if self.cancellation.load(Ordering::Acquire) {
+            return Ok(false);
+        }
+        let repository = Repository::open(&request.repository, &self.cancellation)?;
+        if !self.reusable
+            || repository.root != self.repository.root
+            || repository.git_dir != self.repository.git_dir
+            || repository.common_dir != self.repository.common_dir
+            || !history_reusable(&repository, &self.cancellation)?
+            || repository.head != self.repository.head
+        {
+            return Ok(false);
+        }
+        self.repository = repository;
+        self.refs_loaded = false;
+        Ok(true)
     }
 
     fn step(&mut self, request: &Request) -> Result<bool> {
@@ -746,6 +800,37 @@ impl Session {
     }
 }
 
+fn history_reusable(repository: &Repository, cancel: &Cancellation) -> Result<bool> {
+    // These inputs can change ancestry while the HEAD object ID stays the same.
+    // Disable reuse rather than retaining a second traversal-metadata cache.
+    if ["GIT_REPLACE_REF_BASE", "GIT_GRAFT_FILE", "GIT_SHALLOW_FILE"]
+        .iter()
+        .any(|name| std::env::var_os(name).is_some())
+        || repository.git_dir.join("info/grafts").try_exists()?
+        || repository.common_dir.join("info/grafts").try_exists()?
+    {
+        return Ok(false);
+    }
+    let shallow = run_bytes(
+        &repository.root,
+        &["rev-parse", "--is-shallow-repository"],
+        cancel,
+        &[0],
+    )?;
+    let replacements = run_bytes(
+        &repository.root,
+        &[
+            "for-each-ref",
+            "--count=1",
+            "--format=%(objectname)",
+            "refs/replace/",
+        ],
+        cancel,
+        &[0],
+    )?;
+    Ok(shallow == b"false\n" && replacements.is_empty())
+}
+
 fn load_refs(repository: &Repository, cancel: &Cancellation) -> Result<Refs> {
     let mut refs = Refs::new();
     let mut stream = repository.refs(cancel.clone())?;
@@ -814,6 +899,109 @@ mod tests {
             anchor: None,
             restore: None,
         }
+    }
+
+    #[test]
+    fn unchanged_head_keeps_entries_search_and_partial_stream() {
+        let fixture = Fixture::new();
+        for i in 0..90 {
+            fixture.git(&["commit", "--allow-empty", "-m", &format!("commit {i}")]);
+        }
+        let mut request = request(&fixture);
+        request.batch = Some(1);
+        request.range = 0..1;
+        let mut session = Session::open(&request, Cancellation::default()).unwrap();
+        while session.step(&request).unwrap() {}
+        assert!(!session.eof);
+        let before = session.entries.clone();
+        request.query = "message:commit".into();
+        while session.step(&request).unwrap() {}
+        let scanned = session.scanned;
+        let matches = session.matches.clone();
+        fixture.git(&["checkout", "-qb", "same-head"]);
+        fixture.git(&["tag", "new-label"]);
+        request.generation = Generation(2);
+        assert!(session.refresh(&request).unwrap());
+        assert_eq!(session.scanned, scanned);
+        assert_eq!(session.matches, matches);
+        for (old, retained) in before.iter().zip(&session.entries) {
+            assert!(Arc::ptr_eq(old, retained));
+        }
+        assert_eq!(session.repository.branch, "same-head");
+        while session.step(&request).unwrap() {}
+        assert!(
+            session
+                .refs
+                .values()
+                .flatten()
+                .any(|label| label.name == "new-label")
+        );
+        request.batch = None;
+        while session.step(&request).unwrap() {}
+        assert!(session.eof);
+        assert_eq!(session.entries.len(), 90);
+        assert_eq!(
+            session
+                .entries
+                .iter()
+                .map(|e| &e.commit.id)
+                .collect::<HashSet<_>>()
+                .len(),
+            90
+        );
+    }
+
+    #[test]
+    fn worker_reload_reuses_completed_history_and_rejects_old_snapshots() {
+        let fixture = Fixture::new();
+        fixture.commit("retained");
+        let mut request = request(&fixture);
+        let engine = HistoryEngine::spawn(request.clone());
+        let handle = engine.handle();
+        let wait = |generation| {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                if let Some(snapshot) = handle.take_snapshot() {
+                    assert_eq!(snapshot.generation, generation);
+                    assert!(snapshot.error.is_none());
+                    if snapshot.eof {
+                        break snapshot;
+                    }
+                }
+                assert!(Instant::now() < deadline);
+                thread::sleep(Duration::from_millis(5));
+            }
+        };
+        let before = wait(request.generation);
+        request.generation = Generation(2);
+        handle.request(request.clone());
+        let after = wait(request.generation);
+        assert!(Arc::ptr_eq(&before.rows[0], &after.rows[0]));
+        request.generation = Generation(3);
+        request.graph_columns = 1;
+        handle.request(request.clone());
+        let rebuilt = wait(request.generation);
+        assert!(!Arc::ptr_eq(&after.rows[0], &rebuilt.rows[0]));
+    }
+
+    #[test]
+    fn traversal_overrides_disable_same_head_reuse() {
+        let fixture = Fixture::new();
+        let root = fixture.commit("root");
+        let head = fixture.commit("tip");
+        let request = request(&fixture);
+        let mut session = Session::open(&request, Cancellation::default()).unwrap();
+        while session.step(&request).unwrap() {}
+        fixture.git(&["replace", &head, &root]);
+        assert!(!session.refresh(&request).unwrap());
+        let mut replaced = Session::open(&request, Cancellation::default()).unwrap();
+        fixture.git(&["replace", "-d", &head]);
+        assert!(!replaced.refresh(&request).unwrap());
+        std::fs::write(fixture.root().join(".git/info/grafts"), "").unwrap();
+        assert!(!session.refresh(&request).unwrap());
+        std::fs::remove_file(fixture.root().join(".git/info/grafts")).unwrap();
+        std::fs::write(fixture.root().join(".git/shallow"), format!("{head}\n")).unwrap();
+        assert!(!session.refresh(&request).unwrap());
     }
 
     /// Opt-in, history-only memory probe. Does not modify the repository.
