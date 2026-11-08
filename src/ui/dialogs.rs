@@ -762,31 +762,6 @@ const SHORTCUT_GROUPS: &[ShortcutGroup] = &[
     ShortcutGroup {
         qualifiers: &Qualifier::ALL,
         title: "Commit search",
-        shortcuts: &[
-            (
-                "Combine filters",
-                "All qualifiers must match; text and path matching ignore case",
-            ),
-            (
-                "Values with spaces",
-                "Use double quotes, e.g. author:\"Alice Smith\"",
-            ),
-            (
-                "Plain text",
-                "Search hash, author and full message as a contiguous phrase",
-            ),
-            (
-                "Badges and status",
-                "Badges confirm valid filters; filtering means results are still arriving",
-            ),
-        ],
-    },
-    ShortcutGroup {
-        qualifiers: &[],
-        title: "Graph",
-        shortcuts: &[
-            ("Drag header edge", "Resize the graph column"),
-            ("Dashed lanes", "Indicate folded idle branches"),
-        ],
+        shortcuts: &[],
     },
 ];

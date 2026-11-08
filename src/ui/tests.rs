@@ -867,7 +867,13 @@ fn shortcuts_are_grouped_scrollable_and_restore_focus(cx: &mut TestAppContext) {
             assert!(close.visible());
             assert!(close.bounds().origin.y >= viewport.bottom());
             assert!(close.bounds().bottom() <= window.bounds().size.height);
-            assert!(!window.find("Graph").visible());
+            assert!(
+                !window
+                    .find(SharedString::from(
+                        gitk_rs::search::Qualifier::Merge.syntax()
+                    ))
+                    .visible()
+            );
         });
         let end = cx.update(|_, cx| -app.view.read(cx).help_scroll.max_offset().y);
         cx.update(|window, cx| {
@@ -880,8 +886,12 @@ fn shortcuts_are_grouped_scrollable_and_restore_focus(cx: &mut TestAppContext) {
         cx.refresh().unwrap();
         cx.update(|window, _| {
             assert!(
-                window.find("Graph").visible(),
-                "last group must be reachable"
+                window
+                    .find(SharedString::from(
+                        gitk_rs::search::Qualifier::Merge.syntax()
+                    ))
+                    .visible(),
+                "last help entry must be reachable"
             );
             assert!(window.find("close-dialog").visible());
         });
