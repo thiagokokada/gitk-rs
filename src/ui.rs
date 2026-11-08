@@ -594,6 +594,21 @@ impl HistoryWindow {
                     self.dialog = None;
                     self.restore_focus = true;
                     self.operation_message = "branch switched".into();
+                    let generation = self.workspace_generation;
+                    let operation_id = operation.id;
+                    cx.spawn(async move |this, cx| {
+                        cx.background_executor().timer(Duration::from_secs(3)).await;
+                        let _ = this.update(cx, |this, cx| {
+                            if this.workspace_generation == generation
+                                && this.operation_id == operation_id
+                                && this.operation_message == "branch switched"
+                            {
+                                this.operation_message.clear();
+                                cx.notify();
+                            }
+                        });
+                    })
+                    .detach();
                     // The forced worker probe will supply fresh state. Avoid a
                     // second HEAD-change reload losing the pending selection.
                     self.workspace_snapshot = None;

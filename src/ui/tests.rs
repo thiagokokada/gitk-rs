@@ -705,6 +705,13 @@ fn branch_protection_and_selected_ancestor_survive_switch(cx: &mut TestAppContex
         })
     });
     assert_eq!(fixture.git(&["branch", "--show-current"]), "main");
+    let error = cx.update(|_, cx| app.view.read(cx).operation_message.clone());
+    cx.background_executor.advance_clock(Duration::from_secs(4));
+    cx.run_until_parked();
+    assert_eq!(
+        cx.update(|_, cx| app.view.read(cx).operation_message.clone()),
+        error
+    );
     assert_eq!(
         std::fs::read_to_string(fixture.root().join("file.txt")).unwrap(),
         "unsaved"
@@ -731,6 +738,49 @@ fn branch_protection_and_selected_ancestor_survive_switch(cx: &mut TestAppContex
     assert!(cx.update(|_, cx| app.view.read(cx).status_text().ends_with("branch switched")));
     cx.simulate_keystrokes("home");
     assert_eq!(selected(&app.view, cx).as_deref(), Some(tip.as_str()));
+    cx.background_executor.advance_clock(Duration::from_secs(4));
+    cx.run_until_parked();
+    assert!(cx.update(|_, cx| app.view.read(cx).operation_message.is_empty()));
+}
+
+#[gpui_kit::test]
+fn branch_switch_message_timer_preserves_newer_operations(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    fixture.commit("root");
+    fixture.git(&["branch", "side"]);
+    let (app, cx) = open(&fixture, cx);
+    for branch in ["side", "main"] {
+        cx.simulate_keystrokes("ctrl-b");
+        until(cx, |cx| {
+            cx.update(|_, cx| {
+                let view = app.view.read(cx);
+                !view.branches.is_empty() && view.pending_operation.is_none()
+            })
+        });
+        cx.simulate_input(branch);
+        cx.simulate_keystrokes("enter");
+        until(cx, |cx| {
+            cx.update(|_, cx| {
+                let view = app.view.read(cx);
+                view.dialog.is_none()
+                    && view.operation_message == "branch switched"
+                    && view.pending_operation.is_none()
+            })
+        });
+        if branch == "side" {
+            cx.background_executor.advance_clock(Duration::from_secs(2));
+            cx.run_until_parked();
+        }
+    }
+    cx.background_executor.advance_clock(Duration::from_secs(1));
+    cx.run_until_parked();
+    assert!(cx.update(|_, cx| app.view.read(cx).operation_message == "branch switched"));
+    app.view.update(cx, |view, _| {
+        view.operation_message = "newer operation failed".into()
+    });
+    cx.background_executor.advance_clock(Duration::from_secs(4));
+    cx.run_until_parked();
+    assert!(cx.update(|_, cx| app.view.read(cx).operation_message == "newer operation failed"));
 }
 
 #[gpui_kit::test]
