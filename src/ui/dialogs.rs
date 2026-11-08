@@ -671,10 +671,7 @@ const SHORTCUT_GROUPS: &[ShortcutGroup] = &[
         shortcuts: &[
             ("Up / p / k", "Move up one commit"),
             ("Down / n / j", "Move down one commit"),
-            (
-                "Alt+J / Alt+K",
-                "Select next / previous commit (including while filtering)",
-            ),
+            ("Alt+J / Alt+K", "Select next / previous commit"),
             ("Home / gg", "Jump to the first commit"),
             ("End / G", "Jump to the last loaded commit"),
             (
@@ -706,6 +703,7 @@ const SHORTCUT_GROUPS: &[ShortcutGroup] = &[
             ("/", "Focus the filter box"),
             ("Escape", "Leave the filter box"),
             ("F5", "Reload commits"),
+            ("Alt+R", "Toggle regex search"),
             ("F1 / ?", "Show help (? outside text inputs)"),
             (command_shortcut!("O"), "Open repository"),
             (command_shortcut!("Shift+O"), "Open repository by path"),
@@ -715,7 +713,6 @@ const SHORTCUT_GROUPS: &[ShortcutGroup] = &[
             ),
             (command_shortcut!(","), "Open preferences"),
             ("Alt+T", "Toggle theme (outside text inputs)"),
-            ("Alt+R", "Toggle automatic reload (outside text inputs)"),
             (command_shortcut!("Q"), "Quit gitk-rs"),
         ],
     },

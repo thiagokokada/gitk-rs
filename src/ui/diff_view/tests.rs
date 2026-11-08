@@ -519,6 +519,7 @@ fn diff_options_restore_and_save_independently_of_preferences(cx: &mut TestAppCo
                     syntax: true,
                     dark: true,
                 },
+                false,
                 cx,
             )
         })

@@ -26,6 +26,7 @@ use gitk_rs::{
 use gpui_kit::component::{
     ThemeMode,
     button::Button,
+    checkbox::Checkbox,
     input::{Input, InputEvent, InputState},
     menu::{ContextMenuExt, DropdownMenu, PopupMenuItem},
     resizable::{resizable_panel, v_resizable},
@@ -59,7 +60,7 @@ actions!(
         BlurFilter,
         HistoryPageUp,
         HistoryPageDown,
-        ToggleWatch,
+        ToggleRegex,
         OpenRepository,
         OpenRepositoryPath,
         OpenBranches,
@@ -189,7 +190,7 @@ impl HistoryWindow {
         timing: Timing,
         services: WindowServices,
         preferences: Preferences,
-        request: Request,
+        mut request: Request,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -201,6 +202,12 @@ impl HistoryWindow {
             diff: diff_handle,
         } = services;
         let layout = diff_handle.initial_layout();
+        let search = diff_handle.initial_search();
+        if request.regex != search.regex {
+            request.regex = search.regex;
+            request.id += 1;
+            history.request(request.clone());
+        }
         let ui_font_select = cx.new(|cx| {
             SelectState::new(
                 SearchableVec::new(vec![SharedString::from(preferences.ui_font.clone())]),
@@ -280,17 +287,7 @@ impl HistoryWindow {
                         .timer(Duration::from_millis(120))
                         .await;
                     let _ = this.update(cx, |this, cx| {
-                        this.request.query = query;
-                        this.request.range = 0..128;
-                        this.pending_selection = None;
-                        this.preserve_filter_selection = this.local_selection.is_none();
-                        if let Some(restore) = &mut this.request.restore {
-                            restore.top = None;
-                        }
-                        this.detail = "Filtering commits…".into();
-                        this.submit();
-                        this.scroll.scroll_to_item(0, ScrollStrategy::Top);
-                        cx.notify();
+                        this.apply_filter(query, cx);
                     });
                 }));
             }
@@ -320,6 +317,7 @@ impl HistoryWindow {
                     syntax: config.syntax,
                     dark: config.theme == Theme::Dark,
                 },
+                config.verbose,
                 cx,
             )
         });
@@ -397,6 +395,39 @@ impl HistoryWindow {
         }
     }
 
+    fn apply_filter(&mut self, query: String, cx: &mut Context<Self>) {
+        self.request.query = query;
+        self.request.range = 0..128;
+        self.pending_selection = None;
+        self.preserve_filter_selection = self.local_selection.is_none();
+        if let Some(restore) = &mut self.request.restore {
+            restore.top = None;
+        }
+        self.detail = "Filtering commits…".into();
+        self.submit();
+        self.scroll.scroll_to_item(0, ScrollStrategy::Top);
+        cx.notify();
+    }
+
+    fn set_search_regex(&mut self, regex: bool, cx: &mut Context<Self>) {
+        self.filter_task = None;
+        self.request.regex = regex;
+        self.layout_handle
+            .save_search(gitk_rs::diff::options::Search { regex });
+        self.apply_filter(self.filter.read(cx).value().to_string(), cx);
+    }
+
+    fn query_error(&self, cx: &App) -> Option<&str> {
+        self.snapshot
+            .as_ref()
+            .filter(|snapshot| {
+                snapshot.request_id == self.request.id
+                    && snapshot.generation == self.request.generation
+                    && self.request.query.trim() == self.filter.read(cx).value().trim()
+            })
+            .and_then(|snapshot| snapshot.query_error.as_deref())
+    }
+
     fn submit(&mut self) {
         self.request.anchor = self.selected.as_ref().map(|s| s.1.ordinal);
         self.request.id += 1;
@@ -418,8 +449,17 @@ impl HistoryWindow {
         }
         if self.config.verbose {
             eprintln!(
-                "gitk-rs: history generation={} branch={} loaded={} visible={}",
-                snapshot.generation.0, snapshot.branch, snapshot.loaded, snapshot.visible
+                "gitk-rs: history generation={} branch={} loaded={} visible={} request={} eof={} filtering={} regex={} query_bytes={} error={}",
+                snapshot.generation.0,
+                snapshot.branch,
+                snapshot.loaded,
+                snapshot.visible,
+                snapshot.request_id,
+                snapshot.eof,
+                snapshot.filtering,
+                self.request.regex,
+                self.request.query.len(),
+                snapshot.error.is_some()
             );
         }
         if let Some(error) = &snapshot.error {
@@ -680,9 +720,10 @@ impl HistoryWindow {
     fn set_selection(&mut self, index: usize, entry: Arc<Entry>, cx: &mut Context<Self>) {
         if self.config.verbose {
             eprintln!(
-                "gitk-rs: selection generation={} commit={}",
+                "gitk-rs: selection generation={} commit={} row={}",
                 self.request.generation.0,
-                entry.commit.id.to_hex()
+                entry.commit.id.to_hex(),
+                index.saturating_sub(self.local_rows.len())
             );
         }
         self.diff.update(cx, |diff, cx| {
@@ -785,11 +826,6 @@ impl HistoryWindow {
         self.submit();
         self.refresh_workspace();
         cx.notify();
-    }
-
-    fn toggle_auto_reload(&mut self, cx: &mut Context<Self>) {
-        self.config.watch = !self.config.watch;
-        self.reload(cx);
     }
 
     fn status_text(&self) -> String {
@@ -1283,8 +1319,8 @@ impl Render for HistoryWindow {
                     )));
                 }
             }))
-            .on_action(cx.listener(|this, _: &ToggleWatch, _, cx| {
-                this.toggle_auto_reload(cx);
+            .on_action(cx.listener(|this, _: &ToggleRegex, _, cx| {
+                this.set_search_regex(!this.request.regex, cx);
             }))
             .on_action(cx.listener(|this, _: &OpenRepository, _, cx| this.open_repository(cx)))
             .on_action(cx.listener(|this, _: &OpenRepositoryPath, window, cx| {
@@ -1377,23 +1413,22 @@ impl Render for HistoryWindow {
                 div().flex().items_center().gap_2()
                     .child("Filter:")
                     .child(div().flex_1().key_context("HistoryFilter").child(Input::new(&self.filter).cleanable(true)))
+                    .child(Checkbox::new("search-regex")
+                        .label("Regex (Alt+R)")
+                        .tooltip("Toggle regex with Alt+R. Turn off for literal text and path searches.")
+                        .checked(self.request.regex)
+                        .on_click(cx.listener(|this, checked: &bool, _, cx| this.set_search_regex(*checked, cx))))
                     .child(
                         Button::new("application-menu")
                             .label("Menu")
                             .dropdown_menu({
                                 let focus = self.focus.clone();
-                                let watch = self.config.watch;
                                 let light = self.config.theme == Theme::Light;
                                 move |menu, _, _| {
                                     menu.action_context(focus.clone())
                                         .menu("Open repository…", Box::new(OpenRepository))
                                         .menu("Switch local branch…", Box::new(OpenBranches))
                                         .menu("Reload", Box::new(Reload))
-                                        .menu_with_check(
-                                            "Automatic reload",
-                                            watch,
-                                            Box::new(ToggleWatch),
-                                        )
                                         .separator()
                                         .menu("Copy commit reference", Box::new(CopyCommit))
                                         .menu("Preferences…", Box::new(OpenPreferences))
@@ -1406,7 +1441,7 @@ impl Render for HistoryWindow {
                             })
                     )
             )
-            .children(search_feedback(self.filter.read(cx).value().as_ref(), palette))
+            .children(search_feedback(self.filter.read(cx).value().as_ref(), self.request.regex, self.query_error(cx), palette))
             .child(
                 div().flex_1().min_h_0().child(
                     v_resizable("main-split")
@@ -1567,11 +1602,7 @@ fn bind_keys(cx: &mut App) {
             ToggleTheme,
             Some("GitHistory && !Input && !Dialog"),
         ),
-        KeyBinding::new(
-            "alt-r",
-            ToggleWatch,
-            Some("GitHistory && !Input && !Dialog"),
-        ),
+        KeyBinding::new("alt-r", ToggleRegex, Some("GitHistory && !Dialog")),
         KeyBinding::new(
             "ctrl-a",
             gpui_kit::component::input::MoveHome,
@@ -1708,6 +1739,7 @@ pub fn run(mut config: Config, preferences: Preferences, launched: Instant) {
         repository: config.repository.clone(),
         range: 0..128,
         query: String::new(),
+        regex: false,
         batch: config.batch,
         graph_columns: config.graph_columns,
         anchor: None,
@@ -1803,10 +1835,20 @@ pub fn run(mut config: Config, preferences: Preferences, launched: Instant) {
     drop(workspace_engine);
 }
 
-/// Feedback uses the same parser as history; a badge only appears for a valid query.
-fn search_feedback(value: &str, palette: &Palette) -> Option<AnyElement> {
+/// Parsing stays cheap here; regex compiler errors arrive from the history worker.
+fn search_feedback(
+    value: &str,
+    regex: bool,
+    worker_error: Option<&str>,
+    palette: &Palette,
+) -> Option<AnyElement> {
     let feedback = div().flex().flex_wrap().gap_2().text_size(px(12.));
-    match Query::parse(value) {
+    match Query::parse_with_mode(value, regex).and_then(|query| {
+        if let Some(error) = worker_error {
+            anyhow::bail!("{error}");
+        }
+        Ok(query)
+    }) {
         Err(error) => Some(
             feedback
                 .child(

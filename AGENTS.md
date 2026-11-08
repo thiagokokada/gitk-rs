@@ -36,8 +36,7 @@ milestone without waiting for confirmation. Stop only when user input is actuall
   meaningful bottlenecks, and defer elaborate optimization until features work.
 - Avoid whole-worktree recursive watcher expansion on nixpkgs. Coalesce events and
   reconcile status periodically; watch failure must leave manual reload usable.
-- When optimizing, compare equivalent workloads and loaded counts with Go. Report
-  application and child-process memory separately; never invent measurements.
+- Report application and child-process memory separately; never invent measurements.
 
 ## Dependencies, verification, and documentation
 

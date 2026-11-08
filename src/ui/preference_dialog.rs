@@ -41,8 +41,7 @@ impl HistoryWindow {
             .flex()
             .flex_col()
             .gap_2()
-            .child("Application settings")
-            .child("Apply updates this window and saves defaults for future launches.");
+            .child("Application settings");
         for (id, label, checked, setting) in [
             (
                 "light-theme-setting",

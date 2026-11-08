@@ -52,11 +52,11 @@ impl Qualifier {
 
     pub const fn help_description(self) -> &'static str {
         match self {
-            Self::Author => "Author name or email, e.g. Alice",
-            Self::Committer => "Committer name or email, e.g. Bob",
-            Self::Message => "Full commit message substring",
+            Self::Author => "Author name or email",
+            Self::Committer => "Committer name or email",
+            Self::Message => "Commit message substring",
             Self::Hash => "Commit hash substring",
-            Self::Path => "Changed path substring; merges compare with their first parent",
+            Self::Path => "Changed path substring or regex; merges compare with their first parent",
             Self::Before => "Author's recorded calendar day strictly before this date",
             Self::After => "Author's recorded calendar day strictly after this date",
             Self::Merge => "Include merges with true; exclude merges with false",
@@ -112,6 +112,10 @@ pub struct Query {
 
 impl Query {
     pub fn parse(input: &str) -> Result<Self> {
+        Self::parse_with_mode(input, false)
+    }
+
+    pub fn parse_with_mode(input: &str, regex: bool) -> Result<Self> {
         ensure!(
             input.len() <= 8192,
             "filter is too long (maximum 8192 bytes)"
@@ -119,27 +123,57 @@ impl Query {
         let mut tokens = Vec::new();
         let mut token = String::new();
         let mut quoted = false;
+        let mut whole_quoted = false;
+        let mut escaped = false;
         for ch in input.chars() {
+            if escaped {
+                if ch != '"' {
+                    token.push('\\');
+                }
+                token.push(ch);
+                escaped = false;
+                continue;
+            }
             match ch {
-                '"' => quoted = !quoted,
+                '\\' => escaped = true,
+                '"' => {
+                    if token.is_empty() && !quoted {
+                        whole_quoted = true;
+                    }
+                    quoted = !quoted;
+                }
                 ch if ch.is_whitespace() && !quoted => {
                     if !token.is_empty() {
-                        tokens.push(std::mem::take(&mut token));
+                        tokens.push((std::mem::take(&mut token), whole_quoted));
                     }
+                    whole_quoted = false;
                 }
                 _ => token.push(ch),
             }
         }
+        if escaped {
+            token.push('\\');
+        }
         ensure!(!quoted, "Close the quoted search value with a double quote");
         if !token.is_empty() {
-            tokens.push(token);
+            tokens.push((token, whole_quoted));
         }
         let mut result = Self::default();
         let mut text = Vec::new();
-        for token in tokens {
-            let (key, value) = token.split_once(':').unwrap_or(("", &token));
+        for (token, whole_quoted) in tokens {
+            let qualifier = if whole_quoted {
+                None
+            } else {
+                token.split_once(':').filter(|(key, _)| {
+                    !regex
+                        || key
+                            .bytes()
+                            .all(|byte| byte.is_ascii_alphabetic() || byte == b'-')
+                })
+            };
+            let (key, value) = qualifier.unwrap_or(("", &token));
             if key.is_empty() {
-                text.push(value.to_lowercase());
+                text.push(value.to_owned());
                 continue;
             }
             let qualifier: Qualifier = key.parse()?;
@@ -151,7 +185,7 @@ impl Query {
                 );
                 result.path = Some(value.to_owned());
             } else {
-                result.terms.push((qualifier, value.to_lowercase()));
+                result.terms.push((qualifier, value.to_owned()));
             }
             result.filters.push(format!("{qualifier}:{value}"));
         }
@@ -159,41 +193,130 @@ impl Query {
         Ok(result)
     }
 
-    /// Paths are resolved separately by one cancellable Git traversal.
-    pub fn matches(&self, commit: &Commit) -> bool {
-        let metadata_matches = self.terms.iter().all(|(qualifier, value)| {
-            match qualifier {
-                Qualifier::Author => {
-                    contains(&commit.author.name, value) || contains(&commit.author.email, value)
-                }
-                Qualifier::Committer => {
-                    contains(&commit.committer.name, value)
-                        || contains(&commit.committer.email, value)
-                }
-                Qualifier::Message => contains(&commit.message, value),
-                Qualifier::Hash => commit.id.to_hex().contains(value),
-                // ISO dates compare lexically. Use the author's recorded calendar day,
-                // retaining its timezone rather than silently applying the local timezone.
-                Qualifier::Before => commit
-                    .author
-                    .time
-                    .get(..10)
-                    .is_some_and(|day| day < value.as_str()),
-                Qualifier::After => commit
-                    .author
-                    .time
-                    .get(..10)
-                    .is_some_and(|day| day > value.as_str()),
-                Qualifier::Merge => (commit.parents.len() > 1) == (value == "true"),
-                Qualifier::Path => true, // Resolved by the history worker's diff stream.
-            }
-        });
-        metadata_matches && (self.text.is_empty() || commit.searchable_text().contains(&self.text))
+    /// Compile once on the history worker, never in a UI render path.
+    pub fn compile(self, regex: bool) -> Result<CompiledQuery> {
+        let pattern_count = self
+            .terms
+            .iter()
+            .filter(|(key, _)| {
+                !matches!(key, Qualifier::Before | Qualifier::After | Qualifier::Merge)
+            })
+            .count()
+            + usize::from(self.path.is_some())
+            + usize::from(!self.text.is_empty());
+        ensure!(
+            !regex || pattern_count <= 16,
+            "Regex search supports at most 16 text/path patterns"
+        );
+        let mut predicates = Vec::new();
+        for (qualifier, value) in self.terms {
+            let pattern = |value: String| {
+                Matcher::new(value, regex).map_err(|error| anyhow::anyhow!("{qualifier}: {error}"))
+            };
+            predicates.push(match qualifier {
+                Qualifier::Author => Predicate::Author(pattern(value)?),
+                Qualifier::Committer => Predicate::Committer(pattern(value)?),
+                Qualifier::Message => Predicate::Message(pattern(value)?),
+                Qualifier::Hash => Predicate::Hash(pattern(value)?),
+                Qualifier::Before => Predicate::Before(value),
+                Qualifier::After => Predicate::After(value),
+                Qualifier::Merge => Predicate::Merge(value == "true"),
+                Qualifier::Path => continue, // Paths use the separate diff stream.
+            });
+        }
+        Ok(CompiledQuery {
+            predicates,
+            text: if self.text.is_empty() {
+                None
+            } else {
+                Some(Matcher::new(self.text, regex)?)
+            },
+            path: self
+                .path
+                .map(|value| {
+                    Matcher::new(value, regex)
+                        .map_err(|error| anyhow::anyhow!("{}: {error}", Qualifier::Path))
+                })
+                .transpose()?,
+        })
     }
 }
 
-fn contains(text: &str, needle: &str) -> bool {
-    text.to_lowercase().contains(needle)
+#[derive(Clone, Debug)]
+pub enum Matcher {
+    Literal(String),
+    Regex(regex::Regex),
+}
+
+impl Matcher {
+    fn new(value: String, regex: bool) -> Result<Self> {
+        if !regex {
+            return Ok(Self::Literal(value.to_lowercase()));
+        }
+        let compiled = regex::RegexBuilder::new(&value)
+            .case_insensitive(true)
+            .size_limit(1024 * 1024)
+            .dfa_size_limit(1024 * 1024)
+            .nest_limit(64)
+            .build()
+            .map_err(|error| anyhow::anyhow!("Invalid regular expression: {error}"))?;
+        Ok(Self::Regex(compiled))
+    }
+
+    pub fn is_match(&self, text: &str) -> bool {
+        match self {
+            Self::Literal(value) => text.to_lowercase().contains(value),
+            Self::Regex(regex) => regex.is_match(text),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+enum Predicate {
+    Author(Matcher),
+    Committer(Matcher),
+    Message(Matcher),
+    Hash(Matcher),
+    Before(String),
+    After(String),
+    Merge(bool),
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct CompiledQuery {
+    predicates: Vec<Predicate>,
+    text: Option<Matcher>,
+    pub path: Option<Matcher>,
+}
+
+impl CompiledQuery {
+    /// Paths are resolved separately by the cancellable diff stream.
+    pub fn matches(&self, commit: &Commit) -> bool {
+        self.predicates.iter().all(|predicate| match predicate {
+            Predicate::Author(value) => {
+                value.is_match(&commit.author.name) || value.is_match(&commit.author.email)
+            }
+            Predicate::Committer(value) => {
+                value.is_match(&commit.committer.name) || value.is_match(&commit.committer.email)
+            }
+            Predicate::Message(value) => value.is_match(&commit.message),
+            Predicate::Hash(value) => value.is_match(&commit.id.to_hex()),
+            Predicate::Before(value) => commit
+                .author
+                .time
+                .get(..10)
+                .is_some_and(|day| day < value.as_str()),
+            Predicate::After(value) => commit
+                .author
+                .time
+                .get(..10)
+                .is_some_and(|day| day > value.as_str()),
+            Predicate::Merge(value) => (commit.parents.len() > 1) == *value,
+        }) && self
+            .text
+            .as_ref()
+            .is_none_or(|pattern| pattern.is_match(&commit.searchable_text()))
+    }
 }
 
 fn valid_date(value: &str) -> bool {
@@ -231,6 +354,121 @@ fn valid_date(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn sample_commit(message: &str) -> Commit {
+        use crate::git::{CommitId, Signature};
+        Commit {
+            id: CommitId::parse(&"1".repeat(40)).unwrap(),
+            parents: Box::new([]),
+            author: Signature {
+                name: "Alice Smith".into(),
+                email: "alice@example.test".into(),
+                time: "2026-01-02T00:30:00+05:00".into(),
+            },
+            committer: Signature {
+                name: "Bob Jones".into(),
+                email: "bob@example.test".into(),
+                time: "2026-01-03T00:30:00+05:00".into(),
+            },
+            message: message.into(),
+        }
+    }
+
+    #[test]
+    fn regex_is_opt_in_and_preserves_escapes_case_flags_and_dates() {
+        let commit = sample_commit("fix all bugs\nTICKET-42\nsay \"hello\"");
+        for (input, regex, expected) in [
+            (r"message:fix.*bugs", false, false),
+            (r"message:fix.*bugs", true, true),
+            (
+                r"author:^(Alice|Bob) committer:^Bob hash:^1{40}$",
+                true,
+                true,
+            ),
+            (r"author:^Bob", true, false),
+            (r"message:fix.*TICKET", true, false),
+            (r"message:(?s)fix.*TICKET", true, true),
+            (r"message:(?-i)FIX", true, false),
+            (r"(?-i)Alice", true, true),
+            (r"(?:fix|feat)", true, true),
+            (
+                r"before:2026-01-03 after:2026-01-01 merge:false",
+                true,
+                true,
+            ),
+            (r"before:2026-01-02", true, false),
+            (r#"author:"Alice Smith|Bob Jones""#, true, true),
+            (r#"message:"say \"hello\"""#, false, true),
+            (r#"message:"say \"hello\"""#, true, true),
+        ] {
+            let query = Query::parse_with_mode(input, regex)
+                .unwrap()
+                .compile(regex)
+                .unwrap();
+            assert_eq!(query.matches(&commit), expected, "{input} regex={regex}");
+        }
+        let whitespace = sample_commit("   ");
+        for (pattern, expected) in [(r"message:\S+", false), (r"message:\s+", true)] {
+            assert_eq!(
+                Query::parse_with_mode(pattern, true)
+                    .unwrap()
+                    .compile(true)
+                    .unwrap()
+                    .matches(&whitespace),
+                expected
+            );
+        }
+        assert!(
+            Query::parse(r#""foo:bar""#)
+                .unwrap()
+                .compile(false)
+                .unwrap()
+                .matches(&sample_commit("foo:bar"))
+        );
+        assert!(
+            Query::parse("\"\" author:Alice")
+                .unwrap()
+                .compile(false)
+                .unwrap()
+                .matches(&commit)
+        );
+    }
+
+    #[test]
+    fn invalid_or_excessive_regexes_do_not_affect_literal_mode() {
+        for input in [
+            r"author:[",
+            r"path:(?=foo)",
+            r"message:(a)\1",
+            r"message:a{1000000}",
+        ] {
+            let error = Query::parse_with_mode(input, true)
+                .unwrap()
+                .compile(true)
+                .unwrap_err()
+                .to_string();
+            assert!(
+                error.contains("Invalid regular expression"),
+                "{input}: {error}"
+            );
+            assert!(
+                Query::parse(input).unwrap().compile(false).is_ok(),
+                "{input}"
+            );
+        }
+        let many = ["author:Alice"; 17].join(" ");
+        assert!(Query::parse(&many).unwrap().compile(true).is_err());
+        assert!(Query::parse(&many).unwrap().compile(false).is_ok());
+        for regex in [false, true] {
+            assert!(
+                Query::parse_with_mode("abc:", regex)
+                    .unwrap_err()
+                    .to_string()
+                    .starts_with("Unknown filter abc:")
+            );
+            assert!(Query::parse_with_mode("before:.*", regex).is_err());
+        }
+    }
+
     #[test]
     fn advertised_qualifiers_accept_case_insensitive_names_and_canonicalize_badges() {
         for qualifier in Qualifier::ALL {

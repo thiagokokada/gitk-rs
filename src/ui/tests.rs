@@ -47,6 +47,7 @@ fn open_with_state<'a>(
         repository: config.repository.clone(),
         range: 0..128,
         query: String::new(),
+        regex: false,
         batch: config.batch,
         graph_columns: config.graph_columns,
         anchor: None,
@@ -606,33 +607,38 @@ fn graph_column_can_be_resized_without_changing_selection(cx: &mut TestAppContex
 }
 
 #[gpui_kit::test]
-fn auto_reload_shortcut_toggles_watching_and_refreshes_history(cx: &mut TestAppContext) {
+fn preferences_toggle_watching_and_refresh_history(cx: &mut TestAppContext) {
+    let settings = tempfile::tempdir().unwrap();
     let fixture = Fixture::new();
     let head = fixture.commit("base");
     let (app, cx) = open(&fixture, cx);
+    app.view.update(cx, |view, _| {
+        view.preferences_path = Some(settings.path().join("preferences.toml"));
+    });
     until(cx, |cx| {
         selected(&app.view, cx).as_deref() == Some(head.as_str())
     });
-    assert!(!cx.update(|_, cx| app.view.read(cx).config.watch));
-    assert!(cx.update(|window, _| window.try_find("reload").is_none()));
-    cx.simulate_keystrokes("alt-r");
-    assert!(cx.update(|_, cx| app.view.read(cx).config.watch));
-    until(cx, |cx| {
-        cx.update(|_, cx| app.view.read(cx).reload_selection.is_none())
-    });
-    std::fs::write(fixture.root().join("file.txt"), "changed").unwrap();
-    until(cx, |cx| {
-        cx.update(|_, cx| !app.view.read(cx).local_rows.is_empty())
-    });
-    assert!(cx.update(|window, _| window.try_find("reload").is_none()));
-    cx.simulate_keystrokes("alt-r");
-    assert!(!cx.update(|_, cx| app.view.read(cx).config.watch));
-    until(cx, |cx| {
-        cx.update(|_, cx| app.view.read(cx).reload_selection.is_none())
-    });
-    assert_eq!(selected(&app.view, cx).as_deref(), Some(head.as_str()));
-    cx.simulate_keystrokes("alt-r");
-    assert!(cx.update(|_, cx| app.view.read(cx).config.watch));
+    for enabled in [true, false, true] {
+        cx.simulate_keystrokes("ctrl-,");
+        scroll_preferences_to("watch-setting", cx);
+        cx.update(|window, cx| window.click("watch-setting", cx));
+        cx.update(|window, cx| window.click("apply-preferences", cx));
+        until(cx, |cx| {
+            cx.update(|_, cx| {
+                let view = app.view.read(cx);
+                view.config.watch == enabled
+                    && !view.preferences_save_pending
+                    && view.reload_selection.is_none()
+            })
+        });
+        assert_eq!(selected(&app.view, cx).as_deref(), Some(head.as_str()));
+        if enabled {
+            std::fs::write(fixture.root().join("file.txt"), "changed").unwrap();
+            until(cx, |cx| {
+                cx.update(|_, cx| !app.view.read(cx).local_rows.is_empty())
+            });
+        }
+    }
 }
 
 #[gpui_kit::test]
@@ -2260,4 +2266,120 @@ fn metadata_search_shows_badges_errors_and_recovers(cx: &mut TestAppContext) {
             );
         }
     });
+}
+
+#[gpui_kit::test]
+fn regex_toggle_refilters_reports_errors_and_restores_saved_state(cx: &mut TestAppContext) {
+    use gitk_rs::diff::options::{self, Layout, State};
+    let settings = tempfile::tempdir().unwrap();
+    let path = settings.path().join("state.toml");
+    options::save_state_to(
+        State {
+            layout: Layout {
+                graph_width: 300.,
+                ..Default::default()
+            },
+            diff: gitk_rs::diff::DiffOptions {
+                context: 7,
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        &path,
+    )
+    .unwrap();
+    let fixture = Fixture::new();
+    fixture.commit("fix all");
+    fixture.commit("fix.*");
+    {
+        let (app, cx) = open_with_state(&fixture, None, Some(path.clone()), cx);
+        until(cx, |cx| {
+            cx.update(|_, cx| app.view.read(cx).snapshot.as_ref().is_some_and(|s| s.eof))
+        });
+        assert!(!cx.update(|_, cx| app.view.read(cx).request.regex));
+        cx.simulate_keystrokes("/");
+        cx.simulate_input("message:fix.*");
+        until(cx, |cx| {
+            cx.update(|_, cx| {
+                app.view
+                    .read(cx)
+                    .snapshot
+                    .as_ref()
+                    .is_some_and(|s| s.visible == 1 && !s.filtering)
+            })
+        });
+        cx.simulate_keystrokes("alt-r");
+        assert!(!cx.update(|_, cx| app.view.read(cx).config.watch));
+        assert!(cx.update(|window, cx| {
+            app.view
+                .read(cx)
+                .filter
+                .read(cx)
+                .focus_handle(cx)
+                .is_focused(window)
+        }));
+        until(cx, |cx| {
+            cx.update(|_, cx| {
+                let view = app.view.read(cx);
+                view.request.regex
+                    && view.snapshot.as_ref().is_some_and(|s| {
+                        s.request_id == view.request.id && s.visible == 2 && !s.filtering
+                    })
+            })
+        });
+        cx.simulate_keystrokes("f1 alt-r");
+        assert!(cx.update(|_, cx| app.view.read(cx).request.regex));
+        cx.simulate_keystrokes("escape / ctrl-a ctrl-k");
+        cx.simulate_input("message:[");
+        until(cx, |cx| {
+            cx.update(|window, cx| {
+                window.try_find("search-error").is_some()
+                    && app.view.read(cx).snapshot.as_ref().is_some_and(|s| {
+                        s.query_error
+                            .as_deref()
+                            .is_some_and(|error| error.contains("Invalid regular expression"))
+                    })
+            })
+        });
+        let toggle = cx.update(|window, _| window.find("search-regex").bounds().center());
+        cx.simulate_click(toggle, gpui_kit::Modifiers::default());
+        assert!(cx.update(|_, cx| app.view.read(cx).query_error(cx).is_none()));
+        until(cx, |cx| {
+            cx.update(|window, cx| {
+                let view = app.view.read(cx);
+                window.try_find("search-error").is_none()
+                    && view.snapshot.as_ref().is_some_and(|s| {
+                        s.request_id == view.request.id && s.error.is_none() && s.visible == 0
+                    })
+            })
+        });
+        cx.simulate_keystrokes("/ ctrl-a ctrl-k");
+        cx.simulate_input("author:Fixture");
+        cx.simulate_keystrokes("escape alt-r");
+        until(cx, |cx| {
+            cx.update(|_, cx| {
+                let view = app.view.read(cx);
+                view.request.regex
+                    && view.snapshot.as_ref().is_some_and(|s| {
+                        s.request_id == view.request.id && s.error.is_none() && s.visible == 2
+                    })
+            })
+        });
+    }
+    let saved = options::load_state_from(&path).unwrap();
+    assert!(saved.search.regex);
+    assert_eq!(saved.diff.context, 7);
+    assert_eq!(saved.layout.graph_width, 300.);
+    assert!(!settings.path().join("preferences.toml").exists());
+    {
+        let (app, cx) = open_with_state(&fixture, None, Some(path.clone()), cx);
+        until(cx, |cx| {
+            cx.update(|_, cx| app.view.read(cx).snapshot.as_ref().is_some_and(|s| s.eof))
+        });
+        assert!(cx.update(|_, cx| app.view.read(cx).request.regex));
+        let toggle = cx.update(|window, _| window.find("search-regex").bounds().center());
+        cx.simulate_click(toggle, gpui_kit::Modifiers::default());
+        assert!(!cx.update(|_, cx| app.view.read(cx).request.regex));
+    }
+    assert!(!options::load_state_from(&path).unwrap().search.regex);
 }

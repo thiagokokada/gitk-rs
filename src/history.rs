@@ -3,7 +3,7 @@
 use crate::{
     git::{Cancellation, Commit, CommitId, GitStream, Repository, run_bytes},
     graph::{GraphBuilder, GraphRow},
-    search::Query,
+    search::{CompiledQuery, Matcher, Query},
 };
 use anyhow::{Result, ensure};
 use std::{
@@ -30,6 +30,7 @@ pub struct Request {
     pub repository: PathBuf,
     pub range: Range<usize>,
     pub query: String,
+    pub regex: bool,
     /// None streams to EOF; Some(N) pauses after satisfying browsing demand in
     /// batches of N. Worker steps and the snapshot mailbox stay bounded either way.
     pub batch: Option<usize>,
@@ -86,6 +87,7 @@ pub struct Snapshot {
     pub branch: String,
     pub refs: Arc<Refs>,
     pub error: Option<String>,
+    pub query_error: Option<String>,
     pub anchor_position: Option<usize>,
     pub restored: Option<Restored>,
 }
@@ -267,6 +269,7 @@ fn empty_snapshot(request: &Request, error: Option<String>) -> Snapshot {
         branch: String::new(),
         refs: Arc::new(Refs::new()),
         error,
+        query_error: None,
         anchor_position: None,
         restored: None,
     }
@@ -283,9 +286,9 @@ struct PathSearch {
 }
 
 impl PathSearch {
-    fn start(repository: &Repository, path: &str) -> Self {
+    fn start(repository: &Repository, path: &Matcher) -> Self {
         let root = repository.root.clone();
-        let needle = path.to_lowercase();
+        let pattern = path.clone();
         let cancel = Cancellation::default();
         let token = cancel.clone();
         let (sender, receiver) = mpsc::sync_channel(256);
@@ -322,9 +325,7 @@ impl PathSearch {
                             .ok_or_else(|| anyhow::anyhow!("Missing changed path"))?;
                         ensure!(path.terminated, "Incomplete changed path");
                         if !matched {
-                            matched = String::from_utf8_lossy(&path.bytes)
-                                .to_lowercase()
-                                .contains(&needle);
+                            matched = pattern.is_match(&String::from_utf8_lossy(&path.bytes));
                         }
                     } else {
                         if let Some(id) = current.take()
@@ -378,7 +379,8 @@ struct Session {
     refs_revision: u64,
     eof: bool,
     query: String,
-    parsed: Query,
+    regex: bool,
+    parsed: CompiledQuery,
     query_error: Option<String>,
     paths: Option<PathSearch>,
     path_pending: Vec<CommitId>,
@@ -411,7 +413,8 @@ impl Session {
             refs_revision: 0,
             eof,
             query: String::new(),
-            parsed: Query::default(),
+            regex: false,
+            parsed: CompiledQuery::default(),
             query_error: None,
             paths: None,
             path_pending: Vec::new(),
@@ -453,15 +456,18 @@ impl Session {
             }
         }
         let query = request.query.trim().to_owned();
-        if self.query != query {
+        if self.query != query || self.regex != request.regex {
             self.query = query;
+            self.regex = request.regex;
             self.matches.clear();
             self.scanned = 0;
             self.paths = None;
             self.path_pending.clear();
             self.candidates = HashMap::new();
             self.query_error = None;
-            match Query::parse(&self.query) {
+            match Query::parse_with_mode(&self.query, request.regex)
+                .and_then(|query| query.compile(request.regex))
+            {
                 Ok(parsed) => {
                     self.paths = parsed
                         .path
@@ -577,7 +583,7 @@ impl Session {
                 if paths.done {
                     self.paths = Some(PathSearch::start(
                         &self.repository,
-                        self.parsed.path.as_deref().unwrap(),
+                        self.parsed.path.as_ref().unwrap(),
                     ));
                 } else if paths.input.is_none() {
                     thread::sleep(Duration::from_millis(5));
@@ -727,6 +733,7 @@ impl Session {
             branch: self.repository.branch.clone(),
             refs: self.refs.clone(),
             error: self.query_error.clone(),
+            query_error: self.query_error.clone(),
             anchor_position: request.anchor.and_then(|ordinal| {
                 if self.query.is_empty() {
                     (ordinal < self.entries.len()).then_some(ordinal)
@@ -801,6 +808,7 @@ mod tests {
             repository: fixture.root().to_owned(),
             range: 0..10,
             query: String::new(),
+            regex: false,
             batch: Some(1000),
             graph_columns: crate::graph::DEFAULT_GRAPH_LANES,
             anchor: None,
@@ -828,6 +836,7 @@ mod tests {
             repository: repository.into(),
             range: 0..1,
             query: String::new(),
+            regex: false,
             batch: Some(count),
             graph_columns: crate::graph::DEFAULT_GRAPH_LANES,
             anchor: None,
@@ -1142,6 +1151,7 @@ mod tests {
             repository: repository.into(),
             range: 0..128,
             query,
+            regex: std::env::var("GITK_SEARCH_REGEX").is_ok_and(|value| value == "1"),
             batch: None,
             graph_columns: crate::graph::DEFAULT_GRAPH_LANES,
             anchor: None,
@@ -1150,9 +1160,10 @@ mod tests {
         let start = Instant::now();
         let mut session = Session::open(&request, Cancellation::default()).unwrap();
         eprintln!(
-            "search_probe head={:?} query={:?} graph_lanes={}",
+            "search_probe head={:?} query={:?} regex={} graph_lanes={}",
             session.repository.head.as_ref().map(CommitId::to_hex),
             request.query,
+            request.regex,
             request.graph_columns
         );
         let mut first = false;
