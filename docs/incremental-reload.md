@@ -16,7 +16,7 @@ use it. No persistent cache is needed.
   adjust the first retained graph row, and reconcile search and restore state.
   Fall back to a full reload for merges, divergence, rewinds, unborn HEAD,
   excessive delta size, or incompatible traversal metadata.
-- [ ] Validate manual and automatic reload, selection and viewport bookmarks,
+- [x] Validate manual and automatic reload, selection and viewport bookmarks,
   filtering, partial history continuation, stale snapshots, and fallbacks with
   deterministic real Git fixtures and headless GPUI tests. Record limitations
   and commit each validated implementation milestone.
@@ -25,19 +25,21 @@ use it. No persistent cache is needed.
 
 Keep Git and retained-history work on the history worker. Snapshot generations
 remain independent of the lifetime of a reusable Git stream. Cancel and reap
-the old stream when it is replaced or the worker stops. Reloads of the same
-repository are handled between bounded worker steps; they must not cancel the
-stream before the worker can decide whether to retain it.
+the old stream when it is replaced or the worker stops. Ordinary streaming uses
+bounded worker steps. Reloads of the same repository wait for the current step;
+they must not cancel the stream before the worker can decide whether to retain
+it.
 
 Only accept linear extensions, where the new commits form an unbroken chain
 ending at the old HEAD. This avoids changing the ordering or graph lanes of the
 retained suffix. Speculative delta loading is limited to 256 commits and 2 MiB
 of accounted commit data. Fall back when this budget or an 8192-candidate path
 search budget is exceeded. This preserves normal streaming for larger updates.
-Reindexing
-retained entries still takes O(loaded commits) worker CPU, but must not reparse
-old commits or duplicate the entire retained history. Existing UI references
-may require copying the small referenced subset of entries during reindexing.
+Reindexing retained entries still takes O(loaded commits) worker CPU in one pass,
+which can delay subsequent worker requests. It does not reparse old commits or
+duplicate the entire retained history. Existing UI references may require
+copying the small referenced subset of entries during reindexing. Completed
+path-search decisions survive; only bounded in-flight candidates are retried.
 
 Changes to replacement refs, grafts, or shallow boundaries can alter traversal
 without changing HEAD. Detect these before reuse, or conservatively disable
@@ -63,3 +65,25 @@ fresh traversal for commit order, ordinals, graph geometry (including an old
 merge and lane caps), metadata and path searches, bookmarks, repeated updates,
 and partial history resumed to EOF. Unsupported probes leave old entries
 untouched before the worker replaces the session.
+
+Final validation passed:
+
+- `nix develop --command cargo fmt --all -- --check`
+- `nix develop --command cargo clippy --all-targets -- -D warnings`
+- `nix develop --command cargo test --all-targets --locked`: 157 passed, three
+  opt-in tests ignored, including 48 main-target tests with headless GPUI.
+- `nix build`
+- `nix flake check`: all checks passed on x86_64-linux; incompatible
+  aarch64-linux and aarch64-darwin checks were omitted by Nix.
+- ASCII, local Markdown links, checklist consistency, and whitespace checks.
+
+The deep UI workflow also verifies that retained author identities survive both
+F5 and automatic reload, alongside existing selection and viewport assertions.
+Public worker workflows cover incremental extension followed by merge and rewind
+fallbacks, and same-HEAD retry after repairing a failed path search. Failed
+queries deliberately start a fresh session on reload so errors remain retryable.
+
+Nix cache access and Git index writes required approved execution outside the
+sandbox, as recorded in AGENTS.md. Native Wayland/macOS/X11 smoke tests and
+large-repository probes were not run. General merge reconciliation remains
+deferred, and no nixpkgs timing or RSS measurements have been collected.

@@ -90,6 +90,112 @@ fn history_request(fixture: &Fixture) -> Request {
         restore: None,
     }
 }
+
+#[test]
+fn incremental_reload_then_merge_and_rewind_reconcile_real_worker_history() {
+    let fixture = Fixture::new();
+    let root = fixture.commit("root");
+    fixture.git(&["checkout", "-qb", "side"]);
+    fixture.git(&["commit", "--allow-empty", "-m", "side"]);
+    fixture.git(&["checkout", "main"]);
+    fixture.commit("main tip");
+    let mut request = history_request(&fixture);
+    let engine = HistoryEngine::spawn(request.clone());
+    let handle = engine.handle();
+    let before = wait(|| handle.take_snapshot().filter(|s| s.eof));
+    let selected = before.rows[1].clone();
+    let new_tip = fixture.commit("linear update");
+    request.generation.0 += 1;
+    request.id += 1;
+    request.restore = Some(Restore {
+        selected: Some(selected.commit.id.clone()),
+        top: Some(selected.commit.id.clone()),
+    });
+    handle.request(request.clone());
+    let incremental = wait(|| {
+        handle
+            .take_snapshot()
+            .filter(|s| s.generation == request.generation && s.eof)
+    });
+    assert!(incremental.error.is_none());
+    assert_eq!(incremental.loaded, 3);
+    assert_eq!(incremental.rows[0].commit.id.to_hex(), new_tip);
+    assert_eq!(incremental.restored.unwrap().selected.unwrap().0, 2);
+    assert!(Arc::ptr_eq(
+        &selected.commit.author.name,
+        &incremental.rows[2].commit.author.name
+    ));
+
+    fixture.git(&["merge", "--no-ff", "side", "-m", "merge"]);
+    request.generation.0 += 1;
+    request.id += 1;
+    handle.request(request.clone());
+    let merged = wait(|| {
+        handle
+            .take_snapshot()
+            .filter(|s| s.generation == request.generation && s.eof)
+    });
+    assert!(merged.error.is_none());
+    assert_eq!(merged.loaded, 5);
+    assert_eq!(merged.rows[0].commit.parents.len(), 2);
+    assert!(!Arc::ptr_eq(
+        &selected.commit.author.name,
+        &merged.rows[0].commit.author.name
+    ));
+
+    fixture.git(&["checkout", "--detach", &root]);
+    request.generation.0 += 1;
+    request.id += 1;
+    handle.request(request.clone());
+    let rewound = wait(|| {
+        handle
+            .take_snapshot()
+            .filter(|s| s.generation == request.generation && s.eof)
+    });
+    assert!(rewound.error.is_none());
+    assert_eq!(rewound.loaded, 1);
+    assert_eq!(rewound.rows[0].commit.id.to_hex(), root);
+}
+
+#[test]
+fn manual_reload_retries_a_failed_path_search_at_the_same_head() {
+    let fixture = Fixture::new();
+    fixture.commit("root");
+    let mut request = history_request(&fixture);
+    let engine = HistoryEngine::spawn(request.clone());
+    let handle = engine.handle();
+    let before = wait(|| handle.take_snapshot().filter(|s| s.eof));
+    let tree = fixture.git(&["rev-parse", "HEAD^{tree}"]);
+    let object = fixture
+        .root()
+        .join(".git/objects")
+        .join(&tree[..2])
+        .join(&tree[2..]);
+    let bytes = fs::read(&object).unwrap();
+    fs::remove_file(&object).unwrap();
+    request.id += 1;
+    request.query = "path:file.txt".into();
+    handle.request(request.clone());
+    let failed = wait(|| {
+        handle
+            .take_snapshot()
+            .filter(|s| s.request_id == request.id && s.error.is_some())
+    });
+    assert!(failed.error.unwrap().contains("Path search failed"));
+    fs::write(&object, bytes).unwrap();
+    request.generation.0 += 1;
+    request.id += 1;
+    handle.request(request.clone());
+    let retried = wait(|| {
+        handle
+            .take_snapshot()
+            .filter(|s| s.generation == request.generation && s.eof)
+    });
+    assert!(retried.error.is_none());
+    assert_eq!(retried.visible, 1);
+    assert_eq!(retried.rows[0].commit.id, before.rows[0].commit.id);
+}
+
 fn diff_page(id: u64) -> DiffPage {
     DiffPage {
         selection: SelectionId(id),

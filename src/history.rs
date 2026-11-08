@@ -464,7 +464,7 @@ impl Session {
     /// Revalidate traversal inputs on the worker before carrying data into a
     /// new UI generation. Retain both loaded entries and the unread stream.
     fn refresh(&mut self, request: &Request) -> Result<bool> {
-        if self.cancellation.load(Ordering::Acquire) {
+        if self.cancellation.load(Ordering::Acquire) || self.query_error.is_some() {
             return Ok(false);
         }
         let repository = Repository::open(&request.repository, &self.cancellation)?;

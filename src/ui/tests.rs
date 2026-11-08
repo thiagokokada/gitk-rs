@@ -390,6 +390,18 @@ fn deep_reload_keeps_selected_commit_and_top_visible_commit(cx: &mut TestAppCont
     app.view
         .update_in(cx, |view, window, cx| view.select(1620, window, cx));
     let chosen = selected(&app.view, cx).unwrap();
+    let author = cx.update(|_, cx| {
+        app.view
+            .read(cx)
+            .selected
+            .as_ref()
+            .unwrap()
+            .1
+            .commit
+            .author
+            .name
+            .clone()
+    });
     app.view.update(cx, |view, cx| {
         view.scroll.scroll_to_item_strict(1800, ScrollStrategy::Top);
         cx.notify();
@@ -417,6 +429,20 @@ fn deep_reload_keeps_selected_commit_and_top_visible_commit(cx: &mut TestAppCont
         })
     });
     assert_eq!(selected(&app.view, cx).as_deref(), Some(chosen.as_str()));
+    cx.update(|_, cx| {
+        assert!(Arc::ptr_eq(
+            &author,
+            &app.view
+                .read(cx)
+                .selected
+                .as_ref()
+                .unwrap()
+                .1
+                .commit
+                .author
+                .name
+        ));
+    });
     assert_eq!(
         cx.update(|_, cx| {
             let view = app.view.read(cx);
@@ -494,6 +520,20 @@ fn deep_reload_keeps_selected_commit_and_top_visible_commit(cx: &mut TestAppCont
         })
     });
     assert_eq!(selected(&app.view, cx).as_deref(), Some(chosen.as_str()));
+    cx.update(|_, cx| {
+        assert!(Arc::ptr_eq(
+            &author,
+            &app.view
+                .read(cx)
+                .selected
+                .as_ref()
+                .unwrap()
+                .1
+                .commit
+                .author
+                .name
+        ));
+    });
     assert_eq!(
         cx.update(|_, cx| {
             let view = app.view.read(cx);

@@ -95,3 +95,6 @@ nix develop --command env \
 - Sandboxed `nix eval --raw --inputs-from . crane#outPath` failed with
   `executing SQLite statement 'pragma synchronous = off': unable to open database file`
   for the Nix fetcher cache. Run Nix validation with approved cache access.
+- Sandboxed `git add src/history.rs src/ui/tests.rs docs/incremental-reload.md`
+  failed with `fatal: Unable to create '/home/thiagoko/Projects/gitk-rs/.git/index.lock': Read-only file system`.
+  Run milestone commits with approved Git index access.
