@@ -427,16 +427,25 @@ fn path_search_bounds_queues_pauses_resumes_and_replaces_queries() {
         assert_eq!(snapshot.loaded, paused.loaded);
     }
     request.id += 1;
-    request.range = 700..710;
+    // Path checks run asynchronously, so bounded in-flight batches may already
+    // cover a fixed viewport such as row 700. Request the first unloaded row to
+    // require more history regardless of where the initial prefetch paused.
+    let next_position = paused.loaded;
+    request.range = next_position..next_position + 1;
     handle.request(request.clone());
     let resumed = wait(|| {
         handle.take_snapshot().filter(|s| {
-            s.request_id == request.id && (s.error.is_some() || s.visible >= 800 && !s.filtering)
+            s.request_id == request.id
+                && (s.error.is_some() || s.visible >= request.range.end && !s.filtering)
         })
     });
     assert!(resumed.error.is_none(), "{:?}", resumed.error);
     assert!(resumed.loaded > paused.loaded);
-    assert_eq!(resumed.rows[0].commit.summary(), "commit 5300");
+    assert_eq!(resumed.start, next_position);
+    assert_eq!(
+        resumed.rows[0].commit.summary(),
+        format!("commit {}", 6000 - next_position)
+    );
     request.id += 1;
     request.batch = None;
     request.range = 0..8;
