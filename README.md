@@ -19,9 +19,6 @@ A lightweight Git history explorer for Linux and macOS, written in Rust with
 - Light and dark themes with searchable font selection and live previews
 - Built to browse large Git repositories such as
   [NixOS/nixpkgs](https://github.com/NixOS/nixpkgs/)
-  +  It streams commit history in the background, shows rows as they arrive,
-     and virtualizes history and diff rendering so drawing work stays focused
-     on what’s visible.
 
 ## Usage
 
