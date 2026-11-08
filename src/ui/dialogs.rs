@@ -671,10 +671,7 @@ const SHORTCUT_GROUPS: &[ShortcutGroup] = &[
         shortcuts: &[
             ("Up / p / k", "Move up one commit"),
             ("Down / n / j", "Move down one commit"),
-            (
-                "Alt+J / Alt+K",
-                "Select next / previous commit (including while filtering)",
-            ),
+            ("Alt+J / Alt+K", "Select next / previous commit"),
             ("Home / gg", "Jump to the first commit"),
             ("End / G", "Jump to the last loaded commit"),
             (
