@@ -30,7 +30,7 @@ use it. No persistent cache is needed.
 - [x] Reconcile large prefixes with bounded metadata/path-search batches. Keep
   completed suffix decisions, retry only its bounded in-flight candidates, and
   avoid a full reload merely because the prefix contains many candidates.
-- [ ] Cover updates beyond both old budgets, partial-history continuation,
+- [x] Cover updates beyond both old budgets, partial-history continuation,
   cancellation and supersession, fallback after several probe steps, and UI
   bookmark preservation. Validate and commit with the pinned toolchain.
 
@@ -119,5 +119,11 @@ Resumable verification and bounded prefix filtering passed all-target tests
 denied. Coverage includes updates larger than 256 commits and 2 MiB, a
 9000-commit path-filtered prefix, old partial streams, superseded/cancelled
 verification, late divergence, interrupted searches, public worker bookmarks,
-and 600-commit manual and automatic UI reloads. Package and flake validation
-for this follow-up remains pending.
+and 600-commit manual and automatic UI reloads. `nix build` and `nix flake check`
+also passed for this follow-up on x86_64-linux; Nix omitted incompatible
+aarch64-linux and aarch64-darwin checks. Native desktop smoke tests and
+large-repository benchmarks remain unrun.
+
+All prior reload commits and this follow-up are retained on the local
+`incremental-history-reload` branch. Local `main` was restored to `2afe1ac`, its
+pre-reload tip, matching the locally recorded `origin/main`.
