@@ -15,34 +15,40 @@ use it. No persistent cache is needed.
   state. Preserve the old stream for partially loaded history, update ordinals,
   adjust the first retained graph row, and reconcile search and restore state.
   Fall back to a full reload for merges, divergence, rewinds, unborn HEAD,
-  excessive delta size, or incompatible traversal metadata.
+  or incompatible traversal metadata. The initial size cap is removed below.
 - [x] Validate manual and automatic reload, selection and viewport bookmarks,
   filtering, partial history continuation, stale snapshots, and fallbacks with
   deterministic real Git fixtures and headless GPUI tests. Record limitations
   and commit each validated implementation milestone.
 
-## Safety and cost
-
 ## Removing the total delta limit
 
-- [ ] Replace the total 256-commit / 2 MiB probe budget with a resumable worker
+- [x] Replace the total 256-commit / 2 MiB probe budget with a resumable worker
   phase. Read and prepare graph rows in bounded steps, retaining the provisional
   new history once, and verify the entire chain before changing the old suffix.
   Process new requests between steps and discard superseded verification.
-- [ ] Reconcile large prefixes with bounded metadata/path-search batches. Keep
+- [x] Reconcile large prefixes with bounded metadata/path-search batches. Keep
   completed suffix decisions, retry only its bounded in-flight candidates, and
   avoid a full reload merely because the prefix contains many candidates.
 - [ ] Cover updates beyond both old budgets, partial-history continuation,
   cancellation and supersession, fallback after several probe steps, and UI
   bookmark preservation. Validate and commit with the pinned toolchain.
 
-The existing validated milestones below describe the initial capped version.
 The follow-up removes size-based fallbacks; nonlinear histories still fall back
-to normal loading. The O(retained history) suffix reindexing pass remains a known
-worker latency cost. New commit records retained during verification are the
-prospective history, rather than a queue of pending worker batches.
+to normal loading. Verification yields after 256 commits or reaching a 2 MiB
+accounted-data threshold in each worker step. Individual Git records remain
+bounded separately. New commit records are retained once as prospective history,
+then moved into the final index after the full chain has been verified.
 
-## Initial implementation safety and cost
+Prefix filters run in batches of at most 1000 commits with the existing bounded
+path-search queues. Their matches are joined with completed suffix matches once,
+instead of repeatedly inserting ahead of a large suffix. Only bounded in-flight
+suffix path candidates are retried. Snapshots wait for verification and prefix
+filtering to finish so restored bookmarks address the complete reconciled list.
+A reload superseding unfinished prefix filtering restarts the search over
+retained commits; a newer query similarly replaces unfinished search work.
+
+## Safety and cost
 
 Keep Git and retained-history work on the history worker. Snapshot generations
 remain independent of the lifetime of a reusable Git stream. Cancel and reap
@@ -53,9 +59,8 @@ it.
 
 Only accept linear extensions, where the new commits form an unbroken chain
 ending at the old HEAD. This avoids changing the ordering or graph lanes of the
-retained suffix. Speculative delta loading is limited to 256 commits and 2 MiB
-of accounted commit data. Fall back when this budget or an 8192-candidate path
-search budget is exceeded. This preserves normal streaming for larger updates.
+retained suffix. There is no total delta commit, byte, or path-candidate limit
+that causes a full reload. Work is divided into bounded steps instead.
 Reindexing retained entries still takes O(loaded commits) worker CPU in one pass,
 which can delay subsequent worker requests. It does not reparse old commits or
 duplicate the entire retained history. Existing UI references may require
@@ -87,7 +92,7 @@ merge and lane caps), metadata and path searches, bookmarks, repeated updates,
 and partial history resumed to EOF. Unsupported probes leave old entries
 untouched before the worker replaces the session.
 
-Final validation passed:
+Initial implementation validation passed:
 
 - `nix develop --command cargo fmt --all -- --check`
 - `nix develop --command cargo clippy --all-targets -- -D warnings`
@@ -108,3 +113,11 @@ Nix cache access and Git index writes required approved execution outside the
 sandbox, as recorded in AGENTS.md. Native Wayland/macOS/X11 smoke tests and
 large-repository probes were not run. General merge reconciliation remains
 deferred, and no nixpkgs timing or RSS measurements have been collected.
+
+Resumable verification and bounded prefix filtering passed all-target tests
+(163 passed, three opt-in tests ignored), formatting, and clippy with warnings
+denied. Coverage includes updates larger than 256 commits and 2 MiB, a
+9000-commit path-filtered prefix, old partial streams, superseded/cancelled
+verification, late divergence, interrupted searches, public worker bookmarks,
+and 600-commit manual and automatic UI reloads. Package and flake validation
+for this follow-up remains pending.

@@ -333,7 +333,7 @@ fn consecutive_reload_before_layout_preserves_the_restored_top_commit(cx: &mut T
         cx.update(|_, cx| app.view.read(cx).viewport.start == 50)
     });
     let top = cx.update(|_, cx| app.view.read(cx).cached(50).unwrap().commit.id.clone());
-    fixture.commit("new tip");
+    fixture.append_history(600, false, "new tip");
     app.view.update(cx, |view, cx| view.reload(cx));
     // Receive the restored rows without running layout or workspace polling.
     // This reproduces a second HEAD update arriving before the next frame.
@@ -508,7 +508,7 @@ fn deep_reload_keeps_selected_commit_and_top_visible_commit(cx: &mut TestAppCont
                 > revision
         })
     });
-    fixture.commit("automatic tip");
+    fixture.append_history(600, false, "automatic tip");
     until(cx, |cx| {
         cx.update(|_, cx| {
             let view = app.view.read(cx);

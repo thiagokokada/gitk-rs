@@ -158,6 +158,41 @@ fn incremental_reload_then_merge_and_rewind_reconcile_real_worker_history() {
 }
 
 #[test]
+fn large_linear_reload_restores_bookmarks_without_reloading_the_suffix() {
+    let fixture = Fixture::new();
+    fixture.commit("root");
+    let mut request = history_request(&fixture);
+    request.batch = None;
+    let engine = HistoryEngine::spawn(request.clone());
+    let handle = engine.handle();
+    let before = wait(|| handle.take_snapshot().filter(|s| s.eof));
+    let selected = before.rows[0].clone();
+    fixture.append_history(1025, false, "new commits");
+    request.generation.0 += 1;
+    request.id += 1;
+    request.restore = Some(Restore {
+        selected: Some(selected.commit.id.clone()),
+        top: Some(selected.commit.id.clone()),
+    });
+    handle.request(request.clone());
+    let after = wait(|| {
+        handle
+            .take_snapshot()
+            .filter(|s| s.generation == request.generation && s.eof)
+    });
+    assert!(after.error.is_none());
+    assert_eq!(after.loaded, 1026);
+    let restored = after.restored.unwrap();
+    assert_eq!(restored.top, Some(1025));
+    let (index, retained) = restored.selected.unwrap();
+    assert_eq!(index, 1025);
+    assert!(Arc::ptr_eq(
+        &selected.commit.author.name,
+        &retained.commit.author.name
+    ));
+}
+
+#[test]
 fn manual_reload_retries_a_failed_path_search_at_the_same_head() {
     let fixture = Fixture::new();
     fixture.commit("root");
