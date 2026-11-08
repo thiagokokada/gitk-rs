@@ -12,6 +12,13 @@ use std::{
 pub struct State {
     pub diff: DiffOptions,
     pub layout: Layout,
+    pub search: Search,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct Search {
+    pub regex: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -221,6 +228,7 @@ mod layout_tests {
         // Existing diff-only state files remain readable.
         fs::write(&path, "[diff]\ncontext = 7\n").unwrap();
         assert_eq!(load_state_from(&path).unwrap().layout, Layout::default());
+        assert!(!load_state_from(&path).unwrap().search.regex);
         let engine = DiffEngine::with_options_file(Some(path.clone()));
         let handle = engine.handle();
         handle.save_layout(LayoutChange::GraphWidth(410.));
@@ -230,10 +238,15 @@ mod layout_tests {
             ..handle.initial_options()
         };
         handle.save_options(diff);
+        handle.save_search(Search { regex: true });
         handle.save_layout(LayoutChange::FileListWidth(350.));
         drop(engine);
         let saved = load_state_from(&path).unwrap();
         assert_eq!(saved.diff, diff);
+        assert!(saved.search.regex);
+        let next = DiffEngine::with_options_file(Some(path.clone()));
+        assert!(next.handle().initial_search().regex);
+        drop(next);
         assert_eq!(
             saved.layout,
             Layout {
@@ -244,6 +257,7 @@ mod layout_tests {
         );
         save_to(DiffOptions::default(), &path).unwrap();
         assert_eq!(load_state_from(&path).unwrap().layout, saved.layout);
+        assert!(load_state_from(&path).unwrap().search.regex);
         assert!(!root.path().join("preferences.toml").exists());
     }
 

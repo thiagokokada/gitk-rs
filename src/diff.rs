@@ -886,6 +886,21 @@ impl DiffHandle {
         self.shared.changed.notify_one();
     }
 
+    pub fn initial_search(&self) -> options::Search {
+        self.shared.initial_state.search
+    }
+
+    pub fn save_search(&self, search: options::Search) {
+        if self.shared.options_path.is_none() {
+            return;
+        }
+        let mut mailbox = self.shared.mailbox.lock().unwrap();
+        mailbox.state.search = search;
+        mailbox.save_state = true;
+        drop(mailbox);
+        self.shared.changed.notify_one();
+    }
+
     pub fn initial_layout(&self) -> options::Layout {
         self.shared.initial_state.layout
     }

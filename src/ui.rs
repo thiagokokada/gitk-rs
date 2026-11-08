@@ -26,6 +26,7 @@ use gitk_rs::{
 use gpui_kit::component::{
     ThemeMode,
     button::Button,
+    checkbox::Checkbox,
     input::{Input, InputEvent, InputState},
     menu::{ContextMenuExt, DropdownMenu, PopupMenuItem},
     resizable::{resizable_panel, v_resizable},
@@ -189,7 +190,7 @@ impl HistoryWindow {
         timing: Timing,
         services: WindowServices,
         preferences: Preferences,
-        request: Request,
+        mut request: Request,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -201,6 +202,12 @@ impl HistoryWindow {
             diff: diff_handle,
         } = services;
         let layout = diff_handle.initial_layout();
+        let search = diff_handle.initial_search();
+        if request.regex != search.regex {
+            request.regex = search.regex;
+            request.id += 1;
+            history.request(request.clone());
+        }
         let ui_font_select = cx.new(|cx| {
             SelectState::new(
                 SearchableVec::new(vec![SharedString::from(preferences.ui_font.clone())]),
@@ -280,17 +287,7 @@ impl HistoryWindow {
                         .timer(Duration::from_millis(120))
                         .await;
                     let _ = this.update(cx, |this, cx| {
-                        this.request.query = query;
-                        this.request.range = 0..128;
-                        this.pending_selection = None;
-                        this.preserve_filter_selection = this.local_selection.is_none();
-                        if let Some(restore) = &mut this.request.restore {
-                            restore.top = None;
-                        }
-                        this.detail = "Filtering commits…".into();
-                        this.submit();
-                        this.scroll.scroll_to_item(0, ScrollStrategy::Top);
-                        cx.notify();
+                        this.apply_filter(query, cx);
                     });
                 }));
             }
@@ -395,6 +392,39 @@ impl HistoryWindow {
             ),
             graph_resize: None,
         }
+    }
+
+    fn apply_filter(&mut self, query: String, cx: &mut Context<Self>) {
+        self.request.query = query;
+        self.request.range = 0..128;
+        self.pending_selection = None;
+        self.preserve_filter_selection = self.local_selection.is_none();
+        if let Some(restore) = &mut self.request.restore {
+            restore.top = None;
+        }
+        self.detail = "Filtering commits…".into();
+        self.submit();
+        self.scroll.scroll_to_item(0, ScrollStrategy::Top);
+        cx.notify();
+    }
+
+    fn set_search_regex(&mut self, regex: bool, cx: &mut Context<Self>) {
+        self.filter_task = None;
+        self.request.regex = regex;
+        self.layout_handle
+            .save_search(gitk_rs::diff::options::Search { regex });
+        self.apply_filter(self.filter.read(cx).value().to_string(), cx);
+    }
+
+    fn query_error(&self, cx: &App) -> Option<&str> {
+        self.snapshot
+            .as_ref()
+            .filter(|snapshot| {
+                snapshot.request_id == self.request.id
+                    && snapshot.generation == self.request.generation
+                    && self.request.query.trim() == self.filter.read(cx).value().trim()
+            })
+            .and_then(|snapshot| snapshot.query_error.as_deref())
     }
 
     fn submit(&mut self) {
@@ -1377,6 +1407,11 @@ impl Render for HistoryWindow {
                 div().flex().items_center().gap_2()
                     .child("Filter:")
                     .child(div().flex_1().key_context("HistoryFilter").child(Input::new(&self.filter).cleanable(true)))
+                    .child(Checkbox::new("search-regex")
+                        .label("Regex")
+                        .tooltip("Use regular expressions for text and path filters. Turn off for literal search.")
+                        .checked(self.request.regex)
+                        .on_click(cx.listener(|this, checked: &bool, _, cx| this.set_search_regex(*checked, cx))))
                     .child(
                         Button::new("application-menu")
                             .label("Menu")
@@ -1406,7 +1441,7 @@ impl Render for HistoryWindow {
                             })
                     )
             )
-            .children(search_feedback(self.filter.read(cx).value().as_ref(), palette))
+            .children(search_feedback(self.filter.read(cx).value().as_ref(), self.request.regex, self.query_error(cx), palette))
             .child(
                 div().flex_1().min_h_0().child(
                     v_resizable("main-split")
@@ -1708,6 +1743,7 @@ pub fn run(mut config: Config, preferences: Preferences, launched: Instant) {
         repository: config.repository.clone(),
         range: 0..128,
         query: String::new(),
+        regex: false,
         batch: config.batch,
         graph_columns: config.graph_columns,
         anchor: None,
@@ -1803,10 +1839,20 @@ pub fn run(mut config: Config, preferences: Preferences, launched: Instant) {
     drop(workspace_engine);
 }
 
-/// Feedback uses the same parser as history; a badge only appears for a valid query.
-fn search_feedback(value: &str, palette: &Palette) -> Option<AnyElement> {
+/// Parsing stays cheap here; regex compiler errors arrive from the history worker.
+fn search_feedback(
+    value: &str,
+    regex: bool,
+    worker_error: Option<&str>,
+    palette: &Palette,
+) -> Option<AnyElement> {
     let feedback = div().flex().flex_wrap().gap_2().text_size(px(12.));
-    match Query::parse(value) {
+    match Query::parse_with_mode(value, regex).and_then(|query| {
+        if let Some(error) = worker_error {
+            anyhow::bail!("{error}");
+        }
+        Ok(query)
+    }) {
         Err(error) => Some(
             feedback
                 .child(

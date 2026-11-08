@@ -83,6 +83,7 @@ fn history_request(fixture: &Fixture) -> Request {
         repository: fixture.root().into(),
         range: 0..8,
         query: String::new(),
+        regex: false,
         batch: Some(7),
         graph_columns: 200,
         anchor: None,
@@ -481,4 +482,71 @@ fn path_search_bounds_queues_pauses_resumes_and_replaces_queries() {
     });
     assert!(empty.error.is_none(), "{:?}", empty.error);
     assert_eq!(empty.visible, 0);
+}
+
+#[test]
+fn regex_mode_changes_refilter_retained_history_and_paths() {
+    let fixture = history_fixture_with_paths(6000, true);
+    let mut request = history_request(&fixture);
+    request.batch = None;
+    request.query = r"path:^ci\.yml$ author:^Fixture$".into();
+    let engine = HistoryEngine::spawn(request.clone());
+    let handle = engine.handle();
+    let literal = wait(|| {
+        handle
+            .take_snapshot()
+            .filter(|s| s.error.is_some() || s.eof)
+    });
+    assert!(literal.error.is_none(), "{:?}", literal.error);
+    assert_eq!((literal.loaded, literal.visible), (6000, 0));
+    request.id += 1;
+    request.regex = true;
+    handle.request(request.clone());
+    let regex = wait(|| {
+        handle
+            .take_snapshot()
+            .filter(|s| s.request_id == request.id && (s.error.is_some() || s.eof && !s.filtering))
+    });
+    assert!(regex.error.is_none(), "{:?}", regex.error);
+    assert_eq!((regex.loaded, regex.visible), (6000, 6000));
+    let retained = regex.rows[0].clone();
+    request.id += 1;
+    request.regex = false;
+    handle.request(request.clone());
+    let literal = wait(|| {
+        handle
+            .take_snapshot()
+            .filter(|s| s.request_id == request.id && (s.error.is_some() || s.eof && !s.filtering))
+    });
+    assert!(literal.error.is_none(), "{:?}", literal.error);
+    assert_eq!((literal.loaded, literal.visible), (6000, 0));
+    request.id += 1;
+    request.regex = true;
+    handle.request(request.clone());
+    request.id += 1;
+    request.query = "message:[".into();
+    handle.request(request.clone());
+    let invalid = wait(|| {
+        handle
+            .take_snapshot()
+            .filter(|s| s.request_id == request.id && s.query_error.is_some())
+    });
+    assert!(
+        invalid
+            .query_error
+            .unwrap()
+            .contains("Invalid regular expression")
+    );
+    request.id += 1;
+    request.regex = false;
+    request.query = r#"message:"commit 6000""#.into();
+    handle.request(request.clone());
+    let recovered = wait(|| {
+        handle
+            .take_snapshot()
+            .filter(|s| s.request_id == request.id && s.eof && !s.filtering)
+    });
+    assert!(recovered.error.is_none(), "{:?}", recovered.error);
+    assert_eq!(recovered.visible, 1);
+    assert!(Arc::ptr_eq(&retained, &recovered.rows[0]));
 }

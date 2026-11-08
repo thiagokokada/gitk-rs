@@ -47,6 +47,7 @@ fn open_with_state<'a>(
         repository: config.repository.clone(),
         range: 0..128,
         query: String::new(),
+        regex: false,
         batch: config.batch,
         graph_columns: config.graph_columns,
         anchor: None,
@@ -2260,4 +2261,111 @@ fn metadata_search_shows_badges_errors_and_recovers(cx: &mut TestAppContext) {
             );
         }
     });
+}
+
+#[gpui_kit::test]
+fn regex_toggle_refilters_reports_errors_and_restores_saved_state(cx: &mut TestAppContext) {
+    use gitk_rs::diff::options::{self, Layout, State};
+    let settings = tempfile::tempdir().unwrap();
+    let path = settings.path().join("state.toml");
+    options::save_state_to(
+        State {
+            layout: Layout {
+                graph_width: 300.,
+                ..Default::default()
+            },
+            diff: gitk_rs::diff::DiffOptions {
+                context: 7,
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        &path,
+    )
+    .unwrap();
+    let fixture = Fixture::new();
+    fixture.commit("fix all");
+    fixture.commit("fix.*");
+    {
+        let (app, cx) = open_with_state(&fixture, None, Some(path.clone()), cx);
+        until(cx, |cx| {
+            cx.update(|_, cx| app.view.read(cx).snapshot.as_ref().is_some_and(|s| s.eof))
+        });
+        assert!(!cx.update(|_, cx| app.view.read(cx).request.regex));
+        cx.simulate_keystrokes("/");
+        cx.simulate_input("message:fix.*");
+        until(cx, |cx| {
+            cx.update(|_, cx| {
+                app.view
+                    .read(cx)
+                    .snapshot
+                    .as_ref()
+                    .is_some_and(|s| s.visible == 1 && !s.filtering)
+            })
+        });
+        let toggle = cx.update(|window, _| window.find("search-regex").bounds().center());
+        cx.simulate_click(toggle, gpui_kit::Modifiers::default());
+        until(cx, |cx| {
+            cx.update(|_, cx| {
+                let view = app.view.read(cx);
+                view.request.regex
+                    && view.snapshot.as_ref().is_some_and(|s| {
+                        s.request_id == view.request.id && s.visible == 2 && !s.filtering
+                    })
+            })
+        });
+        cx.simulate_keystrokes("/ ctrl-a ctrl-k");
+        cx.simulate_input("message:[");
+        until(cx, |cx| {
+            cx.update(|window, cx| {
+                window.try_find("search-error").is_some()
+                    && app.view.read(cx).snapshot.as_ref().is_some_and(|s| {
+                        s.query_error
+                            .as_deref()
+                            .is_some_and(|error| error.contains("Invalid regular expression"))
+                    })
+            })
+        });
+        let toggle = cx.update(|window, _| window.find("search-regex").bounds().center());
+        cx.simulate_click(toggle, gpui_kit::Modifiers::default());
+        assert!(cx.update(|_, cx| app.view.read(cx).query_error(cx).is_none()));
+        until(cx, |cx| {
+            cx.update(|window, cx| {
+                let view = app.view.read(cx);
+                window.try_find("search-error").is_none()
+                    && view.snapshot.as_ref().is_some_and(|s| {
+                        s.request_id == view.request.id && s.error.is_none() && s.visible == 0
+                    })
+            })
+        });
+        cx.simulate_keystrokes("/ ctrl-a ctrl-k");
+        cx.simulate_input("author:Fixture");
+        let toggle = cx.update(|window, _| window.find("search-regex").bounds().center());
+        cx.simulate_click(toggle, gpui_kit::Modifiers::default());
+        until(cx, |cx| {
+            cx.update(|_, cx| {
+                let view = app.view.read(cx);
+                view.request.regex
+                    && view.snapshot.as_ref().is_some_and(|s| {
+                        s.request_id == view.request.id && s.error.is_none() && s.visible == 2
+                    })
+            })
+        });
+    }
+    let saved = options::load_state_from(&path).unwrap();
+    assert!(saved.search.regex);
+    assert_eq!(saved.diff.context, 7);
+    assert_eq!(saved.layout.graph_width, 300.);
+    assert!(!settings.path().join("preferences.toml").exists());
+    {
+        let (app, cx) = open_with_state(&fixture, None, Some(path.clone()), cx);
+        until(cx, |cx| {
+            cx.update(|_, cx| app.view.read(cx).snapshot.as_ref().is_some_and(|s| s.eof))
+        });
+        assert!(cx.update(|_, cx| app.view.read(cx).request.regex));
+        let toggle = cx.update(|window, _| window.find("search-regex").bounds().center());
+        cx.simulate_click(toggle, gpui_kit::Modifiers::default());
+        assert!(!cx.update(|_, cx| app.view.read(cx).request.regex));
+    }
+    assert!(!options::load_state_from(&path).unwrap().search.regex);
 }

@@ -140,7 +140,6 @@ impl Commit {
             "{} {} {} {}",
             self.id, self.author.name, self.author.email, self.message
         )
-        .to_lowercase()
     }
 
     pub fn memory_bytes(&self) -> usize {
