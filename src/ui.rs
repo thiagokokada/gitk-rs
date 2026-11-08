@@ -740,16 +740,7 @@ impl HistoryWindow {
     fn select(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         self.focus.focus(window, cx);
         if let Some(staged) = self.local_rows.get(index).copied() {
-            self.selected = None;
-            self.local_selection = Some(staged);
-            self.pending_selection = None;
-            let revision = self
-                .workspace_snapshot
-                .as_ref()
-                .map_or(0, |s| s.status_fingerprint);
-            self.diff.update(cx, |diff, cx| {
-                diff.load_local(self.config.repository.clone(), staged, revision, cx)
-            });
+            self.select_local(staged, cx);
         } else if let Some(entry) = self.cached(index) {
             self.set_selection(index, entry, cx);
         } else {
