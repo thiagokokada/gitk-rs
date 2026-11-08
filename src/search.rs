@@ -52,10 +52,10 @@ impl Qualifier {
 
     pub const fn help_description(self) -> &'static str {
         match self {
-            Self::Author => "Author name or email; Regex enables patterns such as Alice|Bob",
-            Self::Committer => "Committer name or email; Regex enables patterns such as Alice|Bob",
-            Self::Message => "Commit message substring; with Regex, use ^fix to match its start",
-            Self::Hash => "Commit hash substring; with Regex, use ^a1b2 to match its start",
+            Self::Author => "Author name or email",
+            Self::Committer => "Committer name or email",
+            Self::Message => "Commit message substring",
+            Self::Hash => "Commit hash substring",
             Self::Path => "Changed path substring or regex; merges compare with their first parent",
             Self::Before => "Author's recorded calendar day strictly before this date",
             Self::After => "Author's recorded calendar day strictly after this date",
