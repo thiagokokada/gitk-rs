@@ -33,6 +33,10 @@
           };
         }
         // pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+          update-screenshot = import ./update-screenshot.nix {
+            inherit pkgs;
+            gitk-rs = self.packages.${system}.gitk-rs;
+          };
           gui-smoke = import ./gui-smoke.nix {
             inherit pkgs;
             gitk-rs = self.packages.${system}.gitk-rs;

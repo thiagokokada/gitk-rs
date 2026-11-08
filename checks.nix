@@ -29,6 +29,7 @@
         ruff check scripts
         ruff format --check scripts
         python scripts/gui_smoke.py --help > /dev/null
+        python scripts/update_screenshot.py --help > /dev/null
         python -B -m unittest discover -s scripts -v
         touch $out
       '';

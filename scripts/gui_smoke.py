@@ -175,9 +175,6 @@ def exercise_workflows(
 
 
 def exercise_preferences(ui: Window, config: Path) -> None:
-    ui.keys("alt+r")
-    time.sleep(0.2)
-    ui.shot("watch-disabled")
     ui.keys("ctrl+comma")
     time.sleep(0.2)
     ui.shot("preferences")

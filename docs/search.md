@@ -30,7 +30,7 @@ Unqualified text searches the hash, author name/email, and full message as one
 contiguous phrase, preserving the original plain-text filter behavior. By default,
 all text and path metacharacters are literal.
 
-Enable **Regex** next to the filter box, or press **Alt+X**, to interpret text
+Enable **Regex** next to the filter box, or press **Alt+R**, to interpret text
 and path values as regular expressions. The shortcut also works while typing
 in the filter box. For example:
 

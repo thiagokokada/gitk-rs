@@ -607,33 +607,38 @@ fn graph_column_can_be_resized_without_changing_selection(cx: &mut TestAppContex
 }
 
 #[gpui_kit::test]
-fn auto_reload_shortcut_toggles_watching_and_refreshes_history(cx: &mut TestAppContext) {
+fn preferences_toggle_watching_and_refresh_history(cx: &mut TestAppContext) {
+    let settings = tempfile::tempdir().unwrap();
     let fixture = Fixture::new();
     let head = fixture.commit("base");
     let (app, cx) = open(&fixture, cx);
+    app.view.update(cx, |view, _| {
+        view.preferences_path = Some(settings.path().join("preferences.toml"));
+    });
     until(cx, |cx| {
         selected(&app.view, cx).as_deref() == Some(head.as_str())
     });
-    assert!(!cx.update(|_, cx| app.view.read(cx).config.watch));
-    assert!(cx.update(|window, _| window.try_find("reload").is_none()));
-    cx.simulate_keystrokes("alt-r");
-    assert!(cx.update(|_, cx| app.view.read(cx).config.watch));
-    until(cx, |cx| {
-        cx.update(|_, cx| app.view.read(cx).reload_selection.is_none())
-    });
-    std::fs::write(fixture.root().join("file.txt"), "changed").unwrap();
-    until(cx, |cx| {
-        cx.update(|_, cx| !app.view.read(cx).local_rows.is_empty())
-    });
-    assert!(cx.update(|window, _| window.try_find("reload").is_none()));
-    cx.simulate_keystrokes("alt-r");
-    assert!(!cx.update(|_, cx| app.view.read(cx).config.watch));
-    until(cx, |cx| {
-        cx.update(|_, cx| app.view.read(cx).reload_selection.is_none())
-    });
-    assert_eq!(selected(&app.view, cx).as_deref(), Some(head.as_str()));
-    cx.simulate_keystrokes("alt-r");
-    assert!(cx.update(|_, cx| app.view.read(cx).config.watch));
+    for enabled in [true, false, true] {
+        cx.simulate_keystrokes("ctrl-,");
+        scroll_preferences_to("watch-setting", cx);
+        cx.update(|window, cx| window.click("watch-setting", cx));
+        cx.update(|window, cx| window.click("apply-preferences", cx));
+        until(cx, |cx| {
+            cx.update(|_, cx| {
+                let view = app.view.read(cx);
+                view.config.watch == enabled
+                    && !view.preferences_save_pending
+                    && view.reload_selection.is_none()
+            })
+        });
+        assert_eq!(selected(&app.view, cx).as_deref(), Some(head.as_str()));
+        if enabled {
+            std::fs::write(fixture.root().join("file.txt"), "changed").unwrap();
+            until(cx, |cx| {
+                cx.update(|_, cx| !app.view.read(cx).local_rows.is_empty())
+            });
+        }
+    }
 }
 
 #[gpui_kit::test]
@@ -2303,7 +2308,8 @@ fn regex_toggle_refilters_reports_errors_and_restores_saved_state(cx: &mut TestA
                     .is_some_and(|s| s.visible == 1 && !s.filtering)
             })
         });
-        cx.simulate_keystrokes("alt-x");
+        cx.simulate_keystrokes("alt-r");
+        assert!(!cx.update(|_, cx| app.view.read(cx).config.watch));
         assert!(cx.update(|window, cx| {
             app.view
                 .read(cx)
@@ -2321,7 +2327,7 @@ fn regex_toggle_refilters_reports_errors_and_restores_saved_state(cx: &mut TestA
                     })
             })
         });
-        cx.simulate_keystrokes("f1 alt-x");
+        cx.simulate_keystrokes("f1 alt-r");
         assert!(cx.update(|_, cx| app.view.read(cx).request.regex));
         cx.simulate_keystrokes("escape / ctrl-a ctrl-k");
         cx.simulate_input("message:[");
@@ -2349,7 +2355,7 @@ fn regex_toggle_refilters_reports_errors_and_restores_saved_state(cx: &mut TestA
         });
         cx.simulate_keystrokes("/ ctrl-a ctrl-k");
         cx.simulate_input("author:Fixture");
-        cx.simulate_keystrokes("escape alt-x");
+        cx.simulate_keystrokes("escape alt-r");
         until(cx, |cx| {
             cx.update(|_, cx| {
                 let view = app.view.read(cx);

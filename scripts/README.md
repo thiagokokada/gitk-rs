@@ -51,3 +51,20 @@ nix develop --command ruff format --check scripts
 nix develop --command ruff check scripts
 nix develop --command python -B -m unittest discover -s scripts -v
 ```
+
+To refresh the README screenshot from a clean nixpkgs checkout on X11/XWayland,
+run from the project root:
+
+```sh
+nix run .#update-screenshot -- ~/Projects/nixpkgs
+```
+
+The script loads all commits before applying a regex query with metadata filters,
+selects a matching commit, and captures a line diff. Dates are relative to HEAD.
+It uses isolated preferences and leaves the repository unchanged. Avoid changing
+window focus during capture. Logs, configuration, and capture metadata remain in
+the printed `/tmp` directory; `screenshot.png` is replaced only after success.
+Use `nix run .#update-screenshot -- --help` to customize the query, selected row,
+output path, size, or timeout. The wrapper supplies the application and capture
+tools; running `python scripts/update_screenshot.py --help` also documents how to
+use an existing binary.

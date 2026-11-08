@@ -107,6 +107,7 @@ pub(super) struct DiffPane {
     handle: DiffHandle,
     focus: FocusHandle,
     settings: DiffSettings,
+    verbose: bool,
     font: SharedString,
     font_size: f32,
     identity: Option<DiffIdentity>,
@@ -125,7 +126,12 @@ pub(super) struct DiffPane {
 }
 
 impl DiffPane {
-    pub(super) fn new(handle: DiffHandle, settings: DiffSettings, cx: &mut Context<Self>) -> Self {
+    pub(super) fn new(
+        handle: DiffHandle,
+        settings: DiffSettings,
+        verbose: bool,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let options = handle.initial_options();
         let layout = handle.initial_layout();
         let poll = cx.spawn(async |this, cx| {
@@ -139,6 +145,16 @@ impl DiffPane {
                             && snapshot.selection == this.page.selection
                             && snapshot.request == this.page.id
                         {
+                            if this.verbose {
+                                let commit = match &this.current {
+                                    Some(selection) => match &selection.source {
+                                        DiffSource::Commit(commit) => commit.id.to_hex(),
+                                        _ => "local".into(),
+                                    },
+                                    None => "local".into(),
+                                };
+                                eprintln!("gitk-rs: diff commit={} selection={} request={} highlighting={} error={}", commit, snapshot.selection.0, snapshot.request, snapshot.highlighting, snapshot.error.is_some());
+                            }
                             this.message = snapshot
                                 .error
                                 .clone()
@@ -191,6 +207,7 @@ impl DiffPane {
             handle,
             focus: cx.focus_handle(),
             settings,
+            verbose,
             font: fixed_font().into(),
             font_size: 13.,
             identity: None,

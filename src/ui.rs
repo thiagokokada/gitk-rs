@@ -60,7 +60,6 @@ actions!(
         BlurFilter,
         HistoryPageUp,
         HistoryPageDown,
-        ToggleWatch,
         ToggleRegex,
         OpenRepository,
         OpenRepositoryPath,
@@ -318,6 +317,7 @@ impl HistoryWindow {
                     syntax: config.syntax,
                     dark: config.theme == Theme::Dark,
                 },
+                config.verbose,
                 cx,
             )
         });
@@ -449,8 +449,17 @@ impl HistoryWindow {
         }
         if self.config.verbose {
             eprintln!(
-                "gitk-rs: history generation={} branch={} loaded={} visible={}",
-                snapshot.generation.0, snapshot.branch, snapshot.loaded, snapshot.visible
+                "gitk-rs: history generation={} branch={} loaded={} visible={} request={} eof={} filtering={} regex={} query_bytes={} error={}",
+                snapshot.generation.0,
+                snapshot.branch,
+                snapshot.loaded,
+                snapshot.visible,
+                snapshot.request_id,
+                snapshot.eof,
+                snapshot.filtering,
+                self.request.regex,
+                self.request.query.len(),
+                snapshot.error.is_some()
             );
         }
         if let Some(error) = &snapshot.error {
@@ -711,9 +720,10 @@ impl HistoryWindow {
     fn set_selection(&mut self, index: usize, entry: Arc<Entry>, cx: &mut Context<Self>) {
         if self.config.verbose {
             eprintln!(
-                "gitk-rs: selection generation={} commit={}",
+                "gitk-rs: selection generation={} commit={} row={}",
                 self.request.generation.0,
-                entry.commit.id.to_hex()
+                entry.commit.id.to_hex(),
+                index.saturating_sub(self.local_rows.len())
             );
         }
         self.diff.update(cx, |diff, cx| {
@@ -816,11 +826,6 @@ impl HistoryWindow {
         self.submit();
         self.refresh_workspace();
         cx.notify();
-    }
-
-    fn toggle_auto_reload(&mut self, cx: &mut Context<Self>) {
-        self.config.watch = !self.config.watch;
-        self.reload(cx);
     }
 
     fn status_text(&self) -> String {
@@ -1317,9 +1322,6 @@ impl Render for HistoryWindow {
             .on_action(cx.listener(|this, _: &ToggleRegex, _, cx| {
                 this.set_search_regex(!this.request.regex, cx);
             }))
-            .on_action(cx.listener(|this, _: &ToggleWatch, _, cx| {
-                this.toggle_auto_reload(cx);
-            }))
             .on_action(cx.listener(|this, _: &OpenRepository, _, cx| this.open_repository(cx)))
             .on_action(cx.listener(|this, _: &OpenRepositoryPath, window, cx| {
                 this.open_repository_path(window, cx)
@@ -1412,8 +1414,8 @@ impl Render for HistoryWindow {
                     .child("Filter:")
                     .child(div().flex_1().key_context("HistoryFilter").child(Input::new(&self.filter).cleanable(true)))
                     .child(Checkbox::new("search-regex")
-                        .label("Regex (Alt+X)")
-                        .tooltip("Toggle regex with Alt+X. Turn off for literal text and path searches.")
+                        .label("Regex (Alt+R)")
+                        .tooltip("Toggle regex with Alt+R. Turn off for literal text and path searches.")
                         .checked(self.request.regex)
                         .on_click(cx.listener(|this, checked: &bool, _, cx| this.set_search_regex(*checked, cx))))
                     .child(
@@ -1421,18 +1423,12 @@ impl Render for HistoryWindow {
                             .label("Menu")
                             .dropdown_menu({
                                 let focus = self.focus.clone();
-                                let watch = self.config.watch;
                                 let light = self.config.theme == Theme::Light;
                                 move |menu, _, _| {
                                     menu.action_context(focus.clone())
                                         .menu("Open repository…", Box::new(OpenRepository))
                                         .menu("Switch local branch…", Box::new(OpenBranches))
                                         .menu("Reload", Box::new(Reload))
-                                        .menu_with_check(
-                                            "Automatic reload",
-                                            watch,
-                                            Box::new(ToggleWatch),
-                                        )
                                         .separator()
                                         .menu("Copy commit reference", Box::new(CopyCommit))
                                         .menu("Preferences…", Box::new(OpenPreferences))
@@ -1606,12 +1602,7 @@ fn bind_keys(cx: &mut App) {
             ToggleTheme,
             Some("GitHistory && !Input && !Dialog"),
         ),
-        KeyBinding::new("alt-x", ToggleRegex, Some("GitHistory && !Dialog")),
-        KeyBinding::new(
-            "alt-r",
-            ToggleWatch,
-            Some("GitHistory && !Input && !Dialog"),
-        ),
+        KeyBinding::new("alt-r", ToggleRegex, Some("GitHistory && !Dialog")),
         KeyBinding::new(
             "ctrl-a",
             gpui_kit::component::input::MoveHome,
