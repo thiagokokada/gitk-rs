@@ -100,7 +100,10 @@ impl HistoryWindow {
             self.operation_id,
             Operation::Branches,
         ) {
-            self.pending_operation = Some((self.operation_id, false));
+            self.pending_operation = Some(PendingOperation {
+                id: self.operation_id,
+                kind: PendingOperationKind::ListBranches,
+            });
         } else {
             self.operation_message = "a repository operation is already pending".into();
         }
@@ -128,7 +131,10 @@ impl HistoryWindow {
             self.operation_id,
             Operation::Switch(branch),
         ) {
-            self.pending_operation = Some((self.operation_id, true));
+            self.pending_operation = Some(PendingOperation {
+                id: self.operation_id,
+                kind: PendingOperationKind::SwitchBranch,
+            });
         }
         cx.notify();
     }

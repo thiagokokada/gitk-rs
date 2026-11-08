@@ -2,6 +2,7 @@
 mod tests;
 
 use super::{
+    LocalChangeKind,
     colors::{self, Palette},
     fixed_font,
 };
@@ -95,7 +96,7 @@ impl UniformListDecoration for DiffViewport {
 #[derive(PartialEq, Eq)]
 enum DiffIdentity {
     Commit(PathBuf, gitk_rs::git::CommitId),
-    Local(PathBuf, bool, u64),
+    Local(PathBuf, LocalChangeKind, u64),
 }
 
 pub(super) struct DiffPane {
@@ -281,14 +282,16 @@ impl DiffPane {
     pub(super) fn load_local(
         &mut self,
         repository: PathBuf,
-        staged: bool,
+        kind: LocalChangeKind,
         revision: u64,
         cx: &mut Context<Self>,
     ) {
-        let identity = DiffIdentity::Local(repository.clone(), staged, revision);
+        let identity = DiffIdentity::Local(repository.clone(), kind, revision);
         self.load_source(
             repository,
-            DiffSource::Local { staged },
+            DiffSource::Local {
+                staged: kind == LocalChangeKind::Staged,
+            },
             identity,
             "Loading local changes…",
             cx,

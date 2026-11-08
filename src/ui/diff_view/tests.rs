@@ -1,3 +1,4 @@
+use crate::ui::LocalChangeKind;
 use crate::ui::tests::{Fixture, open, selected, until};
 use gpui_kit::{AppContext, Modifiers, TestAppContext, point, px, test::TestWindowExt};
 
@@ -70,7 +71,9 @@ fn removing_the_selected_local_row_returns_to_a_commit(cx: &mut TestAppContext) 
         cx.update(|_, cx| !app.view.read(cx).local_rows.is_empty())
     });
     cx.simulate_keystrokes("home");
-    assert!(cx.update(|_, cx| app.view.read(cx).local_selection == Some(false)));
+    assert!(
+        cx.update(|_, cx| app.view.read(cx).local_selection == Some(LocalChangeKind::Unstaged))
+    );
     std::fs::write(fixture.root().join("file.txt"), "base").unwrap();
     app.view.update(cx, |view, _| view.refresh_workspace());
     until(cx, |cx| {
@@ -271,7 +274,8 @@ fn staged_and_unstaged_diff_pages_settle_after_scrolling(cx: &mut TestAppContext
     until(cx, |cx| {
         cx.update(|_, cx| {
             let view = app.view.read(cx);
-            view.local_rows == [false, true] && view.selected.is_some()
+            view.local_rows == [LocalChangeKind::Unstaged, LocalChangeKind::Staged]
+                && view.selected.is_some()
         })
     });
     for keys in ["home", "j"] {

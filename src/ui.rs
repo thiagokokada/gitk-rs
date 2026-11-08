@@ -121,6 +121,22 @@ enum DialogKind {
     OpenRepository,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LocalChangeKind {
+    Unstaged,
+    Staged,
+}
+
+enum PendingOperationKind {
+    ListBranches,
+    SwitchBranch,
+}
+
+struct PendingOperation {
+    id: u64,
+    kind: PendingOperationKind,
+}
+
 struct HistoryWindow {
     title: String,
     config: Config,
@@ -145,8 +161,8 @@ struct HistoryWindow {
     workspace: WorkspaceHandle,
     workspace_generation: WorkspaceGeneration,
     workspace_snapshot: Option<WorkspaceSnapshot>,
-    local_rows: Vec<bool>,
-    local_selection: Option<bool>,
+    local_rows: Vec<LocalChangeKind>,
+    local_selection: Option<LocalChangeKind>,
     dialog: Option<DialogKind>,
     dialog_focus: FocusHandle,
     restore_focus: bool,
@@ -162,7 +178,7 @@ struct HistoryWindow {
     branch_scroll: UniformListScrollHandle,
     help_scroll: ScrollHandle,
     operation_id: u64,
-    pending_operation: Option<(u64, bool)>,
+    pending_operation: Option<PendingOperation>,
     operation_message: String,
     request: Request,
     snapshot: Option<Snapshot>,
@@ -533,12 +549,12 @@ impl HistoryWindow {
                 self.preserve_filter_selection = false;
             }
         }
-        if let Some(staged) = self
+        if let Some(kind) = self
             .pending_selection
             .and_then(|i| self.local_rows.get(i))
             .copied()
         {
-            self.select_local(staged, cx);
+            self.select_local(kind, cx);
         }
         if let Some(index) = self.pending_selection
             && let Some(entry) = self.cached(index)
@@ -560,17 +576,20 @@ impl HistoryWindow {
     fn consume_workspace(&mut self, cx: &mut Context<Self>) {
         if let Some(result) = self.workspace.take_result()
             && result.generation == self.workspace_generation
-            && self.pending_operation.is_some_and(|p| p.0 == result.id)
+            && self
+                .pending_operation
+                .as_ref()
+                .is_some_and(|p| p.id == result.id)
         {
-            let switching = self.pending_operation.take().unwrap().1;
-            match result.result {
-                Ok(branches) if !switching => {
+            let operation = self.pending_operation.take().unwrap();
+            match (operation.kind, result.result) {
+                (PendingOperationKind::ListBranches, Ok(branches)) => {
                     self.branches = branches;
                     self.filter_branches(cx);
                     self.branch_index = 0;
                     self.operation_message.clear();
                 }
-                Ok(_) => {
+                (PendingOperationKind::SwitchBranch, Ok(_)) => {
                     self.dialog = None;
                     self.restore_focus = true;
                     self.operation_message = "branch switched".into();
@@ -579,7 +598,7 @@ impl HistoryWindow {
                     self.workspace_snapshot = None;
                     self.reload(cx);
                 }
-                Err(error) => self.operation_message = error,
+                (_, Err(error)) => self.operation_message = error,
             }
             cx.notify();
         }
@@ -606,10 +625,10 @@ impl HistoryWindow {
         let old_top = self.viewport.start;
         self.local_rows.clear();
         if snapshot.status.unstaged {
-            self.local_rows.push(false);
+            self.local_rows.push(LocalChangeKind::Unstaged);
         }
         if snapshot.status.staged {
-            self.local_rows.push(true);
+            self.local_rows.push(LocalChangeKind::Staged);
         }
         if let Some((index, _)) = &mut self.selected {
             *index = index.saturating_sub(old_count) + self.local_rows.len();
@@ -624,12 +643,12 @@ impl HistoryWindow {
             self.viewport = top..top.saturating_add(self.viewport.len());
             self.scroll.scroll_to_item_strict(top, ScrollStrategy::Top);
         }
-        if let Some(staged) = self.local_selection {
-            if self.local_rows.contains(&staged) {
+        if let Some(kind) = self.local_selection {
+            if self.local_rows.contains(&kind) {
                 self.diff.update(cx, |diff, cx| {
                     diff.load_local(
                         self.config.repository.clone(),
-                        staged,
+                        kind,
                         snapshot.status_fingerprint,
                         cx,
                     )
@@ -661,16 +680,16 @@ impl HistoryWindow {
         cx.notify();
     }
 
-    fn select_local(&mut self, staged: bool, cx: &mut Context<Self>) {
+    fn select_local(&mut self, kind: LocalChangeKind, cx: &mut Context<Self>) {
         self.selected = None;
-        self.local_selection = Some(staged);
+        self.local_selection = Some(kind);
         self.pending_selection = None;
         let revision = self
             .workspace_snapshot
             .as_ref()
             .map_or(0, |s| s.status_fingerprint);
         self.diff.update(cx, |diff, cx| {
-            diff.load_local(self.config.repository.clone(), staged, revision, cx)
+            diff.load_local(self.config.repository.clone(), kind, revision, cx)
         });
     }
 
@@ -739,8 +758,8 @@ impl HistoryWindow {
 
     fn select(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         self.focus.focus(window, cx);
-        if let Some(staged) = self.local_rows.get(index).copied() {
-            self.select_local(staged, cx);
+        if let Some(kind) = self.local_rows.get(index).copied() {
+            self.select_local(kind, cx);
         } else if let Some(entry) = self.cached(index) {
             self.set_selection(index, entry, cx);
         } else {
@@ -775,7 +794,7 @@ impl HistoryWindow {
             .or_else(|| self.selected.as_ref().map(|s| s.0))
             .or_else(|| {
                 self.local_selection
-                    .and_then(|staged| self.local_rows.iter().position(|s| *s == staged))
+                    .and_then(|kind| self.local_rows.iter().position(|row| *row == kind))
             })
             .unwrap_or(0)
             .saturating_add_signed(delta)
@@ -870,8 +889,8 @@ impl HistoryWindow {
 
     fn row(&mut self, index: usize, cx: &mut Context<Self>) -> AnyElement {
         let palette = Palette::for_theme(self.config.theme);
-        if let Some(staged) = self.local_rows.get(index).copied() {
-            let selected = self.local_selection == Some(staged);
+        if let Some(kind) = self.local_rows.get(index).copied() {
+            let selected = self.local_selection == Some(kind);
             let unmerged = self
                 .workspace_snapshot
                 .as_ref()
@@ -885,14 +904,14 @@ impl HistoryWindow {
                 .px_2()
                 .bg(rgb(if selected {
                     palette.selection
-                } else if staged {
+                } else if kind == LocalChangeKind::Staged {
                     palette.staged
                 } else {
                     palette.unstaged
                 }))
                 .text_color(rgb(palette.local_foreground))
                 .cursor_pointer()
-                .child(if staged {
+                .child(if kind == LocalChangeKind::Staged {
                     "●  Local changes checked into index but not committed"
                 } else if unmerged {
                     "●  Unstaged changes (merge conflicts)"
