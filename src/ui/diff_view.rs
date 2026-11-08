@@ -269,19 +269,13 @@ impl DiffPane {
         cx: &mut Context<Self>,
     ) {
         let identity = DiffIdentity::Commit(repository.clone(), commit.id.clone());
-        if self.identity.as_ref() == Some(&identity) {
-            return;
-        }
-        self.clear("Loading diff…", cx);
-        self.identity = Some(identity);
-        let selection = DiffSelection {
-            options: self.options,
-            id: self.page.selection,
+        self.load_source(
             repository,
-            source: DiffSource::Commit(commit),
-        };
-        self.current = Some(selection.clone());
-        self.handle.select(selection, self.page.clone());
+            DiffSource::Commit(commit),
+            identity,
+            "Loading diff…",
+            cx,
+        );
     }
 
     pub(super) fn load_local(
@@ -292,16 +286,33 @@ impl DiffPane {
         cx: &mut Context<Self>,
     ) {
         let identity = DiffIdentity::Local(repository.clone(), staged, revision);
+        self.load_source(
+            repository,
+            DiffSource::Local { staged },
+            identity,
+            "Loading local changes…",
+            cx,
+        );
+    }
+
+    fn load_source(
+        &mut self,
+        repository: PathBuf,
+        source: DiffSource,
+        identity: DiffIdentity,
+        message: &str,
+        cx: &mut Context<Self>,
+    ) {
         if self.identity.as_ref() == Some(&identity) {
             return;
         }
-        self.clear("Loading local changes…", cx);
+        self.clear(message, cx);
         self.identity = Some(identity);
         let selection = DiffSelection {
             options: self.options,
             id: self.page.selection,
             repository,
-            source: DiffSource::Local { staged },
+            source,
         };
         self.current = Some(selection.clone());
         self.handle.select(selection, self.page.clone());
