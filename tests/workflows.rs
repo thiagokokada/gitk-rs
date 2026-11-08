@@ -165,6 +165,10 @@ fn history_selection_highlighting_and_copy_across_unloaded_lines() {
 }
 
 fn history_fixture(count: usize) -> Fixture {
+    history_fixture_with_paths(count, false)
+}
+
+fn history_fixture_with_paths(count: usize, paths: bool) -> Fixture {
     let fixture = Fixture::new();
     // One deterministic fast-import avoids spawning Git once per commit.
     let mut input = String::new();
@@ -177,6 +181,13 @@ fn history_fixture(count: usize) -> Fixture {
         input.push_str(&format!("commit refs/heads/main\nmark :{i}\ncommitter Fixture <fixture@example.test> {} +0000\ndata {}\n{message}\n", 1700000000 + i, message.len()));
         if i > 1 {
             input.push_str(&format!("from :{}\n", i - 1));
+        }
+        if paths {
+            let content = i.to_string();
+            input.push_str(&format!(
+                "M 100644 inline ci.yml\ndata {}\n{content}\n",
+                content.len()
+            ));
         }
         input.push('\n');
     }
@@ -394,4 +405,80 @@ fn opening_a_subdirectory_still_includes_untracked_files_at_the_repository_root(
         paths.contains(&std::path::Path::new("nested/inside.rs")),
         "file paths are not repository-relative"
     );
+}
+
+#[test]
+fn path_search_bounds_queues_pauses_resumes_and_replaces_queries() {
+    let fixture = history_fixture_with_paths(6000, true);
+    let mut request = history_request(&fixture);
+    request.batch = Some(200);
+    request.query = "path:ci.yml author:fixture".into();
+    let engine = HistoryEngine::spawn(request.clone());
+    let handle = engine.handle();
+    let paused = wait(|| {
+        handle
+            .take_snapshot()
+            .filter(|s| s.error.is_some() || s.visible >= 200 && !s.filtering)
+    });
+    assert!(paused.error.is_none(), "{:?}", paused.error);
+    assert!(paused.loaded < 6000);
+    thread::sleep(Duration::from_millis(100));
+    if let Some(snapshot) = handle.take_snapshot() {
+        assert_eq!(snapshot.loaded, paused.loaded);
+    }
+    request.id += 1;
+    // Path checks run asynchronously, so bounded in-flight batches may already
+    // cover a fixed viewport such as row 700. Request the first unloaded row to
+    // require more history regardless of where the initial prefetch paused.
+    let next_position = paused.loaded;
+    request.range = next_position..next_position + 1;
+    handle.request(request.clone());
+    let resumed = wait(|| {
+        handle.take_snapshot().filter(|s| {
+            s.request_id == request.id
+                && (s.error.is_some() || s.visible >= request.range.end && !s.filtering)
+        })
+    });
+    assert!(resumed.error.is_none(), "{:?}", resumed.error);
+    assert!(resumed.loaded > paused.loaded);
+    assert_eq!(resumed.start, next_position);
+    assert_eq!(
+        resumed.rows[0].commit.summary(),
+        format!("commit {}", 6000 - next_position)
+    );
+    request.id += 1;
+    request.batch = None;
+    request.range = 0..8;
+    handle.request(request.clone());
+    let complete = wait(|| {
+        handle
+            .take_snapshot()
+            .filter(|s| s.request_id == request.id && (s.error.is_some() || s.eof))
+    });
+    assert!(complete.error.is_none(), "{:?}", complete.error);
+    assert_eq!((complete.loaded, complete.visible), (6000, 6000));
+    request.id += 1;
+    request.query = "path:missing author:fixture".into();
+    handle.request(request.clone());
+    request.id += 1;
+    request.query = "path:ci.yml message:root-only".into();
+    handle.request(request.clone());
+    let replaced = wait(|| {
+        handle
+            .take_snapshot()
+            .filter(|s| s.request_id == request.id && (s.error.is_some() || s.eof && !s.filtering))
+    });
+    assert!(replaced.error.is_none(), "{:?}", replaced.error);
+    assert_eq!(replaced.visible, 1);
+    assert_eq!(replaced.rows[0].commit.summary(), "root-only needle");
+    request.id += 1;
+    request.query = "path:ci.yml author:nobody".into();
+    handle.request(request.clone());
+    let empty = wait(|| {
+        handle
+            .take_snapshot()
+            .filter(|s| s.request_id == request.id && (s.error.is_some() || s.eof && !s.filtering))
+    });
+    assert!(empty.error.is_none(), "{:?}", empty.error);
+    assert_eq!(empty.visible, 0);
 }

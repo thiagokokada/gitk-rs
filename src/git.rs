@@ -2,12 +2,13 @@
 use anyhow::{Context, Result, bail, ensure};
 use std::{
     ffi::{OsStr, OsString},
-    io::{BufRead, BufReader, Read},
+    io::{BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
     process::{Child, ChildStdout, Command, ExitStatus, Stdio},
     sync::{
         Arc, Condvar, Mutex,
         atomic::{AtomicBool, Ordering},
+        mpsc::{Receiver, RecvTimeoutError},
     },
     thread::{self, JoinHandle},
     time::Duration,
@@ -282,6 +283,7 @@ pub struct GitStream {
     child: Arc<Mutex<Child>>,
     stdout: BufReader<ChildStdout>,
     stderr: Option<JoinHandle<Vec<u8>>>,
+    input: Option<JoinHandle<Result<()>>>,
     killer: Option<JoinHandle<()>>,
     finished: Arc<AtomicBool>,
     cancel: Cancellation,
@@ -296,6 +298,27 @@ impl GitStream {
         cancel: Cancellation,
         allowed: &[i32],
     ) -> Result<Self> {
+        Self::spawn_inner(root, args, cancel, allowed, None)
+    }
+
+    /// Feeds bounded batches of object IDs while stdout and stderr are drained.
+    pub(crate) fn spawn_input<S: AsRef<OsStr>>(
+        root: &Path,
+        args: &[S],
+        cancel: Cancellation,
+        allowed: &[i32],
+        input: Receiver<Vec<CommitId>>,
+    ) -> Result<Self> {
+        Self::spawn_inner(root, args, cancel, allowed, Some(input))
+    }
+
+    fn spawn_inner<S: AsRef<OsStr>>(
+        root: &Path,
+        args: &[S],
+        cancel: Cancellation,
+        allowed: &[i32],
+        input: Option<Receiver<Vec<CommitId>>>,
+    ) -> Result<Self> {
         ensure!(!cancel.load(Ordering::Acquire), "Git operation cancelled");
         let mut command = Command::new("git");
         command
@@ -309,10 +332,17 @@ impl GitStream {
             ])
             .arg(root)
             .args(args)
-            .stdin(Stdio::null())
+            .stdin(if input.is_some() {
+                Stdio::piped()
+            } else {
+                Stdio::null()
+            })
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .env("GIT_OPTIONAL_LOCKS", "0");
+        if input.is_some() {
+            command.env("GIT_FLUSH", "1");
+        }
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;
@@ -333,8 +363,28 @@ impl GitStream {
             }
             captured
         });
-        let child = Arc::new(Mutex::new(child));
         let finished = Arc::new(AtomicBool::new(false));
+        let input = input.map(|receiver| {
+            let mut stdin = std::io::BufWriter::new(child.stdin.take().expect("piped Git stdin"));
+            let cancel = cancel.clone();
+            let finished = finished.clone();
+            thread::spawn(move || -> Result<()> {
+                while !cancel.load(Ordering::Acquire) && !finished.load(Ordering::Acquire) {
+                    match receiver.recv_timeout(Duration::from_millis(10)) {
+                        Ok(ids) => {
+                            for id in ids {
+                                writeln!(stdin, "{id}")?;
+                            }
+                            stdin.flush()?;
+                        }
+                        Err(RecvTimeoutError::Timeout) => (),
+                        Err(RecvTimeoutError::Disconnected) => break,
+                    }
+                }
+                Ok(())
+            })
+        });
+        let child = Arc::new(Mutex::new(child));
         let killer = {
             let child = child.clone();
             let finished = finished.clone();
@@ -350,6 +400,7 @@ impl GitStream {
             child,
             stdout,
             stderr: Some(stderr),
+            input,
             killer: Some(killer),
             finished,
             cancel,
@@ -443,6 +494,11 @@ impl GitStream {
                 String::from_utf8_lossy(&stderr).trim()
             );
         }
+        if let Some(input) = self.input.take() {
+            input
+                .join()
+                .map_err(|_| anyhow::anyhow!("Git input worker panicked"))??;
+        }
         Ok(())
     }
 }
@@ -460,6 +516,9 @@ impl Drop for GitStream {
         }
         if let Some(stderr) = self.stderr.take() {
             let _ = stderr.join();
+        }
+        if let Some(input) = self.input.take() {
+            let _ = input.join();
         }
     }
 }
@@ -678,6 +737,40 @@ mod tests {
         });
         cancel.store(true, Ordering::Release);
         assert!(receiver.recv_timeout(Duration::from_secs(3)).unwrap());
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn cancellation_reaps_a_process_with_backpressured_input_and_output() {
+        let fixture = Fixture::new();
+        let id = CommitId::parse(&fixture.commit("candidate")).unwrap();
+        let cancel = Cancellation::default();
+        let (input, incoming) = std::sync::mpsc::sync_channel(1);
+        let mut stream = GitStream::spawn_input(
+            fixture.root(),
+            &[
+                "diff-tree",
+                "--stdin",
+                "--always",
+                "--root",
+                "-r",
+                "--raw",
+                "-z",
+            ],
+            cancel.clone(),
+            &[0],
+            incoming,
+        )
+        .unwrap();
+        input.send(vec![id; 10000]).unwrap();
+        assert!(stream.record(0).unwrap().is_some());
+        let (done, finished) = std::sync::mpsc::channel();
+        let worker = thread::spawn(move || {
+            drop(stream);
+            done.send(()).unwrap();
+        });
+        cancel.store(true, Ordering::Release);
+        finished.recv_timeout(Duration::from_secs(3)).unwrap();
         worker.join().unwrap();
     }
 

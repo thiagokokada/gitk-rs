@@ -1,0 +1,39 @@
+# Commit search
+
+The filter box combines a text phrase and qualifiers with AND. Text matching
+ignores case. Use double quotes for values containing spaces, for example:
+
+```text
+author:"Alice Smith" path:ci.yml after:2026-01-01
+message:"update dependencies" merge:false
+```
+
+Open Help with F1 or ? for the syntax reference. Recognized qualifiers appear
+as badges below the input. Invalid filters show an explanation there; correct
+the input to resume searching. The status bar reports matching and loaded
+counts and shows `filtering` while results are incomplete. Results arrive
+incrementally; zero matches while filtering is still in progress does not mean
+the search is complete.
+
+| Qualifier | Matches |
+| --- | --- |
+| `author:text` | Author name or email substring |
+| `committer:text` | Committer name or email substring |
+| `message:text` | Full commit message substring |
+| `hash:text` | Commit hash substring |
+| `path:text` | Changed path containing the literal text, including directory components |
+| `before:YYYY-MM-DD` | Author's recorded calendar date strictly before this day |
+| `after:YYYY-MM-DD` | Author's recorded calendar date strictly after this day |
+| `merge:true` / `merge:false` | Commits with multiple parents / other commits |
+
+Unqualified text searches the hash, author name/email, and full message as one
+contiguous phrase, preserving the original plain-text filter behavior. There
+are no regular expressions or wildcard operators; path metacharacters are
+literal.
+
+Path search covers history reachable from the opened HEAD, as does the ordinary
+history list. It matches additions, modifications, deletions, and both sides of
+renames. Merges compare with their first parent, as in the diff view. It does
+not follow a file through earlier names automatically. Paths containing invalid
+UTF-8 are decoded with replacement characters for substring matching. Dates use
+the author's recorded timezone and exclude the boundary day.

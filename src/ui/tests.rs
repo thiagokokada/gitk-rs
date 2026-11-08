@@ -867,7 +867,13 @@ fn shortcuts_are_grouped_scrollable_and_restore_focus(cx: &mut TestAppContext) {
             assert!(close.visible());
             assert!(close.bounds().origin.y >= viewport.bottom());
             assert!(close.bounds().bottom() <= window.bounds().size.height);
-            assert!(!window.find("Graph").visible());
+            assert!(
+                !window
+                    .find(SharedString::from(
+                        gitk_rs::search::Qualifier::Merge.syntax()
+                    ))
+                    .visible()
+            );
         });
         let end = cx.update(|_, cx| -app.view.read(cx).help_scroll.max_offset().y);
         cx.update(|window, cx| {
@@ -880,8 +886,12 @@ fn shortcuts_are_grouped_scrollable_and_restore_focus(cx: &mut TestAppContext) {
         cx.refresh().unwrap();
         cx.update(|window, _| {
             assert!(
-                window.find("Graph").visible(),
-                "last group must be reachable"
+                window
+                    .find(SharedString::from(
+                        gitk_rs::search::Qualifier::Merge.syntax()
+                    ))
+                    .visible(),
+                "last help entry must be reachable"
             );
             assert!(window.find("close-dialog").visible());
         });
@@ -2187,4 +2197,67 @@ fn resized_columns_and_panes_are_saved_and_restored(cx: &mut TestAppContext) {
     let width = cx.update(|window, _| window.find("files-scrollbar-viewport").bounds().size.width);
     assert!((width + px(2.) - px(saved.layout.file_list_width)).abs() <= px(1.));
     assert!(!settings.path().join("preferences.toml").exists());
+}
+
+#[gpui_kit::test]
+fn metadata_search_shows_badges_errors_and_recovers(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    fixture.commit("needle");
+    fixture.commit("other");
+    let (app, cx) = open(&fixture, cx);
+    until(cx, |cx| {
+        cx.update(|_, cx| app.view.read(cx).snapshot.as_ref().is_some_and(|s| s.eof))
+    });
+    assert!(cx.update(|window, _| window.try_find("author:text").is_none()));
+    cx.simulate_keystrokes("/");
+    cx.simulate_input("author:fixture message:needle path:file.txt");
+    until(cx, |cx| {
+        cx.update(|window, cx| {
+            window.try_find("search-filter-0").is_some()
+                && app.view.read(cx).snapshot.as_ref().is_some_and(|s| {
+                    s.visible == 1 && s.rows[0].commit.summary() == "needle" && !s.filtering
+                })
+        })
+    });
+    cx.simulate_keystrokes("ctrl-a ctrl-k");
+    cx.simulate_input("before:nope");
+    until(cx, |cx| {
+        cx.update(|window, cx| {
+            window.try_find("search-error").is_some()
+                && app
+                    .view
+                    .read(cx)
+                    .snapshot
+                    .as_ref()
+                    .is_some_and(|s| s.error.is_some())
+        })
+    });
+    cx.simulate_keystrokes("ctrl-a ctrl-k");
+    cx.simulate_input("author:fixture");
+    until(cx, |cx| {
+        cx.update(|window, cx| {
+            window.try_find("search-error").is_none()
+                && app
+                    .view
+                    .read(cx)
+                    .snapshot
+                    .as_ref()
+                    .is_some_and(|s| s.error.is_none() && s.visible == 2)
+        })
+    });
+    cx.simulate_keystrokes("f1");
+    cx.refresh().unwrap();
+    cx.update(|window, _| {
+        assert!(window.find("Commit search").bounds().size.height > px(0.));
+        for qualifier in gitk_rs::search::Qualifier::ALL {
+            assert!(
+                window
+                    .find(SharedString::from(qualifier.syntax()))
+                    .bounds()
+                    .size
+                    .height
+                    > px(0.)
+            );
+        }
+    });
 }

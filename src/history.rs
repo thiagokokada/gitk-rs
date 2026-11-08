@@ -3,14 +3,17 @@
 use crate::{
     git::{Cancellation, Commit, CommitId, GitStream, Repository, run_bytes},
     graph::{GraphBuilder, GraphRow},
+    search::Query,
 };
 use anyhow::{Result, ensure};
 use std::{
     collections::{HashMap, HashSet},
     ops::Range,
     path::PathBuf,
+    sync::mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError},
     sync::{Arc, Condvar, Mutex, atomic::Ordering},
     thread::{self, JoinHandle},
+    time::Duration,
 };
 
 pub const PAGE_ROWS: usize = 512;
@@ -211,10 +214,6 @@ fn run(shared: Arc<Shared>) {
         }
         let request = current.as_ref().unwrap();
         let result = (|| -> Result<(Snapshot, bool)> {
-            ensure!(
-                request.query.len() <= 8192,
-                "filter is too long (maximum 8192 bytes)"
-            );
             if failed {
                 return Ok((
                     empty_snapshot(
@@ -273,6 +272,100 @@ fn empty_snapshot(request: &Request, error: Option<String>) -> Snapshot {
     }
 }
 
+// Only metadata candidates are sent through diff-tree. Both directions are
+// bounded, and cancellation owns the process and all pipe threads.
+struct PathSearch {
+    cancel: Cancellation,
+    input: Option<SyncSender<Vec<CommitId>>>,
+    receiver: Option<Receiver<Result<(CommitId, bool)>>>,
+    worker: Option<JoinHandle<()>>,
+    done: bool,
+}
+
+impl PathSearch {
+    fn start(repository: &Repository, path: &str) -> Self {
+        let root = repository.root.clone();
+        let needle = path.to_lowercase();
+        let cancel = Cancellation::default();
+        let token = cancel.clone();
+        let (sender, receiver) = mpsc::sync_channel(256);
+        let (input, incoming) = mpsc::sync_channel(2);
+        let worker = thread::spawn(move || {
+            let result = (|| -> Result<()> {
+                let mut stream = GitStream::spawn_input(
+                    &root,
+                    &[
+                        "diff-tree",
+                        "--stdin",
+                        "--always",
+                        "--root",
+                        "-r",
+                        "--raw",
+                        "-z",
+                        "--no-renames",
+                        "--no-ext-diff",
+                        "--no-textconv",
+                        "--diff-merges=first-parent",
+                    ],
+                    token,
+                    &[0],
+                    incoming,
+                )?;
+                let mut current = None;
+                let mut matched = false;
+                while let Some(record) = stream.record(0)? {
+                    ensure!(record.terminated, "Incomplete path-search record");
+                    if record.bytes.starts_with(b":") {
+                        ensure!(current.is_some(), "Path-search change without a commit");
+                        let path = stream
+                            .record(0)?
+                            .ok_or_else(|| anyhow::anyhow!("Missing changed path"))?;
+                        ensure!(path.terminated, "Incomplete changed path");
+                        if !matched {
+                            matched = String::from_utf8_lossy(&path.bytes)
+                                .to_lowercase()
+                                .contains(&needle);
+                        }
+                    } else {
+                        if let Some(id) = current.take()
+                            && sender.send(Ok((id, matched))).is_err()
+                        {
+                            return Ok(());
+                        }
+                        current = Some(CommitId::parse(std::str::from_utf8(&record.bytes)?)?);
+                        matched = false;
+                    }
+                }
+                if let Some(id) = current {
+                    let _ = sender.send(Ok((id, matched)));
+                }
+                Ok(())
+            })();
+            if let Err(error) = result {
+                let _ = sender.send(Err(error));
+            }
+        });
+        Self {
+            cancel,
+            input: Some(input),
+            receiver: Some(receiver),
+            worker: Some(worker),
+            done: false,
+        }
+    }
+}
+
+impl Drop for PathSearch {
+    fn drop(&mut self) {
+        self.cancel.store(true, Ordering::Release);
+        self.input.take();
+        self.receiver.take();
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
+}
+
 struct Session {
     repository: Repository,
     stream: Option<GitStream>,
@@ -285,6 +378,11 @@ struct Session {
     refs_revision: u64,
     eof: bool,
     query: String,
+    parsed: Query,
+    query_error: Option<String>,
+    paths: Option<PathSearch>,
+    path_pending: Vec<CommitId>,
+    candidates: HashMap<CommitId, usize>,
     matches: Vec<usize>,
     scanned: usize,
     restore: Option<Restore>,
@@ -313,6 +411,11 @@ impl Session {
             refs_revision: 0,
             eof,
             query: String::new(),
+            parsed: Query::default(),
+            query_error: None,
+            paths: None,
+            path_pending: Vec::new(),
+            candidates: HashMap::new(),
             matches: Vec::new(),
             scanned: 0,
             restore: None,
@@ -349,21 +452,91 @@ impl Session {
                 }
             }
         }
-        let query = request.query.trim().to_lowercase();
+        let query = request.query.trim().to_owned();
         if self.query != query {
             self.query = query;
             self.matches.clear();
             self.scanned = 0;
+            self.paths = None;
+            self.path_pending.clear();
+            self.candidates = HashMap::new();
+            self.query_error = None;
+            match Query::parse(&self.query) {
+                Ok(parsed) => {
+                    self.paths = parsed
+                        .path
+                        .as_ref()
+                        .map(|path| PathSearch::start(&self.repository, path));
+                    self.parsed = parsed;
+                }
+                Err(error) => self.query_error = Some(error.to_string()),
+            }
+        }
+        if self.query_error.is_some() {
+            return Ok(false);
+        }
+        if let Some(paths) = &mut self.paths {
+            for _ in 0..256 {
+                match paths.receiver.as_ref().unwrap().try_recv() {
+                    Ok(Ok((id, matched))) => {
+                        let ordinal = self
+                            .candidates
+                            .remove(&id)
+                            .ok_or_else(|| anyhow::anyhow!("Unexpected path-search commit"))?;
+                        if matched {
+                            self.matches.push(ordinal);
+                        }
+                    }
+                    Ok(Err(error)) => {
+                        self.query_error = Some(format!("Path search failed: {error:#}"));
+                        paths.done = true;
+                        return Ok(false);
+                    }
+                    Err(TryRecvError::Empty) => break,
+                    Err(TryRecvError::Disconnected) => {
+                        paths.done = true;
+                        ensure!(
+                            self.candidates.is_empty(),
+                            "Path search ended before all commits were checked"
+                        );
+                        break;
+                    }
+                }
+            }
+        }
+        if let Some(paths) = &mut self.paths {
+            if !self.path_pending.is_empty() {
+                let batch = std::mem::take(&mut self.path_pending);
+                match paths.input.as_ref().unwrap().try_send(batch) {
+                    Ok(()) => (),
+                    Err(TrySendError::Full(batch)) => {
+                        self.path_pending = batch;
+                        thread::sleep(Duration::from_millis(5));
+                        return Ok(true);
+                    }
+                    Err(TrySendError::Disconnected(batch)) => {
+                        // Drain the worker's error before reporting a closed pipe.
+                        self.path_pending = batch;
+                        return Ok(true);
+                    }
+                }
+            }
+            if self.candidates.len() >= 4096 {
+                thread::sleep(Duration::from_millis(5));
+                return Ok(true);
+            }
         }
         if !self.query.is_empty() && self.scanned < self.entries.len() {
             let end = (self.scanned + 1000).min(self.entries.len());
             for index in self.scanned..end {
-                if self.entries[index]
-                    .commit
-                    .searchable_text()
-                    .contains(&self.query)
-                {
-                    self.matches.push(index);
+                let commit = &self.entries[index].commit;
+                if self.parsed.matches(commit) {
+                    if self.paths.is_some() {
+                        self.candidates.insert(commit.id.clone(), index);
+                        self.path_pending.push(commit.id.clone());
+                    } else {
+                        self.matches.push(index);
+                    }
                 }
             }
             self.scanned = end;
@@ -383,7 +556,7 @@ impl Session {
         // The requested batch controls prefetch demand, not the size of one
         // worker step. Publish bounded chunks even when --limit is very large.
         let batch = request.batch.unwrap_or(1000).max(1);
-        let step = batch.min(10000);
+        let step = batch.min(if self.paths.is_some() { 1000 } else { 10000 });
         let needed = if request.batch.is_none() {
             usize::MAX
         } else {
@@ -400,7 +573,27 @@ impl Session {
             return Ok(true);
         }
         if !self.eof && visible < needed {
+            if let Some(paths) = &self.paths {
+                if paths.done {
+                    self.paths = Some(PathSearch::start(
+                        &self.repository,
+                        self.parsed.path.as_deref().unwrap(),
+                    ));
+                } else if paths.input.is_none() {
+                    thread::sleep(Duration::from_millis(5));
+                    return Ok(true);
+                }
+            }
             self.load(step, needed)?;
+            return Ok(true);
+        }
+        if self.paths.as_ref().is_some_and(|paths| !paths.done) {
+            // Close at EOF or an opt-in prefetch pause to flush the last diff.
+            // Resuming demand opens a new diff stream for newly loaded candidates.
+            if self.eof || visible >= needed {
+                self.paths.as_mut().unwrap().input.take();
+            }
+            thread::sleep(Duration::from_millis(5));
             return Ok(true);
         }
         Ok(false)
@@ -446,8 +639,13 @@ impl Session {
                     }
                 }
             }
-            if !self.query.is_empty() && commit.searchable_text().contains(&self.query) {
-                self.matches.push(ordinal);
+            if !self.query.is_empty() && self.parsed.matches(&commit) {
+                if self.paths.is_some() {
+                    self.candidates.insert(commit.id.clone(), ordinal);
+                    self.path_pending.push(commit.id.clone());
+                } else {
+                    self.matches.push(ordinal);
+                }
             }
             self.entries.push(Arc::new(Entry {
                 ordinal,
@@ -483,7 +681,13 @@ impl Session {
             }),
             top: self.restore_ordinals[1].and_then(|ordinal| self.visible_position(ordinal)),
             pending: self.restore_pending()
-                || !self.query.is_empty() && self.scanned < self.entries.len(),
+                || !self.query.is_empty() && self.scanned < self.entries.len()
+                || self.restore.as_ref().is_some_and(|restore| {
+                    [&restore.selected, &restore.top]
+                        .into_iter()
+                        .flatten()
+                        .any(|id| self.candidates.contains_key(id))
+                }),
         });
         let range = if let Some(restored) = restored.as_ref().filter(|r| !r.pending) {
             let top = restored
@@ -514,11 +718,15 @@ impl Session {
             rows,
             visible,
             loaded: self.entries.len(),
-            eof: self.eof,
-            filtering: !self.query.is_empty() && self.scanned < self.entries.len(),
+            eof: self.eof && self.paths.as_ref().is_none_or(|paths| paths.done),
+            filtering: self.query_error.is_none()
+                && !self.query.is_empty()
+                && (self.scanned < self.entries.len()
+                    || !self.eof && request.batch.is_none()
+                    || self.paths.as_ref().is_some_and(|paths| !paths.done)),
             branch: self.repository.branch.clone(),
             refs: self.refs.clone(),
-            error: None,
+            error: self.query_error.clone(),
             anchor_position: request.anchor.and_then(|ordinal| {
                 if self.query.is_empty() {
                     (ordinal < self.entries.len()).then_some(ordinal)
@@ -734,6 +942,257 @@ mod tests {
         assert!(Arc::ptr_eq(&snapshot.rows[0], &before));
         assert_eq!(snapshot.anchor_position, Some(0));
         assert!(snapshot.eof);
+    }
+
+    #[test]
+    fn metadata_filters_combine_and_invalid_queries_recover() {
+        let fixture = Fixture::new();
+        fixture.git(&[
+            "commit",
+            "--allow-empty",
+            "--date=2026-01-01T12:00:00+05:00",
+            "-m",
+            "First\n\nHidden needle",
+        ]);
+        fixture.git(&[
+            "commit",
+            "--allow-empty",
+            "--author=Alice Smith <alice@example.test>",
+            "--date=2026-01-02T00:30:00+05:00",
+            "-m",
+            "Second",
+        ]);
+        let mut request = request(&fixture);
+        let mut session = Session::open(&request, Cancellation::default()).unwrap();
+        while session.step(&request).unwrap() {}
+        for (query, expected) in [
+            (
+                "author:\"ALICE Smith\" committer:fixture after:2026-01-01 before:2026-01-03 merge:false",
+                1,
+            ),
+            ("message:needle before:2026-01-02", 1),
+            ("after:2026-01-02", 0),
+            ("before:2026-01-01", 0),
+            ("author:fixture message:second", 0),
+            ("merge:true", 0),
+        ] {
+            request.query = query.into();
+            while session.step(&request).unwrap() {}
+            assert_eq!(session.snapshot(&request).visible, expected, "{query}");
+        }
+        request.query = format!("hash:{}", &session.entries[0].commit.id.to_hex()[..12]);
+        while session.step(&request).unwrap() {}
+        assert_eq!(session.visible_count(), 1);
+        request.query = "before:invalid".into();
+        assert!(!session.step(&request).unwrap());
+        assert!(session.snapshot(&request).error.is_some());
+        request.query = String::new();
+        while session.step(&request).unwrap() {}
+        assert!(session.snapshot(&request).error.is_none());
+        assert_eq!(session.visible_count(), 2);
+    }
+
+    #[test]
+    fn paths_stream_literal_substrings_and_preserve_retained_history() {
+        let fixture = Fixture::new();
+        std::fs::create_dir(fixture.root().join("config")).unwrap();
+        std::fs::write(fixture.root().join("config/CI.yml"), "first").unwrap();
+        fixture.git(&["add", "."]);
+        fixture.git(&["commit", "-m", "add workflow"]);
+        fixture.commit("unrelated");
+        fixture.git(&["mv", "config/CI.yml", "literal[1]*.yml"]);
+        fixture.git(&["commit", "-m", "rename workflow"]);
+        fixture.git(&["rm", "literal[1]*.yml"]);
+        fixture.git(&["commit", "-m", "delete workflow"]);
+        let mut request = request(&fixture);
+        let mut session = Session::open(&request, Cancellation::default()).unwrap();
+        while session.step(&request).unwrap() {}
+        let before = session.entries[0].clone();
+        for (query, expected) in [
+            ("path:ci.yml", 2),
+            ("path:config/", 2),
+            ("path:literal[1]*.yml", 2),
+            ("path:ci.yml message:add", 1),
+            ("path:absent", 0),
+        ] {
+            request.query = query.into();
+            while session.step(&request).unwrap() {}
+            let snapshot = session.snapshot(&request);
+            assert!(snapshot.error.is_none(), "{:?}", snapshot.error);
+            assert_eq!(snapshot.visible, expected, "{query}");
+            assert!(snapshot.eof);
+        }
+        request.query.clear();
+        while session.step(&request).unwrap() {}
+        assert!(Arc::ptr_eq(&before, &session.snapshot(&request).rows[0]));
+        // Replacing a running search releases its producer and cancellation token.
+        request.query = "path:yml".into();
+        session.step(&request).unwrap();
+        let path_cancel = session.paths.as_ref().unwrap().cancel.clone();
+        request.query = "author:fixture".into();
+        while session.step(&request).unwrap() {}
+        assert!(path_cancel.load(Ordering::Acquire));
+        assert!(session.paths.is_none());
+        assert_eq!(session.visible_count(), 4);
+    }
+
+    #[test]
+    fn path_search_handles_empty_commits_merges_and_unusual_names() {
+        let fixture = Fixture::new();
+        fixture.commit("root");
+        fixture.git(&["checkout", "-qb", "side"]);
+        let name = "abc\n:1234567890123456789012345678901234567890";
+        std::fs::write(fixture.root().join(name), "side").unwrap();
+        fixture.git(&["add", "."]);
+        fixture.git(&["commit", "-m", "side change"]);
+        fixture.git(&["checkout", "-q", "main"]);
+        fixture.git(&["commit", "--allow-empty", "-m", "empty"]);
+        fixture.git(&["merge", "--no-ff", "side", "-m", "merge side"]);
+        let mut request = request(&fixture);
+        let mut session = Session::open(&request, Cancellation::default()).unwrap();
+        for (query, expected) in [
+            ("path:abc", 2),
+            ("path:abc merge:true", 1),
+            ("path:abc message:empty", 0),
+            ("path:abc merge:false", 1),
+        ] {
+            request.query = query.into();
+            while session.step(&request).unwrap() {}
+            assert!(session.query_error.is_none(), "{:?}", session.query_error);
+            assert_eq!(session.visible_count(), expected, "{query}");
+            assert!(session.candidates.is_empty());
+        }
+    }
+
+    #[test]
+    fn path_git_failures_are_reported_and_metadata_search_can_recover() {
+        let fixture = Fixture::new();
+        fixture.commit("retained");
+        let mut request = request(&fixture);
+        let mut session = Session::open(&request, Cancellation::default()).unwrap();
+        while session.step(&request).unwrap() {}
+        // Damage only this disposable fixture after retaining its commit metadata.
+        let tree = fixture.git(&["rev-parse", "HEAD^{tree}"]);
+        std::fs::remove_file(
+            fixture
+                .root()
+                .join(".git/objects")
+                .join(&tree[..2])
+                .join(&tree[2..]),
+        )
+        .unwrap();
+        request.query = "path:file.txt".into();
+        while session.step(&request).unwrap() {}
+        let snapshot = session.snapshot(&request);
+        assert!(
+            snapshot
+                .error
+                .as_deref()
+                .is_some_and(|error| error.contains("Path search failed"))
+        );
+        request.query = "author:fixture".into();
+        while session.step(&request).unwrap() {}
+        assert!(session.snapshot(&request).error.is_none());
+        assert_eq!(session.visible_count(), 1);
+    }
+
+    #[cfg(target_os = "linux")]
+    fn report_search_rss(stage: &str, loaded: usize) {
+        let pid = std::process::id();
+        let rss = |pid: &str| {
+            std::fs::read_to_string(format!("/proc/{pid}/status"))
+                .unwrap_or_default()
+                .lines()
+                .find(|line| line.starts_with("VmRSS:"))
+                .unwrap_or("VmRSS: unavailable (exited)")
+                .to_owned()
+        };
+        eprintln!(
+            "search_probe stage={stage} loaded={loaded} test_process_pid={pid} {}",
+            rss(&pid.to_string())
+        );
+        for task in std::fs::read_dir(format!("/proc/{pid}/task")).unwrap() {
+            let children =
+                std::fs::read_to_string(task.unwrap().path().join("children")).unwrap_or_default();
+            for child in children.split_whitespace() {
+                let command =
+                    std::fs::read_to_string(format!("/proc/{child}/comm")).unwrap_or_default();
+                eprintln!(
+                    "search_probe stage={stage} loaded={loaded} child_pid={child} command={} {}",
+                    command.trim(),
+                    rss(child)
+                );
+            }
+        }
+    }
+
+    /// Explicit real-repository probe: reports first results and completion for the
+    /// actual worker, rather than presenting Git command timings as application timings.
+    #[test]
+    #[ignore = "requires GITK_SEARCH_REPOSITORY; reads real history"]
+    fn profile_metadata_search() {
+        let repository =
+            std::env::var_os("GITK_SEARCH_REPOSITORY").expect("set GITK_SEARCH_REPOSITORY");
+        let query = std::env::var("GITK_SEARCH_QUERY")
+            .unwrap_or_else(|_| "path:ci.yml after:2026-01-01".into());
+        let mut request = Request {
+            generation: Generation(1),
+            id: 1,
+            refs_revision: 0,
+            repository: repository.into(),
+            range: 0..128,
+            query,
+            batch: None,
+            graph_columns: crate::graph::DEFAULT_GRAPH_LANES,
+            anchor: None,
+            restore: None,
+        };
+        let start = Instant::now();
+        let mut session = Session::open(&request, Cancellation::default()).unwrap();
+        eprintln!(
+            "search_probe head={:?} query={:?} graph_lanes={}",
+            session.repository.head.as_ref().map(CommitId::to_hex),
+            request.query,
+            request.graph_columns
+        );
+        let mut first = false;
+        while session.step(&request).unwrap() {
+            assert!(session.query_error.is_none(), "{:?}", session.query_error);
+            if !first && session.visible_count() > 0 {
+                eprintln!(
+                    "search_probe first_ms={} loaded={} matches={}",
+                    start.elapsed().as_millis(),
+                    session.entries.len(),
+                    session.visible_count()
+                );
+                #[cfg(target_os = "linux")]
+                report_search_rss("first", session.entries.len());
+                first = true;
+            }
+        }
+        assert!(session.query_error.is_none(), "{:?}", session.query_error);
+        eprintln!(
+            "search_probe complete_ms={} loaded={} matches={} eof={}",
+            start.elapsed().as_millis(),
+            session.entries.len(),
+            session.visible_count(),
+            session.eof
+        );
+        #[cfg(target_os = "linux")]
+        report_search_rss("complete", session.entries.len());
+        if let Ok(query) = std::env::var("GITK_SEARCH_REFINE") {
+            request.query = query;
+            let start = Instant::now();
+            while session.step(&request).unwrap() {}
+            assert!(session.query_error.is_none(), "{:?}", session.query_error);
+            eprintln!(
+                "search_probe refine_query={:?} refine_ms={} loaded={} matches={}",
+                request.query,
+                start.elapsed().as_millis(),
+                session.entries.len(),
+                session.visible_count()
+            );
+        }
     }
 
     #[test]
