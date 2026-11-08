@@ -1,4 +1,5 @@
 use super::*;
+use gitk_rs::search::Qualifier;
 
 impl HistoryWindow {
     pub(super) fn open_repository(&mut self, cx: &mut Context<Self>) {
@@ -443,32 +444,46 @@ impl HistoryWindow {
                                                 .font_weight(gpui_kit::FontWeight::BOLD)
                                                 .child(group.title),
                                         )
-                                        .children(group.shortcuts.iter().map(
-                                            |&(keys, description)| {
-                                                div()
-                                                    .w_full()
-                                                    .min_w_0()
-                                                    .flex_shrink_0()
-                                                    .flex()
-                                                    .items_start()
-                                                    .gap_3()
-                                                    .child(
-                                                        div()
-                                                            .w(px(235.))
-                                                            .flex_shrink_0()
-                                                            .child(keys),
+                                        .children(
+                                            group
+                                                .qualifiers
+                                                .iter()
+                                                .map(|qualifier| {
+                                                    (
+                                                        SharedString::from(qualifier.syntax()),
+                                                        qualifier.help_description(),
                                                     )
-                                                    .child(
-                                                        div()
-                                                            .id(keys)
-                                                            .test_support()
-                                                            .flex_1()
-                                                            .min_w_0()
-                                                            .whitespace_normal()
-                                                            .child(description),
-                                                    )
-                                            },
-                                        ))
+                                                })
+                                                .chain(group.shortcuts.iter().map(
+                                                    |&(keys, description)| {
+                                                        (SharedString::from(keys), description)
+                                                    },
+                                                ))
+                                                .map(|(keys, description)| {
+                                                    div()
+                                                        .w_full()
+                                                        .min_w_0()
+                                                        .flex_shrink_0()
+                                                        .flex()
+                                                        .items_start()
+                                                        .gap_3()
+                                                        .child(
+                                                            div()
+                                                                .w(px(235.))
+                                                                .flex_shrink_0()
+                                                                .child(keys.clone()),
+                                                        )
+                                                        .child(
+                                                            div()
+                                                                .id(keys)
+                                                                .test_support()
+                                                                .flex_1()
+                                                                .min_w_0()
+                                                                .whitespace_normal()
+                                                                .child(description),
+                                                        )
+                                                }),
+                                        )
                                 })),
                         )
                         .child(
@@ -635,6 +650,7 @@ impl HistoryWindow {
 struct ShortcutGroup {
     title: &'static str,
     shortcuts: &'static [(&'static str, &'static str)],
+    qualifiers: &'static [Qualifier],
 }
 
 // Only application shortcuts gain Command aliases; Control input editing stays literal.
@@ -650,6 +666,7 @@ macro_rules! command_shortcut {
 
 const SHORTCUT_GROUPS: &[ShortcutGroup] = &[
     ShortcutGroup {
+        qualifiers: &[],
         title: "Commit list",
         shortcuts: &[
             ("Up / p / k", "Move up one commit"),
@@ -668,6 +685,7 @@ const SHORTCUT_GROUPS: &[ShortcutGroup] = &[
         ],
     },
     ShortcutGroup {
+        qualifiers: &[],
         title: "Diff view",
         shortcuts: &[
             ("Delete / Backspace / b / B", "Scroll diff up one page"),
@@ -682,6 +700,7 @@ const SHORTCUT_GROUPS: &[ShortcutGroup] = &[
         ],
     },
     ShortcutGroup {
+        qualifiers: &[],
         title: "General",
         shortcuts: &[
             ("/", "Focus the filter box"),
@@ -701,6 +720,7 @@ const SHORTCUT_GROUPS: &[ShortcutGroup] = &[
         ],
     },
     ShortcutGroup {
+        qualifiers: &[],
         title: "Filter box and text inputs",
         shortcuts: &[
             ("Ctrl+A / Ctrl+E", "Move to start / end of line"),
@@ -712,6 +732,7 @@ const SHORTCUT_GROUPS: &[ShortcutGroup] = &[
         ],
     },
     ShortcutGroup {
+        qualifiers: &[],
         title: "Branch dialog",
         shortcuts: &[
             ("Up / Ctrl+P / Alt+K", "Select previous branch"),
@@ -721,6 +742,7 @@ const SHORTCUT_GROUPS: &[ShortcutGroup] = &[
         ],
     },
     ShortcutGroup {
+        qualifiers: &[],
         title: "Help dialog",
         shortcuts: &[
             ("Up / Down", "Scroll up / down one line"),
@@ -729,6 +751,7 @@ const SHORTCUT_GROUPS: &[ShortcutGroup] = &[
         ],
     },
     ShortcutGroup {
+        qualifiers: &[],
         title: "Dialogs",
         shortcuts: &[
             ("Escape", "Close the dialog"),
@@ -737,33 +760,9 @@ const SHORTCUT_GROUPS: &[ShortcutGroup] = &[
         ],
     },
     ShortcutGroup {
+        qualifiers: &Qualifier::ALL,
         title: "Commit search",
         shortcuts: &[
-            ("author:text", "Author name or email, e.g. author:alice"),
-            (
-                "committer:text",
-                "Committer name or email, e.g. committer:bob",
-            ),
-            (
-                "message:text / hash:text",
-                "Full message or commit hash substring",
-            ),
-            (
-                "path:text",
-                "Changed path substring, e.g. path:ci.yml; merges compare with their first parent",
-            ),
-            (
-                "before:YYYY-MM-DD",
-                "Author's recorded calendar day strictly before this date",
-            ),
-            (
-                "after:YYYY-MM-DD",
-                "Author's recorded calendar day strictly after this date",
-            ),
-            (
-                "merge:true / merge:false",
-                "Include merges / exclude merges",
-            ),
             (
                 "Combine filters",
                 "All qualifiers must match; text and path matching ignore case",
@@ -783,6 +782,7 @@ const SHORTCUT_GROUPS: &[ShortcutGroup] = &[
         ],
     },
     ShortcutGroup {
+        qualifiers: &[],
         title: "Graph",
         shortcuts: &[
             ("Drag header edge", "Resize the graph column"),

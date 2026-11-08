@@ -2239,6 +2239,15 @@ fn metadata_search_shows_badges_errors_and_recovers(cx: &mut TestAppContext) {
     cx.refresh().unwrap();
     cx.update(|window, _| {
         assert!(window.find("Commit search").bounds().size.height > px(0.));
-        assert!(window.find("author:text").bounds().size.height > px(0.));
+        for qualifier in gitk_rs::search::Qualifier::ALL {
+            assert!(
+                window
+                    .find(SharedString::from(qualifier.syntax()))
+                    .bounds()
+                    .size
+                    .height
+                    > px(0.)
+            );
+        }
     });
 }

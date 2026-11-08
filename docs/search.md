@@ -39,6 +39,8 @@ are decoded with replacement characters for substring matching.
 
 ## Implementation and probes
 
+The `Qualifier` enum supplies canonical names, value validation, and Help entries;
+parsed metadata predicates store enum variants rather than string keys.
 Metadata predicates run in bounded chunks on the history worker and reuse retained
 commit objects. A path query sends only metadata candidates through one cancellable
 `git diff-tree --stdin` process. Raw NUL-delimited records preserve unusual names;
