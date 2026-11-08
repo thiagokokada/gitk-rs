@@ -365,7 +365,11 @@ impl HistoryWindow {
                                     .bg(rgb(palette.row))
                                     .border_1()
                                     .border_color(rgb(palette.border))
-                                    .child("Interface preview")
+                                    .child(
+                                        div()
+                                            .font_family(system_fonts::resolve(&draft.ui_font, cx))
+                                            .child("Interface preview"),
+                                    )
                                     .child(
                                         div()
                                             .id("ui-font-preview")
