@@ -1,6 +1,25 @@
-//! Atomic settings writes that respect an existing file's write permissions.
+//! Bounded TOML reads and atomic writes that respect existing file permissions.
 use anyhow::{Context, Result, ensure};
-use std::{fs, io::Write, path::Path};
+use serde::de::DeserializeOwned;
+use std::{
+    fs,
+    io::{Read, Write},
+    path::Path,
+};
+
+const MAX_BYTES: usize = 64 * 1024;
+
+pub(crate) fn read_toml<T: DeserializeOwned + Default>(path: &Path, size_error: &str) -> Result<T> {
+    let file = match fs::File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(T::default()),
+        Err(error) => return Err(error.into()),
+    };
+    let mut bytes = Vec::new();
+    file.take((MAX_BYTES + 1) as u64).read_to_end(&mut bytes)?;
+    ensure!(bytes.len() <= MAX_BYTES, "{size_error}");
+    Ok(toml::from_str(std::str::from_utf8(&bytes)?)?)
+}
 
 pub(crate) fn write(path: &Path, contents: &[u8]) -> Result<()> {
     (|| {
@@ -30,4 +49,24 @@ pub(crate) fn write(path: &Path, contents: &[u8]) -> Result<()> {
         Ok(())
     })()
     .with_context(|| format!("write settings {}", path.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn toml_read_accepts_the_size_limit_and_rejects_one_more_byte() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("settings.toml");
+        let mut contents = b"value = 7\n#".to_vec();
+        contents.resize(MAX_BYTES, b' ');
+        fs::write(&path, &contents).unwrap();
+        let parsed: toml::Table = read_toml(&path, "settings exceed 64 KiB").unwrap();
+        assert_eq!(parsed["value"].as_integer(), Some(7));
+        contents.push(b' ');
+        fs::write(&path, contents).unwrap();
+        let error = read_toml::<toml::Table>(&path, "settings exceed 64 KiB").unwrap_err();
+        assert_eq!(error.to_string(), "settings exceed 64 KiB");
+    }
 }

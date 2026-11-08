@@ -1,11 +1,7 @@
 //! Automatically saved window state, independent of explicitly applied preferences.
 use super::DiffOptions;
 use anyhow::{Context, Result, ensure};
-use std::{
-    fs,
-    io::Read,
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
@@ -13,6 +9,16 @@ pub struct State {
     pub diff: DiffOptions,
     pub layout: Layout,
     pub search: Search,
+}
+
+impl State {
+    fn validate(self) -> Result<()> {
+        ensure!(
+            self.diff.context <= 10_000_000,
+            "diff context exceeds ten million lines"
+        );
+        self.layout.validate()
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -77,23 +83,8 @@ pub fn load_from(path: &Path) -> Result<DiffOptions> {
 }
 
 pub fn load_state_from(path: &Path) -> Result<State> {
-    let file = match fs::File::open(path) {
-        Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(State::default());
-        }
-        Err(error) => return Err(error.into()),
-    };
-    let mut bytes = Vec::new();
-    file.take(65537).read_to_end(&mut bytes)?;
-    ensure!(bytes.len() <= 65536, "diff options exceed 64 KiB");
-    let state = toml::from_str::<State>(std::str::from_utf8(&bytes)?)?;
-    let options = state.diff;
-    ensure!(
-        options.context <= 10_000_000,
-        "diff context exceeds ten million lines"
-    );
-    state.layout.validate()?;
+    let state: State = crate::settings_file::read_toml(path, "diff options exceed 64 KiB")?;
+    state.validate()?;
     Ok(state)
 }
 
@@ -104,12 +95,7 @@ pub fn save_to(options: DiffOptions, path: &Path) -> Result<()> {
 }
 
 pub fn save_state_to(state: State, path: &Path) -> Result<()> {
-    let options = state.diff;
-    state.layout.validate()?;
-    ensure!(
-        options.context <= 10_000_000,
-        "diff context exceeds ten million lines"
-    );
+    state.validate()?;
     crate::settings_file::write(path, toml::to_string_pretty(&state)?.as_bytes())
 }
 
@@ -117,6 +103,25 @@ pub fn save_state_to(state: State, path: &Path) -> Result<()> {
 mod tests {
     use super::*;
     use crate::diff::{DiffEngine, DiffVersion, WordDiff};
+    use std::fs;
+
+    #[test]
+    fn invalid_state_is_rejected_before_replacing_saved_settings() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("state.toml");
+        let original = State::default();
+        save_state_to(original, &path).unwrap();
+        let bytes = fs::read(&path).unwrap();
+        let mut invalid_diff = original;
+        invalid_diff.diff.context = 10_000_001;
+        let mut invalid_layout = original;
+        invalid_layout.layout.graph_width = 900.;
+        for state in [invalid_diff, invalid_layout] {
+            assert!(save_state_to(state, &path).is_err());
+            assert_eq!(fs::read(&path).unwrap(), bytes);
+            assert_eq!(load_state_from(&path).unwrap(), original);
+        }
+    }
 
     #[test]
     fn separate_file_roundtrips_defaults_and_rejects_bad_input() {
@@ -220,6 +225,7 @@ mod tests {
 mod layout_tests {
     use super::*;
     use crate::diff::{DiffEngine, WordDiff};
+    use std::fs;
 
     #[test]
     fn layout_and_diff_updates_merge_and_survive_shutdown() {

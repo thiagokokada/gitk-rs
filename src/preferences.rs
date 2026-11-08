@@ -5,11 +5,7 @@ use crate::{
 };
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
-use std::{
-    fs,
-    io::Read,
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
@@ -99,17 +95,7 @@ impl Preferences {
         self.save_to(&Self::path()?)
     }
     pub fn load_from(path: &Path) -> Result<Self> {
-        let file = match fs::File::open(path) {
-            Ok(file) => file,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(Self::default());
-            }
-            Err(error) => return Err(error.into()),
-        };
-        let mut bytes = Vec::new();
-        file.take(65537).read_to_end(&mut bytes)?;
-        ensure!(bytes.len() <= 65536, "preferences exceed 64 KiB");
-        let preferences: Self = toml::from_str(std::str::from_utf8(&bytes)?)?;
+        let preferences: Self = crate::settings_file::read_toml(path, "preferences exceed 64 KiB")?;
         preferences.validate()?;
         Ok(preferences)
     }
@@ -121,6 +107,7 @@ impl Preferences {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     #[test]
     fn atomic_preferences_roundtrip_and_invalid_input() {
         let root = tempfile::tempdir().unwrap();
