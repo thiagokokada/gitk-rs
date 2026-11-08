@@ -1412,7 +1412,7 @@ impl Render for HistoryWindow {
                     .child("Filter:")
                     .child(div().flex_1().key_context("HistoryFilter").child(Input::new(&self.filter).cleanable(true)))
                     .child(Checkbox::new("search-regex")
-                        .label("Regex")
+                        .label("Regex (Alt+X)")
                         .tooltip("Toggle regex with Alt+X. Turn off for literal text and path searches.")
                         .checked(self.request.regex)
                         .on_click(cx.listener(|this, checked: &bool, _, cx| this.set_search_regex(*checked, cx))))
