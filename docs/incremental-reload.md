@@ -23,6 +23,27 @@ use it. No persistent cache is needed.
 
 ## Safety and cost
 
+## Removing the total delta limit
+
+- [ ] Replace the total 256-commit / 2 MiB probe budget with a resumable worker
+  phase. Read and prepare graph rows in bounded steps, retaining the provisional
+  new history once, and verify the entire chain before changing the old suffix.
+  Process new requests between steps and discard superseded verification.
+- [ ] Reconcile large prefixes with bounded metadata/path-search batches. Keep
+  completed suffix decisions, retry only its bounded in-flight candidates, and
+  avoid a full reload merely because the prefix contains many candidates.
+- [ ] Cover updates beyond both old budgets, partial-history continuation,
+  cancellation and supersession, fallback after several probe steps, and UI
+  bookmark preservation. Validate and commit with the pinned toolchain.
+
+The existing validated milestones below describe the initial capped version.
+The follow-up removes size-based fallbacks; nonlinear histories still fall back
+to normal loading. The O(retained history) suffix reindexing pass remains a known
+worker latency cost. New commit records retained during verification are the
+prospective history, rather than a queue of pending worker batches.
+
+## Initial implementation safety and cost
+
 Keep Git and retained-history work on the history worker. Snapshot generations
 remain independent of the lifetime of a reusable Git stream. Cancel and reap
 the old stream when it is replaced or the worker stops. Ordinary streaming uses
