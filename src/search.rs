@@ -42,8 +42,13 @@ impl Query {
                 text.push(value.to_lowercase());
                 continue;
             }
-            ensure!(!value.is_empty(), "{key}: needs a value");
             match key.as_str() {
+                "author" | "committer" | "message" | "hash" | "path" | "before" | "after"
+                | "merge"
+                    if value.is_empty() =>
+                {
+                    bail!("{key}: needs a value")
+                }
                 "path" => {
                     ensure!(result.path.is_none(), "Use one path: filter per search");
                     result.path = Some(value.to_owned());
@@ -142,6 +147,27 @@ fn valid_date(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn unknown_filters_are_reported_before_missing_values() {
+        for input in ["abc:", "abc:value", "ABC:"] {
+            let error = Query::parse(input).unwrap_err().to_string();
+            assert!(error.starts_with("Unknown filter abc:"), "{input}: {error}");
+        }
+        for key in [
+            "author",
+            "committer",
+            "message",
+            "hash",
+            "path",
+            "before",
+            "after",
+            "merge",
+        ] {
+            let error = Query::parse(&format!("{key}:")).unwrap_err().to_string();
+            assert_eq!(error, format!("{key}: needs a value"));
+        }
+    }
+
     #[test]
     fn validates_and_explains_filters() {
         let query =
