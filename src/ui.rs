@@ -5,6 +5,7 @@ mod colors;
 mod dialogs;
 mod diff_view;
 mod preference_dialog;
+mod system_fonts;
 
 use colors::Palette;
 use gitk_rs::{
@@ -339,7 +340,7 @@ impl HistoryWindow {
         });
         diff.update(cx, |diff, cx| {
             diff.set_font(
-                preferences.fixed_font.clone().into(),
+                system_fonts::resolve(&preferences.fixed_font, cx),
                 preferences.font_size,
                 cx,
             )
@@ -958,7 +959,7 @@ impl HistoryWindow {
             });
         let graph: AnyElement = if let Some(text) = graph_text {
             div()
-                .font_family(SharedString::from(self.preferences.fixed_font.clone()))
+                .font_family(system_fonts::resolve(&self.preferences.fixed_font, cx))
                 .child(text)
                 .into_any_element()
         } else {
@@ -1024,7 +1025,7 @@ impl HistoryWindow {
                         div()
                             .w(px(self.preferences.font_size * 5.))
                             .flex_shrink_0()
-                            .font_family(SharedString::from(self.preferences.fixed_font.clone()))
+                            .font_family(system_fonts::resolve(&self.preferences.fixed_font, cx))
                             .child(entry.commit.id.to_hex()[..7].to_owned()),
                     )
                     .child(
@@ -1076,19 +1077,13 @@ impl HistoryWindow {
 }
 
 fn apply_fonts(preferences: &Preferences, cx: &mut App) {
+    let ui_font = system_fonts::resolve(&preferences.ui_font, cx);
+    let fixed_font = system_fonts::resolve(&preferences.fixed_font, cx);
     let theme = gpui_kit::component::Theme::global_mut(cx);
-    theme.font_family = preferences.ui_font.clone().into();
+    theme.font_family = ui_font;
     theme.font_size = px(preferences.font_size);
-    theme.mono_font_family = preferences.fixed_font.clone().into();
+    theme.mono_font_family = fixed_font;
     theme.mono_font_size = px(preferences.font_size);
-}
-
-pub(crate) fn fixed_font() -> &'static str {
-    if cfg!(target_os = "macos") {
-        "Menlo"
-    } else {
-        "DejaVu Sans Mono"
-    }
 }
 
 const IDLE_LANES_TOOLTIP: &str = "Idle lanes are history lines with no commit, branch, or merge junction in the visible rows. They are grouped into a dashed column to save space; commit dots and junctions stay separate.";
@@ -1416,7 +1411,7 @@ impl Render for HistoryWindow {
             .gap_2()
             .p_3()
             .text_size(px(self.preferences.font_size))
-            .font_family(gpui_kit::SharedString::from(self.preferences.ui_font.clone()))
+            .font_family(system_fonts::resolve(&self.preferences.ui_font, cx))
             .bg(rgb(palette.background))
             .text_color(rgb(palette.foreground))
             .child(
@@ -1738,6 +1733,7 @@ fn bind_keys(cx: &mut App) {
 }
 
 pub fn run(mut config: Config, preferences: Preferences, launched: Instant) {
+    let system_fonts = system_fonts::SystemFonts::load();
     config.repository = std::path::absolute(&config.repository).unwrap_or(config.repository);
     let initial_title = repository_title(&config.repository);
     let guard = TimingGuard::start(config.timings, launched);
@@ -1773,6 +1769,7 @@ pub fn run(mut config: Config, preferences: Preferences, launched: Instant) {
     gpui_kit::application()
         .with_assets(gpui_kit::assets::Assets)
         .run(move |cx: &mut App| {
+            cx.set_global(system_fonts);
             #[cfg(target_os = "macos")]
             if let Err(error) = crate::macos::set_application_icon() {
                 eprintln!("gitk-rs: unable to set application icon: {error:#}");

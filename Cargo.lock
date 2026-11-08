@@ -1936,6 +1936,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "fontconfig"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0d0e1eb4148faaf675053b7299bc5b4c041c8c0c724cf77844d6be8dd0ac5b9d"
+dependencies = [
+ "yeslogic-fontconfig-sys",
+]
+
+[[package]]
 name = "fontconfig-parser"
 version = "0.5.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2223,6 +2232,7 @@ dependencies = [
  "anyhow",
  "clap",
  "dirs 7.0.0",
+ "fontconfig",
  "gpui-kit",
  "nix",
  "notify",

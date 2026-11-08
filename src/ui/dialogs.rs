@@ -365,27 +365,35 @@ impl HistoryWindow {
                                     .bg(rgb(palette.row))
                                     .border_1()
                                     .border_color(rgb(palette.border))
-                                    .child("Interface preview")
+                                    .child(
+                                        div()
+                                            .font_family(system_fonts::resolve(&draft.ui_font, cx))
+                                            .child("Interface preview"),
+                                    )
                                     .child(
                                         div()
                                             .id("ui-font-preview")
                                             .flex()
                                             .flex_col()
                                             .test_support()
-                                            .font_family(SharedString::from(draft.ui_font))
+                                            .font_family(system_fonts::resolve(&draft.ui_font, cx))
                                             .text_size(px(preview_size))
                                             .line_height(px(preview_size * 1.5))
                                             .child("The quick brown fox jumps over the lazy dog.")
                                             .child("AaBbCc 0123456789"),
                                     )
-                                    .child("Fixed-width preview")
+                                    .child(
+                                        div()
+                                            .font_family(system_fonts::resolve(&draft.fixed_font, cx))
+                                            .child("Fixed-width preview"),
+                                    )
                                     .child(
                                         div()
                                             .id("fixed-font-preview")
                                             .flex()
                                             .flex_col()
                                             .test_support()
-                                            .font_family(SharedString::from(draft.fixed_font))
+                                            .font_family(system_fonts::resolve(&draft.fixed_font, cx))
                                             .text_size(px(preview_size))
                                             .line_height(px(preview_size * 1.5))
                                             .child("fn main() { let value = 42; }")
@@ -607,7 +615,7 @@ impl HistoryWindow {
                 cx,
             );
             diff.set_font(
-                preferences.fixed_font.clone().into(),
+                system_fonts::resolve(&preferences.fixed_font, cx),
                 preferences.font_size,
                 cx,
             )

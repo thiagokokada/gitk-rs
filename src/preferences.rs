@@ -7,6 +7,9 @@ use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+pub const SYSTEM_UI_FONT: &str = "System UI";
+pub const SYSTEM_MONOSPACE_FONT: &str = "System Monospace";
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Preferences {
@@ -24,18 +27,8 @@ impl Default for Preferences {
     fn default() -> Self {
         let config = Config::default();
         Self {
-            ui_font: if cfg!(target_os = "macos") {
-                ".SystemUIFont"
-            } else {
-                "DejaVu Sans"
-            }
-            .into(),
-            fixed_font: if cfg!(target_os = "macos") {
-                "Menlo"
-            } else {
-                "DejaVu Sans Mono"
-            }
-            .into(),
+            ui_font: SYSTEM_UI_FONT.into(),
+            fixed_font: SYSTEM_MONOSPACE_FONT.into(),
             font_size: 13.,
             theme: config.theme,
             batch: config.batch,
