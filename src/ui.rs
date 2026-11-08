@@ -455,6 +455,22 @@ impl HistoryWindow {
         self.history.request(self.request.clone());
     }
 
+    fn expire_status_notice(
+        &self,
+        cx: &mut Context<Self>,
+        clear_if_current: impl FnOnce(&mut Self) -> bool + 'static,
+    ) {
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(Duration::from_secs(3)).await;
+            let _ = this.update(cx, |this, cx| {
+                if clear_if_current(this) {
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
     fn consume_snapshot(&mut self, cx: &mut Context<Self>) {
         let Some(snapshot) = self.history.take_snapshot() else {
             return;
@@ -513,16 +529,13 @@ impl HistoryWindow {
             let generation = snapshot.generation;
             self.end_of_history_generation = Some(generation);
             self.show_end_of_history = true;
-            cx.spawn(async move |this, cx| {
-                cx.background_executor().timer(Duration::from_secs(3)).await;
-                let _ = this.update(cx, |this, cx| {
-                    if this.end_of_history_generation == Some(generation) {
-                        this.show_end_of_history = false;
-                        cx.notify();
-                    }
-                });
-            })
-            .detach();
+            self.expire_status_notice(cx, move |this| {
+                if this.end_of_history_generation != Some(generation) {
+                    return false;
+                }
+                this.show_end_of_history = false;
+                true
+            });
         }
         self.snapshot = Some(snapshot);
         if restoring {
@@ -618,19 +631,16 @@ impl HistoryWindow {
                     self.operation_message = "branch switched".into();
                     let generation = self.workspace_generation;
                     let operation_id = operation.id;
-                    cx.spawn(async move |this, cx| {
-                        cx.background_executor().timer(Duration::from_secs(3)).await;
-                        let _ = this.update(cx, |this, cx| {
-                            if this.workspace_generation == generation
-                                && this.operation_id == operation_id
-                                && this.operation_message == "branch switched"
-                            {
-                                this.operation_message.clear();
-                                cx.notify();
-                            }
-                        });
-                    })
-                    .detach();
+                    self.expire_status_notice(cx, move |this| {
+                        if this.workspace_generation != generation
+                            || this.operation_id != operation_id
+                            || this.operation_message != "branch switched"
+                        {
+                            return false;
+                        }
+                        this.operation_message.clear();
+                        true
+                    });
                     // The forced worker probe will supply fresh state. Avoid a
                     // second HEAD-change reload losing the pending selection.
                     self.workspace_snapshot = None;
