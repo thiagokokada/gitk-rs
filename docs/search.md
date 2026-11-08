@@ -39,22 +39,12 @@ author:Alice|Bob path:\.ya?ml$ message:^fix
 author:"Alice Smith|Bob Jones" after:2026-01-01
 ```
 
-Turn **Regex** off (or press **Alt+X** again) to force literal substring searches, including characters such
-as `.`, `*`, `[`, and `\`. Double quotes group values with spaces in either mode;
-they do not disable regex. Escape a quote inside a value with `\"`. Backslashes
-in patterns such as `\S+` are preserved. Quote an unqualified expression containing
-a colon so it is not interpreted as a qualifier.
-
 Regex matching ignores case by default; inline flags such as `(?-i)` and `(?m)`
 can override case matching or enable multiline anchors. Date and merge filters
-keep their existing date/boolean meanings. Patterns use Rust's `regex` syntax;
-lookaround and backreferences are unsupported. Compilation errors appear below
-the input and can be corrected without reloading. There are no separate glob
-operators: use `.*` for an arbitrary sequence in regex mode.
-
-The toggle is saved automatically in `state.toml` under `[search]` as `regex = true`
-or `false`, alongside layout and diff state. Existing state files default to
-literal mode. Regex mode supports at most 16 text/path patterns per query.
+keep their existing date/boolean meanings. Lookaround and backreferences are
+unsupported. Compilation errors appear below the input and can be corrected
+without reloading. There are no separate glob operators: use `.*` for an
+arbitrary sequence in regex mode.
 
 Path search covers history reachable from the opened HEAD, as does the ordinary
 history list. It matches additions, modifications, deletions, and both sides of

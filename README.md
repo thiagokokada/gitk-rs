@@ -40,8 +40,8 @@ Press F1 or ? to open Help, including keyboard shortcuts and search syntax.
 
 Filter commits with words or metadata, for example `author:alice path:ci.yml
 after:2026-01-01`. Enable Regex beside the filter for regular expressions;
-leave it off for literal searches. See [commit search](docs/search.md) for qualifiers and
-date/path matching rules.
+leave it off for literal searches. See [commit search](docs/search.md) for
+qualifiers and date/path matching rules.
 
 History streams in the background until the whole repository history is loaded.
 For lower memory use, `--limit N` opts into loading history on demand in batches
