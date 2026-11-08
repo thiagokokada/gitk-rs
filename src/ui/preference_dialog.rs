@@ -18,6 +18,8 @@ pub(super) struct FontCatalogGeneration(pub u64);
 fn font_choices(mut installed: Vec<SharedString>, ui: &str, fixed: &str) -> Vec<SharedString> {
     // Virtual system aliases and saved fonts may not be in the installed list.
     installed.extend([
+        gitk_rs::preferences::SYSTEM_UI_FONT.into(),
+        gitk_rs::preferences::SYSTEM_MONOSPACE_FONT.into(),
         SharedString::from(ui.to_owned()),
         SharedString::from(fixed.to_owned()),
     ]);
@@ -248,7 +250,14 @@ mod tests {
         );
         assert_eq!(
             names.iter().map(|name| name.as_ref()).collect::<Vec<_>>(),
-            vec![".SystemUIFont", "Arial", "Menlo", "Saved Custom Mono"]
+            vec![
+                ".SystemUIFont",
+                "Arial",
+                "Menlo",
+                "Saved Custom Mono",
+                "System Monospace",
+                "System UI"
+            ]
         );
     }
 

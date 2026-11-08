@@ -4,7 +4,7 @@ mod tests;
 use super::{
     LocalChangeKind,
     colors::{self, Palette},
-    fixed_font,
+    system_fonts,
 };
 use gitk_rs::{
     diff::{
@@ -209,7 +209,7 @@ impl DiffPane {
             focus: cx.focus_handle(),
             settings,
             verbose,
-            font: fixed_font().into(),
+            font: system_fonts::resolve(gitk_rs::preferences::SYSTEM_MONOSPACE_FONT, cx),
             font_size: 13.,
             identity: None,
             page: DiffPage {

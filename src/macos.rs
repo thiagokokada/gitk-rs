@@ -2,8 +2,14 @@
 
 use anyhow::{Context, Result};
 use objc2::{AnyThread, MainThreadMarker, rc::Retained};
-use objc2_app_kit::{NSApplication, NSImage};
+use objc2_app_kit::{NSApplication, NSFont, NSImage};
 use objc2_foundation::NSData;
+
+pub fn system_monospace_font() -> String {
+    NSFont::monospacedSystemFontOfSize_weight(0., 0.)
+        .fontName()
+        .to_string()
+}
 
 fn application_icon() -> Result<Retained<NSImage>> {
     // Embed the rasterized SVG so launch directory and installed resources do

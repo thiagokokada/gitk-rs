@@ -1838,7 +1838,7 @@ fn shortcuts_descriptions_wrap_without_clipping(cx: &mut TestAppContext) {
     fixture.commit("tip");
     let (app, cx) = open(&fixture, cx);
     app.view.update(cx, |view, cx| {
-        view.preferences.ui_font = fixed_font().into();
+        view.preferences.ui_font = gitk_rs::preferences::SYSTEM_MONOSPACE_FONT.into();
         view.preferences.font_size = 24.;
         cx.notify();
     });
