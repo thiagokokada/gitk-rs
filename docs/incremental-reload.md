@@ -1,8 +1,8 @@
 # Incremental history reload
 
-Reload currently replaces the history worker session, including all retained
-commits. The implementation will retain in-memory history whenever the new
-repository state can safely use it. No persistent cache is needed.
+Reload previously replaced the history worker session, including all retained
+commits. Retain in-memory history whenever the new repository state can safely
+use it. No persistent cache is needed.
 
 ## Milestones
 
@@ -10,7 +10,7 @@ repository state can safely use it. No persistent cache is needed.
   labels and refs, preserve completed searches and an unfinished Git stream, and
   still reject snapshots from obsolete UI generations. Repository changes,
   graph configuration changes, and failed sessions must start fresh.
-- [ ] Handle a bounded linear extension of HEAD by reading only new commits.
+- [x] Handle a bounded linear extension of HEAD by reading only new commits.
   Verify every parent link back to the previous HEAD before changing retained
   state. Preserve the old stream for partially loaded history, update ordinals,
   adjust the first retained graph row, and reconcile search and restore state.
@@ -31,8 +31,10 @@ stream before the worker can decide whether to retain it.
 
 Only accept linear extensions, where the new commits form an unbroken chain
 ending at the old HEAD. This avoids changing the ordering or graph lanes of the
-retained suffix. Bound speculative delta loading by commit count and bytes;
-fallback preserves normal streaming behavior for larger updates. Reindexing
+retained suffix. Speculative delta loading is limited to 256 commits and 2 MiB
+of accounted commit data. Fall back when this budget or an 8192-candidate path
+search budget is exceeded. This preserves normal streaming for larger updates.
+Reindexing
 retained entries still takes O(loaded commits) worker CPU, but must not reparse
 old commits or duplicate the entire retained history. Existing UI references
 may require copying the small referenced subset of entries during reindexing.
@@ -54,3 +56,10 @@ tests ignored) and clippy with warnings denied. Tests cover retained entry
 identity, an unfinished traversal, completed metadata search, ref labels,
 replacement refs, grafts, shallow boundaries, graph configuration replacement,
 generation rejection, and F5 selection restoration.
+
+The linear-extension milestone passed all-target tests (155 passed, three
+opt-in tests ignored) and clippy with warnings denied. Incremental results match
+fresh traversal for commit order, ordinals, graph geometry (including an old
+merge and lane caps), metadata and path searches, bookmarks, repeated updates,
+and partial history resumed to EOF. Unsupported probes leave old entries
+untouched before the worker replaces the session.
