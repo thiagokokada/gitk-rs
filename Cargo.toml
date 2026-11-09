@@ -12,7 +12,7 @@ default = ["system-fonts"]
 system-fonts = ["dep:fontconfig"]
 
 [dependencies]
-gpui-kit = "=0.9.0"
+gpui-kit = { version = "=0.9.0", features = ["gpui-fast"] }
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 dirs = "7"
@@ -38,7 +38,7 @@ objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std"
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSData"] }
 
 [dev-dependencies]
-gpui-kit = { version = "=0.9.0", features = ["test-support"] }
+gpui-kit = { version = "=0.9.0", features = ["gpui-fast", "test-support"] }
 
 [profile.release]
 debug = "line-tables-only"
