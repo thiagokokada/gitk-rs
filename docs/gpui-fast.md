@@ -150,3 +150,37 @@ the child figures do not establish a reduction in Git memory use.
 Keep Fast opt-in: UI preparation improved in these fixtures, while native startup
 and memory did not show a corresponding benefit. Retain virtual history and
 diff lists on either backend.
+
+## Read-only repository probe
+
+`profile_repository_scrolling` opens `GITK_PROFILE_REPOSITORY` with the real
+history, workspace and diff workers. It disables watching and streams history
+to EOF by default. `GITK_PROFILE_COMMITS` optionally sets a prefetch target;
+this probe needs more than 10,128 loaded commits for its deeper viewport.
+It never checks out a branch or writes files in the measured repository.
+Its preferences and view state are isolated by the test harness.
+
+Set `GITK_PROFILE_DIFF_COMMIT` to a commit in the first 512 rows with more
+than 64 diff lines. The probe selects it, then measures history scrolling
+near the top, history around row 10,000, and highlighted diff scrolling.
+Each scenario uses the earlier probe's 32 warmup and 240 measured wheel
+samples, headless text system, window size, graph cap and settling rules.
+Loading and page/highlighting waits are outside scrolling samples. Initial
+loading may take up to 180 seconds; its reported time includes test setup
+and UI updates while history streams, and is not Git-only throughput.
+
+```sh
+nix develop --command env \
+  GITK_PROFILE_REPOSITORY="$HOME/Projects/nixpkgs" \
+  GITK_PROFILE_DIFF_COMMIT=eb82e507d5e2ed0a71bb6f2f7c37d3ba547399e1 \
+  cargo test --release --bin gitk-rs --locked --features gpui-fast \
+  profile_repository_scrolling -- --ignored --nocapture
+```
+
+Omit `--features gpui-fast` for the upstream comparison. Keep the same repository
+HEAD and loaded count, and alternate backend order across runs. The command's
+example diff commit belongs to the nixpkgs HEAD recorded with the results;
+another HEAD may require choosing another recent commit.
+
+See the [full-history nixpkgs comparison](gpui-fast-nixpkgs.md) for results on
+1,114,966 commits.

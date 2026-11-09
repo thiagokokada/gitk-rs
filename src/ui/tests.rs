@@ -34,8 +34,17 @@ fn open_with_state<'a>(
     state_path: Option<std::path::PathBuf>,
     cx: &'a mut TestAppContext,
 ) -> (Harness, &'a mut VisualTestContext) {
+    open_repository(fixture.root(), batch, state_path, cx)
+}
+
+pub(super) fn open_repository<'a>(
+    repository: &std::path::Path,
+    batch: Option<usize>,
+    state_path: Option<std::path::PathBuf>,
+    cx: &'a mut TestAppContext,
+) -> (Harness, &'a mut VisualTestContext) {
     let config = Config {
-        repository: fixture.root().into(),
+        repository: repository.into(),
         watch: false,
         batch,
         ..Config::default()

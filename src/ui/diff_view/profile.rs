@@ -1,5 +1,5 @@
 //! Opt-in release probe of the application's real views on GPUI's test platform.
-use crate::ui::tests::{history_fixture, open_with_batch, until};
+use crate::ui::tests::{history_fixture, open_repository, open_with_batch, until};
 use gpui_kit::{
     Modifiers, Pixels, Point, ScrollDelta, ScrollEvent, TestAppContext, TouchPhase,
     VisualTestContext, point, px, test::TestWindowExt,
@@ -12,7 +12,15 @@ fn draw(cx: &mut VisualTestContext) {
 }
 
 fn settle(cx: &mut VisualTestContext, mut ready: impl FnMut(&mut VisualTestContext) -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(15);
+    settle_for(cx, Duration::from_secs(15), &mut ready);
+}
+
+fn settle_for(
+    cx: &mut VisualTestContext,
+    timeout: Duration,
+    mut ready: impl FnMut(&mut VisualTestContext) -> bool,
+) {
+    let deadline = Instant::now() + timeout;
     loop {
         cx.background_executor
             .advance_clock(Duration::from_millis(20));
@@ -262,4 +270,168 @@ fn profile_commit_list(cx: &mut TestAppContext) {
         settle(cx, |_| true);
     }
     report(&format!("commit-list-{strategy}-{count}"), samples);
+}
+
+#[gpui_kit::test]
+#[ignore = "reads GITK_PROFILE_REPOSITORY; opt-in release real-repository probe"]
+fn profile_repository_scrolling(cx: &mut TestAppContext) {
+    let repository = std::path::PathBuf::from(
+        std::env::var_os("GITK_PROFILE_REPOSITORY").expect("set GITK_PROFILE_REPOSITORY"),
+    );
+    let batch = std::env::var("GITK_PROFILE_COMMITS").ok().map(|value| {
+        let count: usize = value
+            .parse()
+            .expect("GITK_PROFILE_COMMITS must be an integer");
+        assert!(
+            count > 10128,
+            "repository scrolling probe needs more than 10,128 commits"
+        );
+        count
+    });
+    let diff_commit = std::env::var("GITK_PROFILE_DIFF_COMMIT")
+        .expect("set GITK_PROFILE_DIFF_COMMIT to a commit in the first 512 history rows");
+    cx.disable_accessibility();
+    let started = Instant::now();
+    let (app, cx) = open_repository(&repository, batch, None, cx);
+    settle_for(cx, Duration::from_secs(180), |cx| {
+        cx.update(|_, cx| {
+            app.view.read(cx).snapshot.as_ref().is_some_and(|s| {
+                assert!(s.error.is_none(), "repository history error: {:?}", s.error);
+                s.eof || batch.is_some_and(|count| s.loaded >= count)
+            })
+        })
+    });
+    let load = started.elapsed();
+    let pane = cx.update(|_, cx| app.view.read(cx).diff.clone());
+    app.view.update(cx, |view, _| {
+        view.request.range = 0..gitk_rs::history::PAGE_ROWS;
+        view.submit();
+    });
+    settle(cx, |cx| {
+        cx.update(|_, cx| {
+            app.view.read(cx).snapshot.as_ref().is_some_and(|s| {
+                s.start == 0
+                    && s.rows
+                        .iter()
+                        .any(|row| row.commit.id.to_hex() == diff_commit)
+            })
+        })
+    });
+    cx.update(|window, cx| {
+        app.view.update(cx, |view, cx| {
+            let index = view
+                .snapshot
+                .as_ref()
+                .unwrap()
+                .rows
+                .iter()
+                .position(|row| row.commit.id.to_hex() == diff_commit)
+                .unwrap();
+            view.select(index + view.local_rows.len(), window, cx);
+        })
+    });
+    settle(cx, |cx| {
+        cx.update(|_, cx| {
+            pane.read(cx)
+                .snapshot
+                .as_ref()
+                .is_some_and(|s| !s.highlighting && s.error.is_none() && s.count > 64)
+        })
+    });
+    cx.update(|_, cx| {
+        let view = app.view.read(cx);
+        let snapshot = view.snapshot.as_ref().unwrap();
+        let diff = pane.read(cx).snapshot.as_ref().unwrap();
+        eprintln!("ui_profile repository_head={} loaded={} eof={} graph_cols={} diff_commit={} diff_lines={} load_ms={} window=1280x850 scale=2 accessibility=off", snapshot.rows.first().unwrap().commit.id.to_hex(), snapshot.loaded, snapshot.eof, view.config.graph_columns, diff_commit, diff.count, load.as_millis());
+    });
+
+    for scenario in [
+        "repository-history-top",
+        "repository-history-deep",
+        "repository-diff",
+    ] {
+        if scenario != "repository-diff" {
+            let index = if scenario == "repository-history-deep" {
+                10000
+            } else {
+                0
+            };
+            app.view.update(cx, |view, cx| {
+                assert!(view.snapshot.as_ref().unwrap().loaded > index + 128);
+                view.ensure_rows(index..index + 64);
+                view.scroll
+                    .scroll_to_item_strict(index, gpui_kit::ScrollStrategy::Top);
+                cx.notify();
+            });
+        } else {
+            pane.update(cx, |pane, cx| pane.jump(0, cx));
+        }
+        let ready = |cx: &mut VisualTestContext| {
+            cx.update(|_, cx| {
+                let view = app.view.read(cx);
+                let history_ready = view.snapshot.as_ref().is_some_and(|s| {
+                    view.viewport.start.saturating_sub(view.local_rows.len()) >= s.start
+                        && view
+                            .viewport
+                            .end
+                            .saturating_sub(view.local_rows.len())
+                            .min(s.visible)
+                            <= s.start + s.rows.len()
+                });
+                let diff = pane.read(cx);
+                history_ready
+                    && diff.snapshot.as_ref().is_some_and(|s| {
+                        !s.highlighting
+                            && s.error.is_none()
+                            && s.start <= diff.viewport.start
+                            && s.start + s.lines.len() >= diff.viewport.end.min(s.count)
+                    })
+            })
+        };
+        settle(cx, ready);
+        cx.update(|_, cx| {
+            let view = app.view.read(cx);
+            if scenario == "repository-history-deep" {
+                assert!(view.viewport.start >= 10000);
+            }
+            eprintln!("ui_profile scenario={scenario} history_viewport_start={} history_viewport_end={} diff_viewport_start={} diff_viewport_end={}", view.viewport.start, view.viewport.end, pane.read(cx).viewport.start, pane.read(cx).viewport.end);
+        });
+        let position = cx.update(|window, _| {
+            window
+                .find(if scenario == "repository-diff" {
+                    "diff-content"
+                } else {
+                    "history-scrollbar-viewport"
+                })
+                .bounds()
+                .center()
+        });
+        let mut samples = Vec::with_capacity(240);
+        for frame in 0..272 {
+            let delta = if frame % 32 < 16 { -40. } else { 40. };
+            let before = cx.update(|_, cx| {
+                if scenario == "repository-diff" {
+                    pane.read(cx).scroll.0.borrow().base_handle.offset().y
+                } else {
+                    app.view.read(cx).scroll.0.borrow().base_handle.offset().y
+                }
+            });
+            let elapsed = scroll(cx, position, delta);
+            if frame == 0 {
+                let after = cx.update(|_, cx| {
+                    if scenario == "repository-diff" {
+                        pane.read(cx).scroll.0.borrow().base_handle.offset().y
+                    } else {
+                        app.view.read(cx).scroll.0.borrow().base_handle.offset().y
+                    }
+                });
+                assert!(after < before, "{scenario} did not scroll");
+            }
+            if frame >= 32 {
+                samples.push(elapsed);
+            }
+            settle(cx, ready);
+        }
+        report(scenario, samples);
+    }
 }
