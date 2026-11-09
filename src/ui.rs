@@ -191,9 +191,6 @@ struct HistoryWindow {
     detail: SharedString,
     diff: Entity<diff_view::DiffPane>,
     scroll: UniformListScrollHandle,
-    // Only the ignored list comparison can select an eager history renderer.
-    #[cfg(test)]
-    profile_eager_history: bool,
     _subscription: Subscription,
     _history_task: Task<()>,
     filter_task: Option<Task<()>>,
@@ -403,8 +400,6 @@ impl HistoryWindow {
             filter,
             detail: "Loading commits…".into(),
             scroll: UniformListScrollHandle::new(),
-            #[cfg(test)]
-            profile_eager_history: false,
             _subscription: subscription,
             _history_task: task,
             filter_task: None,
@@ -942,37 +937,6 @@ impl HistoryWindow {
             status.push_str(error);
         }
         status
-    }
-
-    fn history_list(&mut self, count: usize, cx: &mut Context<Self>) -> AnyElement {
-        #[cfg(test)]
-        if self.profile_eager_history {
-            self.ensure_rows(0..count);
-            let scroll = self.scroll.0.borrow().base_handle.clone();
-            return div()
-                .id("history-eager-profile")
-                .size_full()
-                .overflow_y_scroll()
-                .track_scroll(&scroll)
-                .child(
-                    div()
-                        .w_full()
-                        .children((0..count).map(|index| self.row(index, cx))),
-                )
-                .into_any_element();
-        }
-        uniform_list(
-            "history",
-            count,
-            cx.processor(|this, range: Range<usize>, _, cx| {
-                range.map(|index| this.row(index, cx)).collect::<Vec<_>>()
-            }),
-        )
-        .with_width_from_item(Some(self.viewport.start))
-        .with_decoration(HistoryViewport(cx.entity()))
-        .track_scroll(&self.scroll)
-        .size_full()
-        .into_any_element()
     }
 
     fn row(&mut self, index: usize, cx: &mut Context<Self>) -> AnyElement {
@@ -1602,7 +1566,21 @@ impl Render for HistoryWindow {
                                             .flex_1()
                                             .min_h_0()
                                             .child(
-                                                self.history_list(count, cx),
+                                                uniform_list(
+                                                    "history",
+                                                    count,
+                                                    cx.processor(
+                                                        |this, range: Range<usize>, _, cx| {
+                                                            range
+                                                                .map(|index| this.row(index, cx))
+                                                                .collect::<Vec<_>>()
+                                                        },
+                                                    ),
+                                                )
+                                                .with_width_from_item(Some(self.viewport.start))
+                                                .with_decoration(HistoryViewport(cx.entity()))
+                                                .track_scroll(&self.scroll)
+                                                .size_full(),
                                             )
                                             .child(
                                                 div()

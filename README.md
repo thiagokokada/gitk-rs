@@ -99,9 +99,6 @@ cargo build --release --locked
 ./target/release/gitk-rs /path/to/repository
 ```
 
-An experimental GPUI Fast build is available with `--features gpui-fast`.
-See [backend comparison](docs/gpui-fast.md) for validation and measurements.
-
 #### Nix
 
 Assuming that you have [Flakes](https://wiki.nixos.org/wiki/Flakes) enabled:

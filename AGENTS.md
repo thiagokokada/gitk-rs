@@ -97,6 +97,9 @@ nix develop --command env \
   Approved Nix cache access succeeded; use it for validation.
 - Sandboxed `ps -axo pid,etime,command` failed with `operation not permitted: ps`.
   Native process memory sampling requires approved process inspection.
+- Sandboxed `git restore --source=269f2ba --worktree -- src/ui.rs src/ui/tests.rs src/ui/diff_view.rs`
+  failed creating `.git/index.lock`: `Operation not permitted`.
+  Approved Git index access succeeded.
 
 - Sandboxed `nix eval --raw --inputs-from . crane#outPath` failed with
   `executing SQLite statement 'pragma synchronous = off': unable to open database file`

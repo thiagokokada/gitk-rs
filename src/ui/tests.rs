@@ -20,7 +20,7 @@ pub(super) fn open<'a>(
     open_with_batch(fixture, Some(1000), cx)
 }
 
-pub(super) fn open_with_batch<'a>(
+fn open_with_batch<'a>(
     fixture: &Fixture,
     batch: Option<usize>,
     cx: &'a mut TestAppContext,
@@ -34,17 +34,8 @@ fn open_with_state<'a>(
     state_path: Option<std::path::PathBuf>,
     cx: &'a mut TestAppContext,
 ) -> (Harness, &'a mut VisualTestContext) {
-    open_repository(fixture.root(), batch, state_path, cx)
-}
-
-pub(super) fn open_repository<'a>(
-    repository: &std::path::Path,
-    batch: Option<usize>,
-    state_path: Option<std::path::PathBuf>,
-    cx: &'a mut TestAppContext,
-) -> (Harness, &'a mut VisualTestContext) {
     let config = Config {
-        repository: repository.into(),
+        repository: fixture.root().into(),
         watch: false,
         batch,
         ..Config::default()
@@ -170,7 +161,7 @@ fn scroll_preferences_to(id: &'static str, cx: &mut VisualTestContext) {
     cx.refresh().unwrap();
 }
 
-pub(super) fn history_fixture(count: usize) -> Fixture {
+fn history_fixture(count: usize) -> Fixture {
     use std::{
         io::Write,
         process::{Command, Stdio},
