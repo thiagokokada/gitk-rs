@@ -1,0 +1,655 @@
+{
+  "headless": [
+    {
+      "backend": "upstream",
+      "run": 0,
+      "test": "profile_ui_scrolling",
+      "settings": {},
+      "output": [
+        "ui_profile fixture_head=1dbbeebe02f957dfd388f75be52747da9d64b34e commits=5000 diff_source_lines=2000 window=1280x850 scale=2 graph_cols=256 accessibility=off",
+        "ui_profile backend=upstream scenario=history samples=240 median_us=1734 p95_us=2103",
+        "ui_profile backend=upstream scenario=diff samples=240 median_us=1692 p95_us=1777"
+      ]
+    },
+    {
+      "backend": "upstream",
+      "run": 0,
+      "test": "profile_commit_list",
+      "settings": {
+        "GITK_PROFILE_ROWS": "100",
+        "GITK_PROFILE_LIST": "virtual"
+      },
+      "output": [
+        "ui_profile list=virtual rows=100 fixture_head=f5a8f49c724812f8c737041d0e2b63aa3c90e8c2 first_draw_us=1635 window=1280x850 scale=2 graph_cols=256 accessibility=off",
+        "ui_profile backend=upstream scenario=commit-list-virtual-100 samples=96 median_us=1422 p95_us=1741"
+      ]
+    },
+    {
+      "backend": "upstream",
+      "run": 0,
+      "test": "profile_commit_list",
+      "settings": {
+        "GITK_PROFILE_ROWS": "100",
+        "GITK_PROFILE_LIST": "eager"
+      },
+      "output": [
+        "ui_profile list=eager rows=100 fixture_head=f5a8f49c724812f8c737041d0e2b63aa3c90e8c2 first_draw_us=6745 window=1280x850 scale=2 graph_cols=256 accessibility=off",
+        "ui_profile backend=upstream scenario=commit-list-eager-100 samples=96 median_us=5383 p95_us=5993"
+      ]
+    },
+    {
+      "backend": "upstream",
+      "run": 0,
+      "test": "profile_commit_list",
+      "settings": {
+        "GITK_PROFILE_ROWS": "1000",
+        "GITK_PROFILE_LIST": "virtual"
+      },
+      "output": [
+        "ui_profile list=virtual rows=1000 fixture_head=e03c6d8b6a4d386527ecb9f55199e1de4fc48692 first_draw_us=1899 window=1280x850 scale=2 graph_cols=256 accessibility=off",
+        "ui_profile backend=upstream scenario=commit-list-virtual-1000 samples=96 median_us=1413 p95_us=1477"
+      ]
+    },
+    {
+      "backend": "upstream",
+      "run": 0,
+      "test": "profile_commit_list",
+      "settings": {
+        "GITK_PROFILE_ROWS": "1000",
+        "GITK_PROFILE_LIST": "eager"
+      },
+      "output": [
+        "ui_profile list=eager rows=1000 fixture_head=e03c6d8b6a4d386527ecb9f55199e1de4fc48692 first_draw_us=74931 window=1280x850 scale=2 graph_cols=256 accessibility=off",
+        "ui_profile backend=upstream scenario=commit-list-eager-1000 samples=96 median_us=53282 p95_us=57222"
+      ]
+    },
+    {
+      "backend": "upstream",
+      "run": 0,
+      "test": "profile_commit_list",
+      "settings": {
+        "GITK_PROFILE_ROWS": "5000",
+        "GITK_PROFILE_LIST": "virtual"
+      },
+      "output": [
+        "ui_profile list=virtual rows=5000 fixture_head=1dbbeebe02f957dfd388f75be52747da9d64b34e first_draw_us=1989 window=1280x850 scale=2 graph_cols=256 accessibility=off",
+        "ui_profile backend=upstream scenario=commit-list-virtual-5000 samples=96 median_us=1417 p95_us=1505"
+      ]
+    },
+    {
+      "backend": "upstream",
+      "run": 0,
+      "test": "profile_commit_list",
+      "settings": {
+        "GITK_PROFILE_ROWS": "5000",
+        "GITK_PROFILE_LIST": "eager"
+      },
+      "output": [
+        "ui_profile list=eager rows=5000 fixture_head=1dbbeebe02f957dfd388f75be52747da9d64b34e first_draw_us=381669 window=1280x850 scale=2 graph_cols=256 accessibility=off",
+        "ui_profile backend=upstream scenario=commit-list-eager-5000 samples=96 median_us=303475 p95_us=309035"
+      ]
+    },
+    {
+      "backend": "fast",
+      "run": 0,
+      "test": "profile_ui_scrolling",
+      "settings": {},
+      "output": [
+        "ui_profile fixture_head=1dbbeebe02f957dfd388f75be52747da9d64b34e commits=5000 diff_source_lines=2000 window=1280x850 scale=2 graph_cols=256 accessibility=off",
+        "ui_profile backend=fast scenario=history samples=240 median_us=1187 p95_us=1299",
+        "ui_profile scenario=history all_draws=819 views_built=2740 views_reused=1649 layer_composited=0 layer_repainted=0",
+        "ui_profile backend=fast scenario=diff samples=240 median_us=940 p95_us=1016",
+        "ui_profile scenario=diff all_draws=821 views_built=2254 views_reused=1944 layer_composited=0 layer_repainted=0"
+      ]
+    },
+    {
+      "backend": "fast",
+      "run": 0,
+      "test": "profile_commit_list",
+      "settings": {
+        "GITK_PROFILE_ROWS": "100",
+        "GITK_PROFILE_LIST": "virtual"
+      },
+      "output": [
+        "ui_profile list=virtual rows=100 fixture_head=f5a8f49c724812f8c737041d0e2b63aa3c90e8c2 first_draw_us=784 window=1280x850 scale=2 graph_cols=256 accessibility=off",
+        "ui_profile backend=fast scenario=commit-list-virtual-100 samples=96 median_us=1024 p95_us=1228"
+      ]
+    },
+    {
+      "backend": "fast",
+      "run": 0,
+      "test": "profile_commit_list",
+      "settings": {
+        "GITK_PROFILE_ROWS": "100",
+        "GITK_PROFILE_LIST": "eager"
+      },
+      "output": [
+        "ui_profile list=eager rows=100 fixture_head=f5a8f49c724812f8c737041d0e2b63aa3c90e8c2 first_draw_us=5511 window=1280x850 scale=2 graph_cols=256 accessibility=off",
+        "ui_profile backend=fast scenario=commit-list-eager-100 samples=96 median_us=2833 p95_us=3486"
+      ]
+    },
+    {
+      "backend": "fast",
+      "run": 0,
+      "test": "profile_commit_list",
+      "settings": {
+        "GITK_PROFILE_ROWS": "1000",
+        "GITK_PROFILE_LIST": "virtual"
+      },
+      "output": [
+        "ui_profile list=virtual rows=1000 fixture_head=e03c6d8b6a4d386527ecb9f55199e1de4fc48692 first_draw_us=1107 window=1280x850 scale=2 graph_cols=256 accessibility=off",
+        "ui_profile backend=fast scenario=commit-list-virtual-1000 samples=96 median_us=968 p95_us=1218"
+      ]
+    },
+    {
+      "backend": "fast",
+      "run": 0,
+      "test": "profile_commit_list",
+      "settings": {
+        "GITK_PROFILE_ROWS": "1000",
+        "GITK_PROFILE_LIST": "eager"
+      },
+      "output": [
+        "ui_profile list=eager rows=1000 fixture_head=e03c6d8b6a4d386527ecb9f55199e1de4fc48692 first_draw_us=50499 window=1280x850 scale=2 graph_cols=256 accessibility=off",
+        "ui_profile backend=fast scenario=commit-list-eager-1000 samples=96 median_us=26484 p95_us=28893"
+      ]
+    },
+    {
+      "backend": "fast",
+      "run": 0,
+      "test": "profile_commit_list",
+      "settings": {
+        "GITK_PROFILE_ROWS": "5000",
+        "GITK_PROFILE_LIST": "virtual"
+      },
+      "output": [
+        "ui_profile list=virtual rows=5000 fixture_head=1dbbeebe02f957dfd388f75be52747da9d64b34e first_draw_us=955 window=1280x850 scale=2 graph_cols=256 accessibility=off",
+        "ui_profile backend=fast scenario=commit-list-virtual-5000 samples=96 median_us=953 p95_us=990"
+      ]
+    },
+    {
+      "backend": "fast",
+      "run": 0,
+      "test": "profile_commit_list",
+      "settings": {
+        "GITK_PROFILE_ROWS": "5000",
+        "GITK_PROFILE_LIST": "eager"
+      },
+      "output": [
+        "ui_profile list=eager rows=5000 fixture_head=1dbbeebe02f957dfd388f75be52747da9d64b34e first_draw_us=244957 window=1280x850 scale=2 graph_cols=256 accessibility=off",
+        "ui_profile backend=fast scenario=commit-list-eager-5000 samples=96 median_us=154505 p95_us=166464"
+      ]
+    },
+    {
+      "backend": "fast",
+      "run": 1,
+      "test": "profile_ui_scrolling",
+      "settings": {},
+      "output": [
+        "ui_profile fixture_head=1dbbeebe02f957dfd388f75be52747da9d64b34e commits=5000 diff_source_lines=2000 window=1280x850 scale=2 graph_cols=256 accessibility=off",
+        "ui_profile backend=fast scenario=history samples=240 median_us=1182 p95_us=1234",
+        "ui_profile scenario=history all_draws=819 views_built=2742 views_reused=1648 layer_composited=0 layer_repainted=0",
+        "ui_profile backend=fast scenario=diff samples=240 median_us=930 p95_us=946",
+        "ui_profile scenario=diff all_draws=821 views_built=2254 views_reused=1944 layer_composited=0 layer_repainted=0"
+      ]
+    },
+    {
+      "backend": "fast",
+      "run": 1,
+      "test": "profile_commit_list",
+      "settings": {
+        "GITK_PROFILE_ROWS": "100",
+        "GITK_PROFILE_LIST": "virtual"
+      },
+      "output": [
+        "ui_profile list=virtual rows=100 fixture_head=f5a8f49c724812f8c737041d0e2b63aa3c90e8c2 first_draw_us=934 window=1280x850 scale=2 graph_cols=256 accessibility=off",
+        "ui_profile backend=fast scenario=commit-list-virtual-100 samples=96 median_us=971 p95_us=1135"
+      ]
+    },
+    {
+      "backend": "fast",
+      "run": 1,
+      "test": "profile_commit_list",
+      "settings": {
+        "GITK_PROFILE_ROWS": "100",
+        "GITK_PROFILE_LIST": "eager"
+      },
+      "output": [
+        "ui_profile list=eager rows=100 fixture_head=f5a8f49c724812f8c737041d0e2b63aa3c90e8c2 first_draw_us=4850 window=1280x850 scale=2 graph_cols=256 accessibility=off",
+        "ui_profile backend=fast scenario=commit-list-eager-100 samples=96 median_us=2802 p95_us=3198"
+      ]
+    },
+    {
+      "backend": "fast",
+      "run": 1,
+      "test": "profile_commit_list",
+      "settings": {
+        "GITK_PROFILE_ROWS": "1000",
+        "GITK_PROFILE_LIST": "virtual"
+      },
+      "output": [
+        "ui_profile list=virtual rows=1000 fixture_head=e03c6d8b6a4d386527ecb9f55199e1de4fc48692 first_draw_us=860 window=1280x850 scale=2 graph_cols=256 accessibility=off",
+        "ui_profile backend=fast scenario=commit-list-virtual-1000 samples=96 median_us=964 p95_us=1150"
+      ]
+    },
+    {
+      "backend": "fast",
+      "run": 1,
+      "test": "profile_commit_list",
+      "settings": {
+        "GITK_PROFILE_ROWS": "1000",
+        "GITK_PROFILE_LIST": "eager"
+      },
+      "output": [
+        "ui_profile list=eager rows=1000 fixture_head=e03c6d8b6a4d386527ecb9f55199e1de4fc48692 first_draw_us=46780 window=1280x850 scale=2 graph_cols=256 accessibility=off",
+        "ui_profile backend=fast scenario=commit-list-eager-1000 samples=96 median_us=26215 p95_us=31009"
+      ]
+    },
+    {
+      "backend": "fast",
+      "run": 1,
+      "test": "profile_commit_list",
+      "settings": {
+        "GITK_PROFILE_ROWS": "5000",
+        "GITK_PROFILE_LIST": "virtual"
+      },
+      "output": [
+        "ui_profile list=virtual rows=5000 fixture_head=1dbbeebe02f957dfd388f75be52747da9d64b34e first_draw_us=1261 window=1280x850 scale=2 graph_cols=256 accessibility=off",
+        "ui_profile backend=fast scenario=commit-list-virtual-5000 samples=96 median_us=945 p95_us=969"
+      ]
+    },
+    {
+      "backend": "fast",
+      "run": 1,
+      "test": "profile_commit_list",
+      "settings": {
+        "GITK_PROFILE_ROWS": "5000",
+        "GITK_PROFILE_LIST": "eager"
+      },
+      "output": [
+        "ui_profile list=eager rows=5000 fixture_head=1dbbeebe02f957dfd388f75be52747da9d64b34e first_draw_us=249257 window=1280x850 scale=2 graph_cols=256 accessibility=off",
+        "ui_profile backend=fast scenario=commit-list-eager-5000 samples=96 median_us=154055 p95_us=170859"
+      ]
+    },
+    {
+      "backend": "upstream",
+      "run": 1,
+      "test": "profile_ui_scrolling",
+      "settings": {},
+      "output": [
+        "ui_profile fixture_head=1dbbeebe02f957dfd388f75be52747da9d64b34e commits=5000 diff_source_lines=2000 window=1280x850 scale=2 graph_cols=256 accessibility=off",
+        "ui_profile backend=upstream scenario=history samples=240 median_us=1755 p95_us=2199",
+        "ui_profile backend=upstream scenario=diff samples=240 median_us=1725 p95_us=2104"
+      ]
+    },
+    {
+      "backend": "upstream",
+      "run": 1,
+      "test": "profile_commit_list",
+      "settings": {
+        "GITK_PROFILE_ROWS": "100",
+        "GITK_PROFILE_LIST": "virtual"
+      },
+      "output": [
+        "ui_profile list=virtual rows=100 fixture_head=f5a8f49c724812f8c737041d0e2b63aa3c90e8c2 first_draw_us=1589 window=1280x850 scale=2 graph_cols=256 accessibility=off",
+        "ui_profile backend=upstream scenario=commit-list-virtual-100 samples=96 median_us=1448 p95_us=1793"
+      ]
+    },
+    {
+      "backend": "upstream",
+      "run": 1,
+      "test": "profile_commit_list",
+      "settings": {
+        "GITK_PROFILE_ROWS": "100",
+        "GITK_PROFILE_LIST": "eager"
+      },
+      "output": [
+        "ui_profile list=eager rows=100 fixture_head=f5a8f49c724812f8c737041d0e2b63aa3c90e8c2 first_draw_us=6701 window=1280x850 scale=2 graph_cols=256 accessibility=off",
+        "ui_profile backend=upstream scenario=commit-list-eager-100 samples=96 median_us=5336 p95_us=6395"
+      ]
+    },
+    {
+      "backend": "upstream",
+      "run": 1,
+      "test": "profile_commit_list",
+      "settings": {
+        "GITK_PROFILE_ROWS": "1000",
+        "GITK_PROFILE_LIST": "virtual"
+      },
+      "output": [
+        "ui_profile list=virtual rows=1000 fixture_head=e03c6d8b6a4d386527ecb9f55199e1de4fc48692 first_draw_us=1877 window=1280x850 scale=2 graph_cols=256 accessibility=off",
+        "ui_profile backend=upstream scenario=commit-list-virtual-1000 samples=96 median_us=1471 p95_us=1849"
+      ]
+    },
+    {
+      "backend": "upstream",
+      "run": 1,
+      "test": "profile_commit_list",
+      "settings": {
+        "GITK_PROFILE_ROWS": "1000",
+        "GITK_PROFILE_LIST": "eager"
+      },
+      "output": [
+        "ui_profile list=eager rows=1000 fixture_head=e03c6d8b6a4d386527ecb9f55199e1de4fc48692 first_draw_us=80821 window=1280x850 scale=2 graph_cols=256 accessibility=off",
+        "ui_profile backend=upstream scenario=commit-list-eager-1000 samples=96 median_us=61409 p95_us=71958"
+      ]
+    },
+    {
+      "backend": "upstream",
+      "run": 1,
+      "test": "profile_commit_list",
+      "settings": {
+        "GITK_PROFILE_ROWS": "5000",
+        "GITK_PROFILE_LIST": "virtual"
+      },
+      "output": [
+        "ui_profile list=virtual rows=5000 fixture_head=1dbbeebe02f957dfd388f75be52747da9d64b34e first_draw_us=1851 window=1280x850 scale=2 graph_cols=256 accessibility=off",
+        "ui_profile backend=upstream scenario=commit-list-virtual-5000 samples=96 median_us=1428 p95_us=1557"
+      ]
+    },
+    {
+      "backend": "upstream",
+      "run": 1,
+      "test": "profile_commit_list",
+      "settings": {
+        "GITK_PROFILE_ROWS": "5000",
+        "GITK_PROFILE_LIST": "eager"
+      },
+      "output": [
+        "ui_profile list=eager rows=5000 fixture_head=1dbbeebe02f957dfd388f75be52747da9d64b34e first_draw_us=420074 window=1280x850 scale=2 graph_cols=256 accessibility=off",
+        "ui_profile backend=upstream scenario=commit-list-eager-5000 samples=96 median_us=305869 p95_us=326962"
+      ]
+    },
+    {
+      "backend": "upstream",
+      "run": 2,
+      "test": "profile_ui_scrolling",
+      "settings": {},
+      "output": [
+        "ui_profile fixture_head=1dbbeebe02f957dfd388f75be52747da9d64b34e commits=5000 diff_source_lines=2000 window=1280x850 scale=2 graph_cols=256 accessibility=off",
+        "ui_profile backend=upstream scenario=history samples=240 median_us=1701 p95_us=1960",
+        "ui_profile backend=upstream scenario=diff samples=240 median_us=1706 p95_us=1892"
+      ]
+    },
+    {
+      "backend": "upstream",
+      "run": 2,
+      "test": "profile_commit_list",
+      "settings": {
+        "GITK_PROFILE_ROWS": "100",
+        "GITK_PROFILE_LIST": "virtual"
+      },
+      "output": [
+        "ui_profile list=virtual rows=100 fixture_head=f5a8f49c724812f8c737041d0e2b63aa3c90e8c2 first_draw_us=1670 window=1280x850 scale=2 graph_cols=256 accessibility=off",
+        "ui_profile backend=upstream scenario=commit-list-virtual-100 samples=96 median_us=1427 p95_us=1569"
+      ]
+    },
+    {
+      "backend": "upstream",
+      "run": 2,
+      "test": "profile_commit_list",
+      "settings": {
+        "GITK_PROFILE_ROWS": "100",
+        "GITK_PROFILE_LIST": "eager"
+      },
+      "output": [
+        "ui_profile list=eager rows=100 fixture_head=f5a8f49c724812f8c737041d0e2b63aa3c90e8c2 first_draw_us=7152 window=1280x850 scale=2 graph_cols=256 accessibility=off",
+        "ui_profile backend=upstream scenario=commit-list-eager-100 samples=96 median_us=5314 p95_us=5857"
+      ]
+    },
+    {
+      "backend": "upstream",
+      "run": 2,
+      "test": "profile_commit_list",
+      "settings": {
+        "GITK_PROFILE_ROWS": "1000",
+        "GITK_PROFILE_LIST": "virtual"
+      },
+      "output": [
+        "ui_profile list=virtual rows=1000 fixture_head=e03c6d8b6a4d386527ecb9f55199e1de4fc48692 first_draw_us=1835 window=1280x850 scale=2 graph_cols=256 accessibility=off",
+        "ui_profile backend=upstream scenario=commit-list-virtual-1000 samples=96 median_us=1435 p95_us=1593"
+      ]
+    },
+    {
+      "backend": "upstream",
+      "run": 2,
+      "test": "profile_commit_list",
+      "settings": {
+        "GITK_PROFILE_ROWS": "1000",
+        "GITK_PROFILE_LIST": "eager"
+      },
+      "output": [
+        "ui_profile list=eager rows=1000 fixture_head=e03c6d8b6a4d386527ecb9f55199e1de4fc48692 first_draw_us=74314 window=1280x850 scale=2 graph_cols=256 accessibility=off",
+        "ui_profile backend=upstream scenario=commit-list-eager-1000 samples=96 median_us=53073 p95_us=55065"
+      ]
+    },
+    {
+      "backend": "upstream",
+      "run": 2,
+      "test": "profile_commit_list",
+      "settings": {
+        "GITK_PROFILE_ROWS": "5000",
+        "GITK_PROFILE_LIST": "virtual"
+      },
+      "output": [
+        "ui_profile list=virtual rows=5000 fixture_head=1dbbeebe02f957dfd388f75be52747da9d64b34e first_draw_us=2093 window=1280x850 scale=2 graph_cols=256 accessibility=off",
+        "ui_profile backend=upstream scenario=commit-list-virtual-5000 samples=96 median_us=1422 p95_us=1502"
+      ]
+    },
+    {
+      "backend": "upstream",
+      "run": 2,
+      "test": "profile_commit_list",
+      "settings": {
+        "GITK_PROFILE_ROWS": "5000",
+        "GITK_PROFILE_LIST": "eager"
+      },
+      "output": [
+        "ui_profile list=eager rows=5000 fixture_head=1dbbeebe02f957dfd388f75be52747da9d64b34e first_draw_us=377591 window=1280x850 scale=2 graph_cols=256 accessibility=off",
+        "ui_profile backend=upstream scenario=commit-list-eager-5000 samples=96 median_us=303454 p95_us=319162"
+      ]
+    },
+    {
+      "backend": "fast",
+      "run": 2,
+      "test": "profile_ui_scrolling",
+      "settings": {},
+      "output": [
+        "ui_profile fixture_head=1dbbeebe02f957dfd388f75be52747da9d64b34e commits=5000 diff_source_lines=2000 window=1280x850 scale=2 graph_cols=256 accessibility=off",
+        "ui_profile backend=fast scenario=history samples=240 median_us=1176 p95_us=1214",
+        "ui_profile scenario=history all_draws=819 views_built=2740 views_reused=1649 layer_composited=0 layer_repainted=0",
+        "ui_profile backend=fast scenario=diff samples=240 median_us=932 p95_us=947",
+        "ui_profile scenario=diff all_draws=821 views_built=2256 views_reused=1943 layer_composited=0 layer_repainted=0"
+      ]
+    },
+    {
+      "backend": "fast",
+      "run": 2,
+      "test": "profile_commit_list",
+      "settings": {
+        "GITK_PROFILE_ROWS": "100",
+        "GITK_PROFILE_LIST": "virtual"
+      },
+      "output": [
+        "ui_profile list=virtual rows=100 fixture_head=f5a8f49c724812f8c737041d0e2b63aa3c90e8c2 first_draw_us=1188 window=1280x850 scale=2 graph_cols=256 accessibility=off",
+        "ui_profile backend=fast scenario=commit-list-virtual-100 samples=96 median_us=954 p95_us=1033"
+      ]
+    },
+    {
+      "backend": "fast",
+      "run": 2,
+      "test": "profile_commit_list",
+      "settings": {
+        "GITK_PROFILE_ROWS": "100",
+        "GITK_PROFILE_LIST": "eager"
+      },
+      "output": [
+        "ui_profile list=eager rows=100 fixture_head=f5a8f49c724812f8c737041d0e2b63aa3c90e8c2 first_draw_us=4770 window=1280x850 scale=2 graph_cols=256 accessibility=off",
+        "ui_profile backend=fast scenario=commit-list-eager-100 samples=96 median_us=2792 p95_us=2932"
+      ]
+    },
+    {
+      "backend": "fast",
+      "run": 2,
+      "test": "profile_commit_list",
+      "settings": {
+        "GITK_PROFILE_ROWS": "1000",
+        "GITK_PROFILE_LIST": "virtual"
+      },
+      "output": [
+        "ui_profile list=virtual rows=1000 fixture_head=e03c6d8b6a4d386527ecb9f55199e1de4fc48692 first_draw_us=828 window=1280x850 scale=2 graph_cols=256 accessibility=off",
+        "ui_profile backend=fast scenario=commit-list-virtual-1000 samples=96 median_us=955 p95_us=1191"
+      ]
+    },
+    {
+      "backend": "fast",
+      "run": 2,
+      "test": "profile_commit_list",
+      "settings": {
+        "GITK_PROFILE_ROWS": "1000",
+        "GITK_PROFILE_LIST": "eager"
+      },
+      "output": [
+        "ui_profile list=eager rows=1000 fixture_head=e03c6d8b6a4d386527ecb9f55199e1de4fc48692 first_draw_us=47288 window=1280x850 scale=2 graph_cols=256 accessibility=off",
+        "ui_profile backend=fast scenario=commit-list-eager-1000 samples=96 median_us=25919 p95_us=28641"
+      ]
+    },
+    {
+      "backend": "fast",
+      "run": 2,
+      "test": "profile_commit_list",
+      "settings": {
+        "GITK_PROFILE_ROWS": "5000",
+        "GITK_PROFILE_LIST": "virtual"
+      },
+      "output": [
+        "ui_profile list=virtual rows=5000 fixture_head=1dbbeebe02f957dfd388f75be52747da9d64b34e first_draw_us=1209 window=1280x850 scale=2 graph_cols=256 accessibility=off",
+        "ui_profile backend=fast scenario=commit-list-virtual-5000 samples=96 median_us=952 p95_us=976"
+      ]
+    },
+    {
+      "backend": "fast",
+      "run": 2,
+      "test": "profile_commit_list",
+      "settings": {
+        "GITK_PROFILE_ROWS": "5000",
+        "GITK_PROFILE_LIST": "eager"
+      },
+      "output": [
+        "ui_profile list=eager rows=5000 fixture_head=1dbbeebe02f957dfd388f75be52747da9d64b34e first_draw_us=251041 window=1280x850 scale=2 graph_cols=256 accessibility=off",
+        "ui_profile backend=fast scenario=commit-list-eager-5000 samples=96 median_us=147795 p95_us=154542"
+      ]
+    }
+  ],
+  "native": [
+    {
+      "backend": "upstream",
+      "run": 0,
+      "fixture_head": "1dbbeebe02f957dfd388f75be52747da9d64b34e",
+      "duration_s": 5,
+      "app_max_sampled_rss_kib": 159056,
+      "children_max_sampled_rss_kib": 64,
+      "rss_samples": 46,
+      "exit_code": -15,
+      "output": [
+        "gitk-rs timing phase=WindowCreated elapsed_us=902731",
+        "gitk-rs timing phase=WindowPainted elapsed_us=935178",
+        "gitk-rs timing phase=HistoryPainted elapsed_us=1050647",
+        "gitk-rs timing phase=SelectionPainted elapsed_us=1050647"
+      ]
+    },
+    {
+      "backend": "fast",
+      "run": 0,
+      "fixture_head": "1dbbeebe02f957dfd388f75be52747da9d64b34e",
+      "duration_s": 5,
+      "app_max_sampled_rss_kib": 162704,
+      "children_max_sampled_rss_kib": 64,
+      "rss_samples": 46,
+      "exit_code": -15,
+      "output": [
+        "gitk-rs timing phase=WindowCreated elapsed_us=792417",
+        "gitk-rs timing phase=WindowPainted elapsed_us=819419",
+        "gitk-rs timing phase=HistoryPainted elapsed_us=912259",
+        "gitk-rs timing phase=SelectionPainted elapsed_us=912259"
+      ]
+    },
+    {
+      "backend": "fast",
+      "run": 1,
+      "fixture_head": "1dbbeebe02f957dfd388f75be52747da9d64b34e",
+      "duration_s": 5,
+      "app_max_sampled_rss_kib": 163328,
+      "children_max_sampled_rss_kib": 128,
+      "rss_samples": 45,
+      "exit_code": -15,
+      "output": [
+        "gitk-rs timing phase=WindowCreated elapsed_us=517303",
+        "gitk-rs timing phase=WindowPainted elapsed_us=533393",
+        "gitk-rs timing phase=HistoryPainted elapsed_us=608845",
+        "gitk-rs timing phase=SelectionPainted elapsed_us=608845"
+      ]
+    },
+    {
+      "backend": "upstream",
+      "run": 1,
+      "fixture_head": "1dbbeebe02f957dfd388f75be52747da9d64b34e",
+      "duration_s": 5,
+      "app_max_sampled_rss_kib": 161616,
+      "children_max_sampled_rss_kib": 7568,
+      "rss_samples": 46,
+      "exit_code": -15,
+      "output": [
+        "gitk-rs timing phase=WindowCreated elapsed_us=481139",
+        "gitk-rs timing phase=WindowPainted elapsed_us=497696",
+        "gitk-rs timing phase=HistoryPainted elapsed_us=576588",
+        "gitk-rs timing phase=SelectionPainted elapsed_us=576588"
+      ]
+    },
+    {
+      "backend": "upstream",
+      "run": 2,
+      "fixture_head": "1dbbeebe02f957dfd388f75be52747da9d64b34e",
+      "duration_s": 5,
+      "app_max_sampled_rss_kib": 161328,
+      "children_max_sampled_rss_kib": 8176,
+      "rss_samples": 46,
+      "exit_code": -15,
+      "output": [
+        "gitk-rs timing phase=WindowCreated elapsed_us=479025",
+        "gitk-rs timing phase=WindowPainted elapsed_us=495218",
+        "gitk-rs timing phase=HistoryPainted elapsed_us=576566",
+        "gitk-rs timing phase=SelectionPainted elapsed_us=576566"
+      ]
+    },
+    {
+      "backend": "fast",
+      "run": 2,
+      "fixture_head": "1dbbeebe02f957dfd388f75be52747da9d64b34e",
+      "duration_s": 5,
+      "app_max_sampled_rss_kib": 163312,
+      "children_max_sampled_rss_kib": 8928,
+      "rss_samples": 46,
+      "exit_code": -15,
+      "output": [
+        "gitk-rs timing phase=WindowCreated elapsed_us=481464",
+        "gitk-rs timing phase=WindowPainted elapsed_us=497546",
+        "gitk-rs timing phase=HistoryPainted elapsed_us=574312",
+        "gitk-rs timing phase=SelectionPainted elapsed_us=574312"
+      ]
+    }
+  ],
+  "metadata": {
+    "platform": "27.0.1",
+    "cpu": "Apple M2 Pro",
+    "memory_bytes": 34359738368,
+    "rustc": "rustc 1.99.0 (b940084d7 2026-09-28) (built from a source tarball)",
+    "source_base": "eb832a8d5c0aab64b3b2c4c9aaa3ad8d007b5ad6",
+    "date": "2026-11-09",
+    "probe_sha256": "65b0c7f4ff16fae8cf861fcbe43bc6856c85c847469c6eb2cdcd117540e5dd3e",
+    "binary_versions": {
+      "upstream": "gitk-rs 0.1.0-eb832a8",
+      "fast": "gitk-rs 0.1.0-eb832a8"
+    }
+  }
+}

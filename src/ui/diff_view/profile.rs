@@ -91,7 +91,8 @@ fn profile_ui_scrolling(cx: &mut TestAppContext) {
 
     for scenario in ["history", "diff"] {
         #[cfg(feature = "gpui-fast")]
-        cx.update(|window, _| window.reset_layout_stats());
+        // Reading counters does not enable Fast's extra per-measurement timers.
+        let stats_before = cx.update(|window, _| window.layout_stats());
         let position = cx.update(|window, _| {
             window
                 .find(if scenario == "history" {
@@ -151,8 +152,11 @@ fn profile_ui_scrolling(cx: &mut TestAppContext) {
             let stats = window.layout_stats();
             eprintln!(
                 "ui_profile scenario={scenario} all_draws={} views_built={} views_reused={} layer_composited={} layer_repainted={}",
-                stats.frames, stats.views_built, stats.views_reused,
-                stats.layer_frames_composited, stats.layer_frames_repainted,
+                stats.frames - stats_before.frames,
+                stats.views_built - stats_before.views_built,
+                stats.views_reused - stats_before.views_reused,
+                stats.layer_frames_composited - stats_before.layer_frames_composited,
+                stats.layer_frames_repainted - stats_before.layer_frames_repainted,
             );
         });
     }
