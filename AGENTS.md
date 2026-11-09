@@ -92,6 +92,12 @@ nix develop --command env \
 
 ## Local environment limitations
 
+- On macOS, sandboxed `nix develop --command rustc --version` failed with
+  `attempt to write a readonly database` in `fetcher-cache-v4.sqlite`.
+  Approved Nix cache access succeeded; use it for validation.
+- Sandboxed `ps -axo pid,etime,command` failed with `operation not permitted: ps`.
+  Native process memory sampling requires approved process inspection.
+
 - Sandboxed `nix eval --raw --inputs-from . crane#outPath` failed with
   `executing SQLite statement 'pragma synchronous = off': unable to open database file`
   for the Nix fetcher cache. Run Nix validation with approved cache access.

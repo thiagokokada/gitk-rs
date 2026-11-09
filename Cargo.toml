@@ -8,6 +8,8 @@ description = "A streaming Git history explorer built with GPUI"
 
 [features]
 default = ["system-fonts"]
+# Opt into GPUI Fast across Kit's core, platform, and component layers.
+gpui-fast = ["gpui-kit/gpui-fast"]
 # Resolve Linux font defaults when Fontconfig is available; otherwise use built-in defaults.
 system-fonts = ["dep:fontconfig"]
 

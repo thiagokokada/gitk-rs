@@ -20,7 +20,7 @@ pub(super) fn open<'a>(
     open_with_batch(fixture, Some(1000), cx)
 }
 
-fn open_with_batch<'a>(
+pub(super) fn open_with_batch<'a>(
     fixture: &Fixture,
     batch: Option<usize>,
     cx: &'a mut TestAppContext,
@@ -161,7 +161,7 @@ fn scroll_preferences_to(id: &'static str, cx: &mut VisualTestContext) {
     cx.refresh().unwrap();
 }
 
-fn history_fixture(count: usize) -> Fixture {
+pub(super) fn history_fixture(count: usize) -> Fixture {
     use std::{
         io::Write,
         process::{Command, Stdio},
