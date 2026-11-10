@@ -297,10 +297,21 @@ impl HistoryWindow {
         let filter = cx.new(|cx| {
             InputState::new(window, cx).placeholder("Search commits, e.g. author:alice path:ci.yml")
         });
-        let subscription = cx.subscribe_in(&filter, window, |this, input, event, _, cx| {
-            if matches!(event, InputEvent::Change) {
+        let subscription = cx.subscribe_in(&filter, window, |this, input, event, window, cx| {
+            if matches!(event, InputEvent::PressEnter { .. }) {
+                this.filter_task = None;
                 let query = input.read(cx).value().to_string();
+                if this.request.query != query {
+                    this.apply_filter(query, cx);
+                }
+                this.focus.focus(window, cx);
+            } else if matches!(event, InputEvent::Change) {
+                let query = input.read(cx).value().to_string();
+                this.filter_task = None;
                 cx.notify();
+                if this.request.query == query {
+                    return;
+                }
                 this.filter_task = Some(cx.spawn(async move |this, cx| {
                     cx.background_executor()
                         .timer(Duration::from_millis(120))

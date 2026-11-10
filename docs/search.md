@@ -11,10 +11,11 @@ contents:"old function name" path:src/
 
 Open Help with F1 or ? for the syntax reference. Recognized qualifiers appear
 as badges below the input. Invalid filters show an explanation there; correct
-the input to resume searching. The status bar reports matching and loaded
-counts and shows `filtering` while results are incomplete. Results arrive
-incrementally; zero matches while filtering is still in progress does not mean
-the search is complete.
+the input to resume searching. Press Enter in the filter to apply pending edits
+and return keyboard focus to history. The status bar reports matching and
+loaded counts and shows `filtering` while results are incomplete. Results
+arrive incrementally; zero matches while filtering is still in progress does
+not mean the search is complete.
 
 | Qualifier | Matches |
 | --- | --- |

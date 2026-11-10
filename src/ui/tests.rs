@@ -754,6 +754,54 @@ fn keyboard_navigation_and_filter_focus(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn enter_applies_pending_filter_and_returns_focus_to_history(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let oldest = fixture.commit("needle oldest");
+    fixture.commit("needle middle");
+    let newest = fixture.commit("unrelated newest");
+    let (app, cx) = open(&fixture, cx);
+    until(cx, |cx| selected(&app.view, cx).as_deref() == Some(&newest));
+    cx.simulate_keystrokes("/");
+    cx.simulate_input("needle");
+    assert_eq!(
+        cx.update(|_, cx| app.view.read(cx).request.query.clone()),
+        ""
+    );
+    cx.simulate_keystrokes("enter");
+    cx.update(|window, cx| {
+        let view = app.view.read(cx);
+        assert_eq!(view.request.query, "needle");
+        assert!(view.filter_task.is_none());
+        assert!(view.focus.is_focused(window));
+        assert!(!view.filter.read(cx).focus_handle(cx).is_focused(window));
+    });
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            let view = app.view.read(cx);
+            view.snapshot.as_ref().is_some_and(|snapshot| {
+                snapshot.request_id == view.request.id
+                    && snapshot.visible == 2
+                    && !snapshot.filtering
+            })
+        })
+    });
+    cx.simulate_keystrokes("home j");
+    assert_eq!(selected(&app.view, cx).as_deref(), Some(oldest.as_str()));
+    assert_eq!(
+        cx.update(|_, cx| app.view.read(cx).filter.read(cx).value().to_string()),
+        "needle"
+    );
+    // Enter also applies clearing the filter without waiting for its debounce.
+    cx.simulate_keystrokes("/ ctrl-a ctrl-k enter");
+    cx.update(|window, cx| {
+        let view = app.view.read(cx);
+        assert!(view.request.query.is_empty());
+        assert!(view.filter_task.is_none());
+        assert!(view.focus.is_focused(window));
+    });
+}
+
+#[gpui_kit::test]
 fn branch_protection_and_selected_ancestor_survive_switch(cx: &mut TestAppContext) {
     let fixture = Fixture::new();
     let ancestor = fixture.commit("ancestor");
