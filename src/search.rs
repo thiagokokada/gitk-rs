@@ -11,18 +11,20 @@ pub enum Qualifier {
     Message,
     Hash,
     Path,
+    Contents,
     Before,
     After,
     Merge,
 }
 
 impl Qualifier {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::Author,
         Self::Committer,
         Self::Message,
         Self::Hash,
         Self::Path,
+        Self::Contents,
         Self::Before,
         Self::After,
         Self::Merge,
@@ -35,6 +37,7 @@ impl Qualifier {
             Self::Message => "message",
             Self::Hash => "hash",
             Self::Path => "path",
+            Self::Contents => "contents",
             Self::Before => "before",
             Self::After => "after",
             Self::Merge => "merge",
@@ -45,7 +48,12 @@ impl Qualifier {
         let value = match self {
             Self::Before | Self::After => "YYYY-MM-DD",
             Self::Merge => "true|false",
-            Self::Author | Self::Committer | Self::Message | Self::Hash | Self::Path => "text",
+            Self::Author
+            | Self::Committer
+            | Self::Message
+            | Self::Hash
+            | Self::Path
+            | Self::Contents => "text",
         };
         format!("{self}:{value}")
     }
@@ -57,6 +65,7 @@ impl Qualifier {
             Self::Message => "Commit message substring",
             Self::Hash => "Commit hash substring",
             Self::Path => "Changed path substring or regex; merges compare with their first parent",
+            Self::Contents => "Added or removed text line substring or regex",
             Self::Before => "Author's recorded calendar day strictly before this date",
             Self::After => "Author's recorded calendar day strictly after this date",
             Self::Merge => "Include merges with true; exclude merges with false",
@@ -73,7 +82,12 @@ impl Qualifier {
                 matches!(value, "true" | "false"),
                 "{self}: expects true or false"
             ),
-            Self::Author | Self::Committer | Self::Message | Self::Hash | Self::Path => (),
+            Self::Author
+            | Self::Committer
+            | Self::Message
+            | Self::Hash
+            | Self::Path
+            | Self::Contents => (),
         }
         Ok(())
     }
@@ -107,6 +121,7 @@ pub struct Query {
     terms: Vec<(Qualifier, String)>,
     text: String,
     pub path: Option<String>,
+    pub contents: Option<String>,
     pub filters: Vec<String>,
 }
 
@@ -178,12 +193,14 @@ impl Query {
             }
             let qualifier: Qualifier = key.parse()?;
             qualifier.validate(value)?;
-            if qualifier == Qualifier::Path {
-                ensure!(
-                    result.path.is_none(),
-                    "Use one {qualifier}: filter per search"
-                );
-                result.path = Some(value.to_owned());
+            if matches!(qualifier, Qualifier::Path | Qualifier::Contents) {
+                let slot = if qualifier == Qualifier::Path {
+                    &mut result.path
+                } else {
+                    &mut result.contents
+                };
+                ensure!(slot.is_none(), "Use one {qualifier}: filter per search");
+                *slot = Some(value.to_owned());
             } else {
                 result.terms.push((qualifier, value.to_owned()));
             }
@@ -203,10 +220,11 @@ impl Query {
             })
             .count()
             + usize::from(self.path.is_some())
+            + usize::from(self.contents.is_some())
             + usize::from(!self.text.is_empty());
         ensure!(
             !regex || pattern_count <= 16,
-            "Regex search supports at most 16 text/path patterns"
+            "Regex search supports at most 16 text/path/contents patterns"
         );
         let mut predicates = Vec::new();
         for (qualifier, value) in self.terms {
@@ -221,7 +239,7 @@ impl Query {
                 Qualifier::Before => Predicate::Before(value),
                 Qualifier::After => Predicate::After(value),
                 Qualifier::Merge => Predicate::Merge(value == "true"),
-                Qualifier::Path => continue, // Paths use the separate diff stream.
+                Qualifier::Path | Qualifier::Contents => continue, // Diff predicates use the separate stream.
             });
         }
         Ok(CompiledQuery {
@@ -231,6 +249,12 @@ impl Query {
             } else {
                 Some(Matcher::new(self.text, regex)?)
             },
+            contents: self
+                .contents
+                .map(|value| {
+                    Matcher::new(value, regex).map_err(|error| anyhow::anyhow!("contents: {error}"))
+                })
+                .transpose()?,
             path: self
                 .path
                 .map(|value| {
@@ -263,6 +287,37 @@ impl Matcher {
         Ok(Self::Regex(compiled))
     }
 
+    /// A necessary (not sufficient) POSIX ERE for Git's changed-line filter.
+    /// Keep Rust's matcher authoritative, including its Unicode lowercase rules.
+    pub(crate) fn git_literal_prefilter(&self) -> Option<String> {
+        let Self::Literal(value) = self else {
+            return None;
+        };
+        if !value.is_ascii() {
+            return None;
+        }
+        // Non-ASCII characters can lowercase to ASCII i (with a combining dot)
+        // or k (Kelvin sign). Avoid those letters rather than losing matches.
+        let fragment = value
+            .split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_' || matches!(ch, 'i' | 'k'))
+            .max_by_key(|fragment| fragment.len())?;
+        if fragment.len() < 3 {
+            return None;
+        }
+        let mut pattern = String::new();
+        for byte in fragment.bytes().take(64) {
+            if byte.is_ascii_lowercase() {
+                pattern.push('[');
+                pattern.push(char::from(byte));
+                pattern.push(char::from(byte.to_ascii_uppercase()));
+                pattern.push(']');
+            } else {
+                pattern.push(char::from(byte));
+            }
+        }
+        Some(pattern)
+    }
+
     pub fn is_match(&self, text: &str) -> bool {
         match self {
             Self::Literal(value) => text.to_lowercase().contains(value),
@@ -287,10 +342,11 @@ pub struct CompiledQuery {
     predicates: Vec<Predicate>,
     text: Option<Matcher>,
     pub path: Option<Matcher>,
+    pub contents: Option<Matcher>,
 }
 
 impl CompiledQuery {
-    /// Paths are resolved separately by the cancellable diff stream.
+    /// Paths and contents are resolved by the cancellable diff stream.
     pub fn matches(&self, commit: &Commit) -> bool {
         self.predicates.iter().all(|predicate| match predicate {
             Predicate::Author(value) => {
@@ -438,6 +494,7 @@ mod tests {
         for input in [
             r"author:[",
             r"path:(?=foo)",
+            r"contents:(?=foo)",
             r"message:(a)\1",
             r"message:a{1000000}",
         ] {
@@ -479,7 +536,8 @@ mod tests {
                 | Qualifier::Committer
                 | Qualifier::Message
                 | Qualifier::Hash
-                | Qualifier::Path => "Alice",
+                | Qualifier::Path
+                | Qualifier::Contents => "Alice",
             };
             let query = Query::parse(&format!(
                 "{}:{value}",
@@ -503,6 +561,44 @@ mod tests {
     }
 
     #[test]
+    fn git_prefilter_is_conservative_for_literals_and_unicode_lowercase() {
+        let compile = |value: &str, regex| Matcher::new(value.into(), regex).unwrap();
+        assert_eq!(
+            compile("copy_closure", false)
+                .git_literal_prefilter()
+                .as_deref(),
+            Some("[cC][oO][pP][yY]_[cC][lL][oO][sS][uU][rR][eE]")
+        );
+        for value in ["ki", "a.*b", "λneedle"] {
+            assert!(compile(value, false).git_literal_prefilter().is_none());
+        }
+        assert!(compile("needle", true).git_literal_prefilter().is_none());
+        // Protect the assumption behind using ASCII fragments with Git's regex
+        // engine, which does not share Rust's Unicode lowercase implementation.
+        for ch in (128..=0x10ffff).filter_map(char::from_u32) {
+            for lower in ch.to_lowercase().filter(char::is_ascii) {
+                assert!(matches!(lower, 'i' | 'k'), "{ch:?} lowercases to {lower:?}");
+            }
+        }
+        let pattern = compile("monkey", false).git_literal_prefilter().unwrap();
+        assert!(regex::Regex::new(&pattern).unwrap().is_match("MONKEY"));
+        assert!(compile("monkey", false).is_match("MONKEY"));
+    }
+
+    #[test]
+    fn contents_patterns_use_the_selected_matching_mode() {
+        for regex in [false, true] {
+            let query = Query::parse("CONTENTS:\"Needle[1] λ\" path:src/").unwrap();
+            assert_eq!(query.contents.as_deref(), Some("Needle[1] λ"));
+            assert_eq!(query.filters, ["contents:Needle[1] λ", "path:src/"]);
+            let compiled = query.compile(regex).unwrap();
+            let pattern = compiled.contents.unwrap();
+            assert_eq!(pattern.is_match("needle[1] λ"), !regex);
+            assert_eq!(pattern.is_match("needle1 λ"), regex);
+        }
+    }
+
+    #[test]
     fn validates_and_explains_filters() {
         let query =
             Query::parse("fix author:\"Alice Smith\" path:ci.yml after:2024-02-29 merge:false")
@@ -518,6 +614,7 @@ mod tests {
             "merge:yes",
             "from:abc",
             "path:a path:b",
+            "contents:a contents:b",
             "author:\"abc",
         ] {
             assert!(Query::parse(bad).is_err(), "{bad}");

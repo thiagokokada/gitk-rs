@@ -715,6 +715,10 @@ const SHORTCUT_GROUPS: &[ShortcutGroup] = &[
         title: "General",
         shortcuts: &[
             ("/", "Focus the filter box"),
+            (
+                "Enter",
+                "Apply filter and return to history (in filter box)",
+            ),
             ("Escape", "Leave the filter box"),
             ("F5", "Reload commits"),
             ("Alt+R", "Toggle regex search"),

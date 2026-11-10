@@ -64,3 +64,39 @@ nix develop --command env \
 ```
 
 The parity check passed for all 1,114,966 commits at the fixture HEAD above.
+
+## Literal contents search
+
+Literal `contents:` queries with a usable ASCII fragment pass a conservative
+`-G` expression to `git diff-tree` before transferring patches to Rust. Git's
+`--always` retains a header for every candidate, and `--pickaxe-all` retains
+all changed files on a hit so combined path/contents predicates can match
+different files. Rust still checks the complete original pattern. Regex and
+unsupported literal patterns use the original patch stream. Rename detection
+stays disabled.
+
+The prefilter uses up to 64 characters from an ASCII alphanumeric/underscore
+fragment of at least three characters, with explicit upper/lowercase
+alternatives. It excludes `i` and `k` from fragments because non-ASCII
+characters can lowercase to those ASCII letters in Rust. The prefilter may
+accept extra commits; it must never exclude a match accepted by the original
+matcher.
+
+A local macOS sample on 2026-11-10 used the latest 10,000 commits reachable from
+nixpkgs HEAD `f7252b8a2bdc62907fe6fb4a968a6e86279c15dd`, with the
+`copy_closure` query. The same commit ID list was sent to both commands through
+`--stdin`. Both used `--always --root -r --raw -z --no-renames --no-ext-diff
+--no-textconv --diff-merges=first-parent --patch --unified=0 --no-color
+--format=%x00%H%x0a`. The candidate additionally used `--pickaxe-all` and
+`-G '[cC][oO][pP][yY]_[cC][lL][oO][sS][uU][rR][eE]'`.
+
+| Git command | Elapsed | Emitted bytes |
+| --- | --- | --- |
+| Original patch stream | 6.251 s | 59,046,028 |
+| Literal prefilter | 5.104 s | 430,000 |
+
+Git still needs to inspect candidate changes, and a repository-wide search can
+remain slow when matching edits are far back in history. Metadata qualifiers
+such as `author:` or `after:` reduce candidates before diff processing; `path:`
+is currently evaluated within the diff stream and does not provide that same
+early pruning.
