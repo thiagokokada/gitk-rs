@@ -216,7 +216,7 @@ fn manual_reload_retries_a_failed_path_search_at_the_same_head() {
             .take_snapshot()
             .filter(|s| s.request_id == request.id && s.error.is_some())
     });
-    assert!(failed.error.unwrap().contains("Path search failed"));
+    assert!(failed.error.unwrap().contains("Diff search failed"));
     fs::write(&object, bytes).unwrap();
     request.generation.0 += 1;
     request.id += 1;
@@ -551,10 +551,20 @@ fn opening_a_subdirectory_still_includes_untracked_files_at_the_repository_root(
 
 #[test]
 fn path_search_bounds_queues_pauses_resumes_and_replaces_queries() {
+    diff_search_pause_resume("path:ci.yml", false);
+}
+
+#[test]
+fn contents_search_bounds_queues_pauses_resumes_and_replaces_queries() {
+    diff_search_pause_resume("contents:[0-9]", true);
+}
+
+fn diff_search_pause_resume(qualifier: &str, regex: bool) {
     let fixture = history_fixture_with_paths(6000, true);
     let mut request = history_request(&fixture);
     request.batch = Some(200);
-    request.query = "path:ci.yml author:fixture".into();
+    request.regex = regex;
+    request.query = format!("{qualifier} author:fixture");
     let engine = HistoryEngine::spawn(request.clone());
     let handle = engine.handle();
     let paused = wait(|| {
@@ -600,10 +610,10 @@ fn path_search_bounds_queues_pauses_resumes_and_replaces_queries() {
     assert!(complete.error.is_none(), "{:?}", complete.error);
     assert_eq!((complete.loaded, complete.visible), (6000, 6000));
     request.id += 1;
-    request.query = "path:missing author:fixture".into();
+    request.query = "contents:missing author:fixture".into();
     handle.request(request.clone());
     request.id += 1;
-    request.query = "path:ci.yml message:root-only".into();
+    request.query = format!("{qualifier} message:root-only");
     handle.request(request.clone());
     let replaced = wait(|| {
         handle
@@ -614,7 +624,7 @@ fn path_search_bounds_queues_pauses_resumes_and_replaces_queries() {
     assert_eq!(replaced.visible, 1);
     assert_eq!(replaced.rows[0].commit.summary(), "root-only needle");
     request.id += 1;
-    request.query = "path:ci.yml author:nobody".into();
+    request.query = format!("{qualifier} author:nobody");
     handle.request(request.clone());
     let empty = wait(|| {
         handle

@@ -2379,7 +2379,7 @@ fn metadata_search_shows_badges_errors_and_recovers(cx: &mut TestAppContext) {
     });
     assert!(cx.update(|window, _| window.try_find("author:text").is_none()));
     cx.simulate_keystrokes("/");
-    cx.simulate_input("author:fixture message:needle path:file.txt");
+    cx.simulate_input("author:fixture message:needle path:file.txt contents:needle");
     until(cx, |cx| {
         cx.update(|window, cx| {
             window.try_find("search-filter-0").is_some()

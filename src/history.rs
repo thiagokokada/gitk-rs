@@ -3,7 +3,7 @@
 use crate::{
     git::{Cancellation, Commit, CommitId, CommitStream, GitStream, Repository, run_bytes},
     graph::{GraphBuilder, GraphRow},
-    search::{CompiledQuery, Matcher, Query},
+    search::{CompiledQuery, Query},
 };
 use anyhow::{Result, ensure};
 use std::{
@@ -321,7 +321,7 @@ fn empty_snapshot(request: &Request, error: Option<String>) -> Snapshot {
 
 // Only metadata candidates are sent through diff-tree. Both directions are
 // bounded, and cancellation owns the process and all pipe threads.
-struct PathSearch {
+struct DiffSearch {
     cancel: Cancellation,
     input: Option<SyncSender<Vec<CommitId>>>,
     receiver: Option<Receiver<Result<(CommitId, bool)>>>,
@@ -329,60 +329,118 @@ struct PathSearch {
     done: bool,
 }
 
-impl PathSearch {
-    fn start(repository: &Repository, path: &Matcher) -> Self {
+impl DiffSearch {
+    fn start(repository: &Repository, query: &CompiledQuery) -> Option<Self> {
+        if query.path.is_none() && query.contents.is_none() {
+            return None;
+        }
         let root = repository.root.clone();
-        let pattern = path.clone();
+        let path = query.path.clone();
+        let contents = query.contents.clone();
         let cancel = Cancellation::default();
         let token = cancel.clone();
         let (sender, receiver) = mpsc::sync_channel(256);
         let (input, incoming) = mpsc::sync_channel(2);
         let worker = thread::spawn(move || {
             let result = (|| -> Result<()> {
-                let mut stream = GitStream::spawn_input(
-                    &root,
-                    &[
-                        "diff-tree",
-                        "--stdin",
-                        "--always",
-                        "--root",
-                        "-r",
-                        "--raw",
-                        "-z",
-                        "--no-renames",
-                        "--no-ext-diff",
-                        "--no-textconv",
-                        "--diff-merges=first-parent",
-                    ],
-                    token,
-                    &[0],
-                    incoming,
-                )?;
+                let mut args = vec![
+                    "diff-tree",
+                    "--stdin",
+                    "--always",
+                    "--root",
+                    "-r",
+                    "--raw",
+                    "-z",
+                    "--no-renames",
+                    "--no-ext-diff",
+                    "--no-textconv",
+                    "--diff-merges=first-parent",
+                ];
+                if contents.is_some() {
+                    args.extend([
+                        "--patch",
+                        "--unified=0",
+                        "--no-color",
+                        "--format=%x00%H%x0a",
+                    ]);
+                }
+                let mut stream = GitStream::spawn_input(&root, &args, token, &[0], incoming)?;
                 let mut current = None;
-                let mut matched = false;
-                while let Some(record) = stream.record(0)? {
-                    ensure!(record.terminated, "Incomplete path-search record");
-                    if record.bytes.starts_with(b":") {
-                        ensure!(current.is_some(), "Path-search change without a commit");
-                        let path = stream
+                let mut path_matched = path.is_none();
+                let mut contents_matched = contents.is_none();
+                let mut raw = true;
+                let mut in_hunk = false;
+                while let Some(record) = stream.record(if raw { 0 } else { b'\n' })? {
+                    ensure!(record.terminated, "Incomplete diff-search record");
+                    if raw && record.bytes.is_empty() {
+                        raw = false;
+                        continue;
+                    }
+                    let bytes = if raw {
+                        record.bytes.strip_prefix(b"\n").unwrap_or(&record.bytes)
+                    } else {
+                        &record.bytes
+                    };
+                    if raw && bytes.starts_with(b":") {
+                        ensure!(current.is_some(), "Diff-search change without a commit");
+                        let changed = stream
                             .record(0)?
                             .ok_or_else(|| anyhow::anyhow!("Missing changed path"))?;
-                        ensure!(path.terminated, "Incomplete changed path");
-                        if !matched {
-                            matched = pattern.is_match(&String::from_utf8_lossy(&path.bytes));
+                        ensure!(changed.terminated, "Incomplete changed path");
+                        if !path_matched {
+                            path_matched = path
+                                .as_ref()
+                                .unwrap()
+                                .is_match(&String::from_utf8_lossy(&changed.bytes));
                         }
-                    } else {
-                        if let Some(id) = current.take()
-                            && sender.send(Ok((id, matched))).is_err()
+                    } else if raw
+                        || bytes.starts_with(&[0])
+                        || (matches!(bytes.len(), 40 | 64)
+                            && bytes.iter().all(u8::is_ascii_hexdigit))
+                    {
+                        // Headers are NUL-prefixed and newline-terminated, followed
+                        // by the format terminator NUL. Empty commits can consume
+                        // the leading NUL while switching out of raw mode. Patch
+                        // content always has a diff prefix, so it cannot collide.
+                        let header = bytes.strip_prefix(&[0]).unwrap_or(bytes);
+                        let header = header.strip_suffix(&[0]).unwrap_or(header);
+                        let id = CommitId::parse(std::str::from_utf8(header)?)?;
+                        if contents.is_some() {
+                            let terminator = stream
+                                .record(0)?
+                                .ok_or_else(|| anyhow::anyhow!("Missing diff header terminator"))?;
+                            ensure!(
+                                terminator.terminated && terminator.bytes.is_empty(),
+                                "Invalid diff header terminator"
+                            );
+                        }
+                        if let Some(previous) = current.replace(id)
+                            && sender
+                                .send(Ok((previous, path_matched && contents_matched)))
+                                .is_err()
                         {
                             return Ok(());
                         }
-                        current = Some(CommitId::parse(std::str::from_utf8(&record.bytes)?)?);
-                        matched = false;
+                        path_matched = path.is_none();
+                        contents_matched = contents.is_none();
+                        in_hunk = false;
+                        raw = true;
+                    } else if record.bytes.starts_with(b"diff --git ") {
+                        in_hunk = false;
+                    } else if record.bytes.starts_with(b"@@ ") {
+                        in_hunk = true;
+                    } else if in_hunk
+                        && !contents_matched
+                        && matches!(record.bytes.first(), Some(b'+' | b'-'))
+                    {
+                        contents_matched = contents
+                            .as_ref()
+                            .unwrap()
+                            .is_match(&String::from_utf8_lossy(&record.bytes[1..]));
                     }
                 }
                 if let Some(id) = current {
-                    let _ = sender.send(Ok((id, matched)));
+                    let _ = sender.send(Ok((id, path_matched && contents_matched)));
                 }
                 Ok(())
             })();
@@ -390,17 +448,17 @@ impl PathSearch {
                 let _ = sender.send(Err(error));
             }
         });
-        Self {
+        Some(Self {
             cancel,
             input: Some(input),
             receiver: Some(receiver),
             worker: Some(worker),
             done: false,
-        }
+        })
     }
 }
 
-impl Drop for PathSearch {
+impl Drop for DiffSearch {
     fn drop(&mut self) {
         self.cancel.store(true, Ordering::Release);
         self.input.take();
@@ -496,7 +554,7 @@ struct Session {
     regex: bool,
     parsed: CompiledQuery,
     query_error: Option<String>,
-    paths: Option<PathSearch>,
+    paths: Option<DiffSearch>,
     path_pending: Vec<CommitId>,
     candidates: HashMap<CommitId, usize>,
     matches: Vec<usize>,
@@ -643,11 +701,7 @@ impl Session {
             // This avoids both a delta-sized candidate queue and repeated
             // insertion of prefix matches at the front of a large suffix.
             self.paths = None;
-            self.paths = self
-                .parsed
-                .path
-                .as_ref()
-                .map(|path| PathSearch::start(&self.repository, path));
+            self.paths = DiffSearch::start(&self.repository, &self.parsed);
             let mut suffix_candidates: Vec<_> = self.candidates.drain().collect();
             suffix_candidates.sort_unstable_by_key(|(_, ordinal)| *ordinal);
             self.path_pending.clear();
@@ -717,10 +771,7 @@ impl Session {
                 .and_then(|query| query.compile(request.regex))
             {
                 Ok(parsed) => {
-                    self.paths = parsed
-                        .path
-                        .as_ref()
-                        .map(|path| PathSearch::start(&self.repository, path));
+                    self.paths = DiffSearch::start(&self.repository, &parsed);
                     self.parsed = parsed;
                 }
                 Err(error) => self.query_error = Some(error.to_string()),
@@ -736,7 +787,7 @@ impl Session {
                         let ordinal = self
                             .candidates
                             .remove(&id)
-                            .ok_or_else(|| anyhow::anyhow!("Unexpected path-search commit"))?;
+                            .ok_or_else(|| anyhow::anyhow!("Unexpected diff-search commit"))?;
                         if matched {
                             // A reload can queue new prefix candidates before
                             // the remaining suffix has finished filtering.
@@ -745,7 +796,7 @@ impl Session {
                         }
                     }
                     Ok(Err(error)) => {
-                        self.query_error = Some(format!("Path search failed: {error:#}"));
+                        self.query_error = Some(format!("Diff search failed: {error:#}"));
                         paths.done = true;
                         return Ok(false);
                     }
@@ -754,7 +805,7 @@ impl Session {
                         paths.done = true;
                         ensure!(
                             self.candidates.is_empty(),
-                            "Path search ended before all commits were checked"
+                            "Diff search ended before all commits were checked"
                         );
                         break;
                     }
@@ -800,11 +851,7 @@ impl Session {
             }
             let mut prefix = self.prefix_search.take().unwrap();
             self.paths = None;
-            self.paths = self
-                .parsed
-                .path
-                .as_ref()
-                .map(|path| PathSearch::start(&self.repository, path));
+            self.paths = DiffSearch::start(&self.repository, &self.parsed);
             self.matches.append(&mut prefix.suffix_matches);
             for (id, ordinal) in prefix.suffix_candidates {
                 self.path_pending.push(id.clone());
@@ -872,10 +919,7 @@ impl Session {
         if !self.eof && visible < needed {
             if let Some(paths) = &self.paths {
                 if paths.done {
-                    self.paths = Some(PathSearch::start(
-                        &self.repository,
-                        self.parsed.path.as_ref().unwrap(),
-                    ));
+                    self.paths = DiffSearch::start(&self.repository, &self.parsed);
                 } else if paths.input.is_none() {
                     thread::sleep(Duration::from_millis(5));
                     return Ok(true);
@@ -1310,6 +1354,8 @@ mod tests {
             "message:matching",
             "path:file.txt",
             "path:file.txt message:matching",
+            "contents:matching",
+            "contents:matching path:file.txt",
         ] {
             for complete in [false, true] {
                 let mut request = request(&fixture);
@@ -1793,6 +1839,9 @@ mod tests {
             ("path:abc merge:true", 1),
             ("path:abc message:empty", 0),
             ("path:abc merge:false", 1),
+            ("contents:side", 2),
+            ("contents:side merge:true", 1),
+            ("contents:side message:empty", 0),
         ] {
             request.query = query.into();
             while session.step(&request).unwrap() {}
@@ -1800,6 +1849,62 @@ mod tests {
             assert_eq!(session.visible_count(), expected, "{query}");
             assert!(session.candidates.is_empty());
         }
+    }
+
+    #[test]
+    fn contents_search_matches_changed_lines_and_combines_filters() {
+        let fixture = Fixture::new();
+        let name = "strange\nname.txt";
+        let write = |text| {
+            std::fs::write(fixture.root().join(name), text).unwrap();
+            fixture.git(&["add", "."]);
+        };
+        write("Unchanged context\nNeedle[1] λ\n--- header-like text\n");
+        fixture.git(&["commit", "-m", "introduce"]);
+        write("Unchanged context\nReplacement\n+++ header-like text\n");
+        fixture.git(&["commit", "-m", "replace"]);
+        fixture.git(&["commit", "--allow-empty", "-m", "empty one"]);
+        fixture.git(&["commit", "--allow-empty", "-m", "empty two"]);
+        std::fs::write(fixture.root().join("binary.dat"), b"\0BinaryNeedle").unwrap();
+        fixture.git(&["add", "."]);
+        fixture.git(&["commit", "-m", "binary"]);
+        fixture.git(&["rm", "--", name]);
+        fixture.git(&["commit", "-m", "delete"]);
+        let mut request = request(&fixture);
+        let mut session = Session::open(&request, Cancellation::default()).unwrap();
+        for (query, regex, expected) in [
+            ("contents:\"needle[1] λ\"", false, 2),
+            ("contents:^needle\\[1\\]", true, 2),
+            ("contents:^Needle", false, 0),
+            ("contents:(?-i)^NEEDLE", true, 0),
+            ("contents:Replacement", false, 2),
+            ("contents:context message:replace", false, 0),
+            ("contents:Needle message:introduce author:fixture", false, 1),
+            ("contents:Needle path:name.txt", false, 2),
+            ("contents:Needle path:absent", false, 0),
+            ("contents:header-like", false, 3),
+            ("contents:BinaryNeedle", false, 0),
+            ("contents:diff", false, 0),
+            ("contents:Needle message:empty", false, 0),
+        ] {
+            request.query = query.into();
+            request.regex = regex;
+            while session.step(&request).unwrap() {}
+            assert!(
+                session.query_error.is_none(),
+                "{query}: {:?}",
+                session.query_error
+            );
+            assert_eq!(session.visible_count(), expected, "{query}");
+            assert!(session.candidates.is_empty());
+        }
+        request.query = "contents:Needle".into();
+        session.step(&request).unwrap();
+        let cancel = session.paths.as_ref().unwrap().cancel.clone();
+        request.query = "message:introduce".into();
+        while session.step(&request).unwrap() {}
+        assert!(cancel.load(Ordering::Acquire));
+        assert_eq!(session.visible_count(), 1);
     }
 
     #[test]
@@ -1819,14 +1924,14 @@ mod tests {
                 .join(&tree[2..]),
         )
         .unwrap();
-        request.query = "path:file.txt".into();
+        request.query = "contents:retained".into();
         while session.step(&request).unwrap() {}
         let snapshot = session.snapshot(&request);
         assert!(
             snapshot
                 .error
                 .as_deref()
-                .is_some_and(|error| error.contains("Path search failed"))
+                .is_some_and(|error| error.contains("Diff search failed"))
         );
         request.query = "author:fixture".into();
         while session.step(&request).unwrap() {}

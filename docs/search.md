@@ -6,6 +6,7 @@ ignores case. Use double quotes for values containing spaces, for example:
 ```text
 author:"Alice Smith" path:ci.yml after:2026-01-01
 message:"update dependencies" merge:false
+contents:"old function name" path:src/
 ```
 
 Open Help with F1 or ? for the syntax reference. Recognized qualifiers appear
@@ -21,6 +22,7 @@ the search is complete.
 | `committer:text` | Committer name or email substring |
 | `message:text` | Full commit message substring |
 | `hash:text` | Commit hash substring |
+| `contents:text` | Added or removed text line containing the literal text |
 | `path:text` | Changed path containing the literal text, including directory components |
 | `before:YYYY-MM-DD` | Author's recorded calendar date strictly before this day |
 | `after:YYYY-MM-DD` | Author's recorded calendar date strictly after this day |
@@ -28,11 +30,11 @@ the search is complete.
 
 Unqualified text searches the hash, author name/email, and full message as one
 contiguous phrase, preserving the original plain-text filter behavior. By default,
-all text and path metacharacters are literal.
+all text, path, and contents metacharacters are literal.
 
-Enable **Regex** next to the filter box, or press **Alt+R**, to interpret text
-and path values as regular expressions. The shortcut also works while typing
-in the filter box. For example:
+Enable **Regex** next to the filter box, or press **Alt+R**, to interpret text,
+path, and contents values as regular expressions. The shortcut also works while
+typing in the filter box. For example:
 
 ```text
 author:Alice|Bob path:\.ya?ml$ message:^fix
@@ -52,3 +54,12 @@ renames. Merges compare with their first parent, as in the diff view. It does
 not follow a file through earlier names automatically. Paths containing invalid
 UTF-8 are decoded with replacement characters for substring matching. Dates use
 the author's recorded timezone and exclude the boundary day.
+
+Contents search examines added and removed text lines, excluding the diff's
+headers and unchanged context. Matching is per line, without the leading `+` or
+`-`; regex anchors apply to that line. It includes root commits and deletions,
+and compares merges with their first parent. Binary patches are not searched.
+One `contents:` qualifier is allowed per query. Combining `path:` and
+`contents:` requires both to match the commit; they can match different files.
+Like path search, it covers history reachable from HEAD and reports results
+incrementally.
