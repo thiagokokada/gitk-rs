@@ -207,23 +207,9 @@ impl Repository {
         })
     }
 
-    pub fn log(&self, cancel: Cancellation) -> Result<GitStream> {
+    pub fn log(&self, cancel: Cancellation) -> Result<CommitStream> {
         let head = self.head.as_ref().context("repository has no commits")?;
-        // Default Git traversal streams immediately. Date/topological ordering may
-        // visit a huge graph before emitting its first record.
-        GitStream::spawn(
-            &self.root,
-            &[
-                "log",
-                "--no-color",
-                "--no-decorate",
-                "--no-patch",
-                "--pretty=tformat:%H%n%P%n%an%n%ae%n%aI%n%cn%n%ce%n%cI%n%B%x00",
-                &head.to_hex(),
-            ],
-            cancel,
-            &[0],
-        )
+        CommitStream::open(&self.root, head, cancel)
     }
 
     pub fn refs(&self, cancel: Cancellation) -> Result<GitStream> {
@@ -280,7 +266,7 @@ pub struct Record {
 
 pub struct GitStream {
     child: Arc<Mutex<Child>>,
-    stdout: BufReader<ChildStdout>,
+    stdout: Option<BufReader<ChildStdout>>,
     stderr: Option<JoinHandle<Vec<u8>>>,
     input: Option<JoinHandle<Result<()>>>,
     killer: Option<JoinHandle<()>>,
@@ -297,7 +283,7 @@ impl GitStream {
         cancel: Cancellation,
         allowed: &[i32],
     ) -> Result<Self> {
-        Self::spawn_inner(root, args, cancel, allowed, None)
+        Self::spawn_inner(root, args, cancel, allowed, None, None)
     }
 
     /// Feeds bounded batches of object IDs while stdout and stderr are drained.
@@ -308,7 +294,7 @@ impl GitStream {
         allowed: &[i32],
         input: Receiver<Vec<CommitId>>,
     ) -> Result<Self> {
-        Self::spawn_inner(root, args, cancel, allowed, Some(input))
+        Self::spawn_inner(root, args, cancel, allowed, Some(input), None)
     }
 
     fn spawn_inner<S: AsRef<OsStr>>(
@@ -317,6 +303,7 @@ impl GitStream {
         cancel: Cancellation,
         allowed: &[i32],
         input: Option<Receiver<Vec<CommitId>>>,
+        stdin: Option<Stdio>,
     ) -> Result<Self> {
         ensure!(!cancel.load(Ordering::Acquire), "Git operation cancelled");
         let mut command = Command::new("git");
@@ -331,7 +318,9 @@ impl GitStream {
             ])
             .arg(root)
             .args(args)
-            .stdin(if input.is_some() {
+            .stdin(if let Some(stdin) = stdin {
+                stdin
+            } else if input.is_some() {
                 Stdio::piped()
             } else {
                 Stdio::null()
@@ -397,7 +386,7 @@ impl GitStream {
         };
         Ok(Self {
             child,
-            stdout,
+            stdout: Some(stdout),
             stderr: Some(stderr),
             input,
             killer: Some(killer),
@@ -411,19 +400,23 @@ impl GitStream {
     /// Bounds every record before allocating it, even if a producer never emits
     /// a delimiter. EOF status is checked so a failing Git process is not success.
     pub fn record(&mut self, delimiter: u8) -> Result<Option<Record>> {
+        let mut bytes = Vec::new();
+        Ok(self
+            .read_record(delimiter, &mut bytes)?
+            .map(|terminated| Record { bytes, terminated }))
+    }
+
+    fn read_record(&mut self, delimiter: u8, bytes: &mut Vec<u8>) -> Result<Option<bool>> {
         ensure!(
             !self.cancel.load(Ordering::Acquire),
             "Git operation cancelled"
         );
-        let mut bytes = Vec::new();
+        bytes.clear();
         loop {
-            let available = self.stdout.fill_buf()?;
+            let available = self.stdout.as_mut().unwrap().fill_buf()?;
             if available.is_empty() {
                 self.finish()?;
-                return Ok((!bytes.is_empty()).then_some(Record {
-                    bytes,
-                    terminated: false,
-                }));
+                return Ok((!bytes.is_empty()).then_some(false));
             }
             let end = available.iter().position(|b| *b == delimiter);
             let count = end.unwrap_or(available.len());
@@ -432,12 +425,12 @@ impl GitStream {
                 "Git record exceeds the 2 MiB limit"
             );
             bytes.extend_from_slice(&available[..count]);
-            self.stdout.consume(count + usize::from(end.is_some()));
+            self.stdout
+                .as_mut()
+                .unwrap()
+                .consume(count + usize::from(end.is_some()));
             if end.is_some() {
-                return Ok(Some(Record {
-                    bytes,
-                    terminated: true,
-                }));
+                return Ok(Some(true));
             }
             ensure!(
                 !self.cancel.load(Ordering::Acquire),
@@ -522,6 +515,237 @@ impl Drop for GitStream {
     }
 }
 
+const LOG_FORMAT: &str = "--pretty=tformat:%H%n%P%n%an%n%ae%n%aI%n%cn%n%ce%n%cI%n%B%x00";
+
+fn pretty_log(root: &Path, head: &CommitId, cancel: Cancellation) -> Result<GitStream> {
+    GitStream::spawn(
+        root,
+        &[
+            "log",
+            "--no-color",
+            "--no-decorate",
+            "--no-patch",
+            LOG_FORMAT,
+            &head.to_hex(),
+        ],
+        cancel,
+        &[0],
+    )
+}
+
+/// Git walks revisions once; cat-file reads the resulting objects through a
+/// bounded OS pipe. The echoed parent list preserves Git's shallow/graft rules.
+pub struct CommitStream {
+    traversal: Option<GitStream>,
+    reader: GitStream,
+    root: PathBuf,
+    record_buffer: Vec<u8>,
+}
+
+impl CommitStream {
+    fn open(root: &Path, head: &CommitId, cancel: Cancellation) -> Result<Self> {
+        // Let Git handle configured output encodings, just as the pretty stream
+        // does. Individual commits with other encodings also use that fallback.
+        let mut encoding = run_bytes(
+            root,
+            &["config", "--get", "i18n.logOutputEncoding"],
+            &cancel,
+            &[0, 1],
+        )?;
+        if encoding.is_empty() {
+            encoding = run_bytes(
+                root,
+                &["config", "--get", "i18n.commitEncoding"],
+                &cancel,
+                &[0, 1],
+            )?;
+        }
+        if !encoding.is_empty() && !utf8_encoding(trim_newline(&encoding)) {
+            return Ok(Self {
+                traversal: None,
+                reader: pretty_log(root, head, cancel)?,
+                root: root.to_owned(),
+                record_buffer: Vec::new(),
+            });
+        }
+        // Keep the default traversal order and stream immediately, without a
+        // count pass or a topological sort before the first viewport.
+        let mut traversal = GitStream::spawn(
+            root,
+            &["rev-list", "--parents", &head.to_hex()],
+            cancel.clone(),
+            &[0],
+        )?;
+        let pipe = traversal.stdout.take().unwrap().into_inner();
+        let reader = GitStream::spawn_inner(
+            root,
+            &[
+                "cat-file",
+                "--buffer",
+                "--batch=%(objectname) %(objecttype) %(objectsize) %(rest)",
+            ],
+            cancel,
+            &[0],
+            None,
+            Some(Stdio::from(pipe)),
+        )?;
+        Ok(Self {
+            traversal: Some(traversal),
+            reader,
+            root: root.to_owned(),
+            record_buffer: Vec::new(),
+        })
+    }
+
+    pub fn next_commit(&mut self) -> Result<Option<Commit>> {
+        let Some(traversal) = &mut self.traversal else {
+            return self.reader.next_commit();
+        };
+        let mut bytes = std::mem::take(&mut self.record_buffer);
+        let result = (|| {
+            let Some(terminated) = self.reader.read_record(b'\n', &mut bytes)? else {
+                traversal.finish()?;
+                return Ok(None);
+            };
+            ensure!(terminated, "Git cat-file ended in an incomplete header");
+            let header = std::str::from_utf8(&bytes)?;
+            let mut fields = header.split_whitespace();
+            let id = CommitId::parse(fields.next().context("missing object ID")?)?;
+            ensure!(
+                fields.next() == Some("commit"),
+                "Git returned a non-commit object"
+            );
+            let size: usize = fields.next().context("missing object size")?.parse()?;
+            let parents = fields
+                .map(CommitId::parse)
+                .collect::<Result<Vec<_>>>()?
+                .into_boxed_slice();
+            let reader = self.reader.stdout.as_mut().unwrap();
+            // A large signature may exceed the raw buffer limit even when the
+            // formatted record fits. Drain it without retaining it, then let the
+            // original bounded parser decide whether that commit is acceptable.
+            if size > MAX_RECORD_BYTES {
+                ensure!(
+                    std::io::copy(&mut reader.take(size as u64), &mut std::io::sink())?
+                        == size as u64,
+                    "Git cat-file ended in an incomplete object"
+                );
+            } else {
+                bytes.resize(size, 0);
+                reader.read_exact(&mut bytes)?;
+            }
+            let mut terminator = [0];
+            reader.read_exact(&mut terminator)?;
+            ensure!(
+                terminator == *b"\n",
+                "Git cat-file omitted its object terminator"
+            );
+            if size <= MAX_RECORD_BYTES
+                && let Ok(commit) = parse_raw_commit(id.clone(), parents, &bytes)
+            {
+                return Ok(Some(commit));
+            }
+            let mut fallback = GitStream::spawn(
+                &self.root,
+                &[
+                    "log",
+                    "-1",
+                    "--no-color",
+                    "--no-decorate",
+                    "--no-patch",
+                    LOG_FORMAT,
+                    &id.to_hex(),
+                ],
+                self.reader.cancel.clone(),
+                &[0],
+            )?;
+            let commit = fallback
+                .next_commit()?
+                .context("Git omitted a requested commit")?;
+            // Reap and check the single-commit fallback before accepting it.
+            ensure!(
+                fallback.next_commit()?.is_none(),
+                "Git returned extra commits"
+            );
+            Ok(Some(commit))
+        })();
+        self.record_buffer = bytes;
+        result
+    }
+}
+
+fn utf8_encoding(encoding: &[u8]) -> bool {
+    encoding.eq_ignore_ascii_case(b"utf-8") || encoding.eq_ignore_ascii_case(b"utf8")
+}
+
+fn parse_raw_commit(id: CommitId, parents: Box<[CommitId]>, record: &[u8]) -> Result<Commit> {
+    let record = String::from_utf8_lossy(record);
+    let (header, message) = record
+        .split_once("\n\n")
+        .context("missing commit message separator")?;
+    let mut author = None;
+    let mut committer = None;
+    for line in header.lines() {
+        if let Some(value) = line.strip_prefix("author ") {
+            ensure!(author.is_none(), "duplicate author");
+            author = Some(parse_raw_signature(value)?);
+        } else if let Some(value) = line.strip_prefix("committer ") {
+            ensure!(committer.is_none(), "duplicate committer");
+            committer = Some(parse_raw_signature(value)?);
+        } else if let Some(encoding) = line.strip_prefix("encoding ") {
+            ensure!(
+                utf8_encoding(encoding.as_bytes()),
+                "commit needs Git encoding conversion"
+            );
+        }
+    }
+    Ok(Commit {
+        id,
+        parents,
+        author: author.context("missing author")?,
+        committer: committer.context("missing committer")?,
+        message: message.into(),
+    })
+}
+
+fn parse_raw_signature(value: &str) -> Result<Signature> {
+    use chrono::{Datelike, FixedOffset, SecondsFormat};
+    let (name, rest) = value.split_once('<').context("missing identity email")?;
+    let (email, date) = rest
+        .split_once('>')
+        .context("unterminated identity email")?;
+    let mut date = date.split_whitespace();
+    let timestamp: i64 = date.next().context("missing timestamp")?.parse()?;
+    let offset = date.next().context("missing timezone")?.as_bytes();
+    ensure!(
+        offset.len() == 5
+            && matches!(offset[0], b'+' | b'-')
+            && offset[1..].iter().all(u8::is_ascii_digit),
+        "invalid timezone"
+    );
+    let hours = i32::from(offset[1] - b'0') * 10 + i32::from(offset[2] - b'0');
+    let minutes = i32::from(offset[3] - b'0') * 10 + i32::from(offset[4] - b'0');
+    ensure!(
+        hours < 24 && minutes < 60 && timestamp >= 0 && offset != b"-0000",
+        "date needs Git formatting"
+    );
+    let seconds = (hours * 3600 + minutes * 60) * if offset[0] == b'-' { -1 } else { 1 };
+    let date = chrono::DateTime::from_timestamp(timestamp, 0)
+        .context("timestamp out of range")?
+        .with_timezone(&FixedOffset::east_opt(seconds).context("timezone out of range")?);
+    ensure!(
+        (0..=9999).contains(&date.year()),
+        "year needs Git formatting"
+    );
+    Ok(Signature {
+        name: name
+            .trim_end_matches(|c: char| c.is_ascii_whitespace())
+            .into(),
+        email: email.into(),
+        time: date.to_rfc3339_opts(SecondsFormat::Secs, true).into(),
+    })
+}
+
 fn terminate(child: &mut Child) {
     #[cfg(unix)]
     {
@@ -573,6 +797,199 @@ pub fn parse_commit(record: &[u8]) -> Result<Commit> {
 mod tests {
     use super::*;
     use crate::test_support::Fixture;
+
+    fn write_raw_commit(fixture: &Fixture, object: &[u8]) -> String {
+        std::fs::write(fixture.root().join("commit-object"), object).unwrap();
+        fixture.git(&[
+            "hash-object",
+            "--literally",
+            "-t",
+            "commit",
+            "-w",
+            "commit-object",
+        ])
+    }
+
+    fn assert_same_commit(actual: &Commit, expected: &Commit) {
+        assert_eq!(actual.id, expected.id);
+        assert_eq!(actual.parents, expected.parents);
+        assert_eq!(actual.message, expected.message);
+        for (actual, expected) in [
+            (&actual.author, &expected.author),
+            (&actual.committer, &expected.committer),
+        ] {
+            assert_eq!(actual.name, expected.name);
+            assert_eq!(actual.email, expected.email);
+            assert_eq!(actual.time, expected.time);
+        }
+    }
+
+    fn assert_matches_pretty_log(root: &Path) -> usize {
+        let cancel = Cancellation::default();
+        let repository = Repository::open(root, &cancel).unwrap();
+        let mut raw = repository.log(cancel.clone()).unwrap();
+        let mut pretty = pretty_log(root, repository.head.as_ref().unwrap(), cancel).unwrap();
+        let mut count = 0;
+        while let Some(expected) = pretty.next_commit().unwrap() {
+            let actual = raw.next_commit().unwrap().unwrap();
+            assert_same_commit(&actual, &expected);
+            count += 1;
+        }
+        assert!(raw.next_commit().unwrap().is_none());
+        count
+    }
+
+    #[test]
+    fn raw_stream_preserves_pretty_log_metadata_messages_and_encoding() {
+        let fixture = Fixture::new();
+        fixture.git(&["config", "i18n.logOutputEncoding", "UTF-8"]);
+        let mut parent = fixture.commit("root");
+        let tree = fixture.git(&["rev-parse", "HEAD^{tree}"]);
+        let cases: &[(&[u8], &[u8], &[u8])] = &[
+            (b"A <a@b> 1000000000 +0530", b"", b"no final newline"),
+            (
+                b"A <a@b> 1000000000 -0330",
+                b"",
+                "\nSubject é\n\nBody\n\n\n".as_bytes(),
+            ),
+            (b"A <a@b> 1000000000 -0000", b"", b"negative zero offset\n"),
+            (b"A <a@b> 1000000000 +1260", b"", b"unusual timezone\n"),
+            (b"A <a@b> -1 +0000", b"", b"unusual timestamp\n"),
+            (b"A\xff <a@b> 1000000000 +0000", b"", b"invalid utf8\xff\n"),
+            (
+                b"Andr\xe9 <a@b> 1000000000 +0000",
+                b"encoding ISO-8859-1\n",
+                b"Encoded caf\xe9\n",
+            ),
+            (b"A <a@b> 1000000000 +0000", b"encoding UTF-8\n", b""),
+        ];
+        for (signature, encoding, message) in cases {
+            let mut object = format!("tree {tree}\nparent {parent}\nauthor ").into_bytes();
+            object.extend_from_slice(signature);
+            object.extend_from_slice(b"\ncommitter C <c@b> 1800000000 -1200\n");
+            object.extend_from_slice(encoding);
+            object.extend_from_slice(b"gpgsig -----BEGIN SIGNATURE-----\n author Fake <fake@b> 0 +0000\n -----END SIGNATURE-----\n\n");
+            object.extend_from_slice(message);
+            parent = write_raw_commit(&fixture, &object);
+        }
+        fixture.git(&["update-ref", "refs/heads/main", &parent]);
+        assert_eq!(assert_matches_pretty_log(fixture.root()), cases.len() + 1);
+        fixture.git(&["config", "--unset", "i18n.logOutputEncoding"]);
+        fixture.git(&["config", "i18n.commitEncoding", "ISO-8859-1"]);
+        assert_eq!(assert_matches_pretty_log(fixture.root()), cases.len() + 1);
+        fixture.git(&["config", "i18n.logOutputEncoding", "ISO-8859-1"]);
+        let repository = Repository::open(fixture.root(), &Cancellation::default()).unwrap();
+        assert!(
+            repository
+                .log(Cancellation::default())
+                .unwrap()
+                .traversal
+                .is_none()
+        );
+        assert_eq!(assert_matches_pretty_log(fixture.root()), cases.len() + 1);
+    }
+
+    #[test]
+    fn raw_stream_preserves_merge_order_and_replacement_parents() {
+        let fixture = Fixture::new();
+        fixture.commit("root");
+        fixture.git(&["checkout", "--quiet", "-b", "side"]);
+        let side = fixture.commit("side");
+        fixture.git(&["checkout", "--quiet", "main"]);
+        fixture.git(&["commit", "--quiet", "--allow-empty", "-m", "main"]);
+        fixture.git(&["merge", "--quiet", "--no-ff", "side", "-m", "merge"]);
+        assert_eq!(assert_matches_pretty_log(fixture.root()), 4);
+        fixture.git(&["replace", "--graft", &side]);
+        assert_eq!(assert_matches_pretty_log(fixture.root()), 4);
+    }
+
+    #[test]
+    fn raw_stream_bounds_records_without_rejecting_large_signatures() {
+        let fixture = Fixture::new();
+        fixture.commit("root");
+        let tree = fixture.git(&["rev-parse", "HEAD^{tree}"]);
+        let mut object = format!("tree {tree}\nauthor A <a@b> 1000000000 +0000\ncommitter A <a@b> 1000000000 +0000\ngpgsig ").into_bytes();
+        object.resize(object.len() + MAX_RECORD_BYTES + 1, b'x');
+        object.extend_from_slice(b"\n\nsmall message\n");
+        let id = write_raw_commit(&fixture, &object);
+        fixture.git(&["update-ref", "refs/heads/main", &id]);
+        assert_eq!(assert_matches_pretty_log(fixture.root()), 1);
+        let mut object = format!(
+            "tree {tree}\nauthor A <a@b> 1000000000 +0000\ncommitter A <a@b> 1000000000 +0000\n\n"
+        )
+        .into_bytes();
+        object.resize(object.len() + MAX_RECORD_BYTES + 1, b'x');
+        let id = write_raw_commit(&fixture, &object);
+        fixture.git(&["update-ref", "refs/heads/main", &id]);
+        let cancel = Cancellation::default();
+        let repository = Repository::open(fixture.root(), &cancel).unwrap();
+        let result = repository.log(cancel).unwrap().next_commit();
+        assert!(result.is_err(), "oversized formatted message was accepted");
+        let error = result.err().unwrap();
+        assert!(error.to_string().contains("2 MiB"));
+    }
+
+    #[test]
+    fn raw_stream_cancellation_reaps_both_backpressured_children() {
+        let fixture = Fixture::new();
+        fixture.commit("root");
+        fixture.append_history(2000, false, "candidate");
+        let cancel = Cancellation::default();
+        let repository = Repository::open(fixture.root(), &cancel).unwrap();
+        let mut stream = repository.log(cancel.clone()).unwrap();
+        assert!(stream.next_commit().unwrap().is_some());
+        let children = [
+            stream.traversal.as_ref().unwrap().child.clone(),
+            stream.reader.child.clone(),
+        ];
+        let (sender, receiver) = std::sync::mpsc::channel();
+        cancel.store(true, Ordering::Release);
+        let worker = thread::spawn(move || {
+            assert!(stream.next_commit().is_err());
+            drop(stream);
+            sender.send(()).unwrap();
+        });
+        receiver.recv_timeout(Duration::from_secs(3)).unwrap();
+        worker.join().unwrap();
+        for child in children {
+            assert!(child.lock().unwrap().try_wait().unwrap().is_some());
+        }
+    }
+
+    #[test]
+    fn raw_stream_reports_traversal_failure_after_reader_eof() {
+        let fixture = Fixture::new();
+        fixture.commit("root");
+        let tree = fixture.git(&["rev-parse", "HEAD^{tree}"]);
+        let object = format!(
+            "tree {tree}\nparent {}\nauthor A <a@b> 1000000000 +0000\ncommitter A <a@b> 1000000000 +0000\n\nbroken parent\n",
+            "0".repeat(40)
+        );
+        let id = write_raw_commit(&fixture, object.as_bytes());
+        fixture.git(&["update-ref", "refs/heads/main", &id]);
+        let cancel = Cancellation::default();
+        let repository = Repository::open(fixture.root(), &cancel).unwrap();
+        let mut stream = repository.log(cancel).unwrap();
+        let error = loop {
+            match stream.next_commit() {
+                Ok(Some(_)) => (),
+                Ok(None) => panic!("traversal failure was hidden by cat-file EOF"),
+                Err(error) => break error,
+            }
+        };
+        assert!(error.to_string().contains("Git failed"));
+    }
+
+    #[test]
+    #[ignore = "requires GITK_PROFILE_REPOSITORY; compares every real commit with git log"]
+    fn profile_history_stream_parity() {
+        let root =
+            std::env::var_os("GITK_PROFILE_REPOSITORY").expect("set GITK_PROFILE_REPOSITORY");
+        eprintln!(
+            "history_stream_parity compared={}",
+            assert_matches_pretty_log(Path::new(&root))
+        );
+    }
 
     #[test]
     fn multiline_messages_and_ids() {

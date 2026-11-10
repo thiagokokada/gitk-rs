@@ -3,6 +3,8 @@
 Manual reload and automatic HEAD-change reload use the same history worker.
 Loaded commits stay in memory when the repository state permits reuse. History
 is not cached on disk, and the UI does not run Git or rebuild history itself.
+The traversal and raw-object pipeline are described in
+[History loading performance](history-performance.md).
 
 ## Unchanged HEAD
 
