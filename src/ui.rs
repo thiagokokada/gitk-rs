@@ -812,6 +812,7 @@ impl HistoryWindow {
             )
         });
         self.local_selection = None;
+        self.pending_selection = None;
         self.selected = Some((index, entry));
     }
 

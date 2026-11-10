@@ -754,6 +754,57 @@ fn keyboard_navigation_and_filter_focus(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn reversing_navigation_from_loading_row_clears_pending_selection(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let oldest = fixture.commit("match oldest");
+    let middle = fixture.commit("match middle");
+    fixture.commit("match newest");
+    let (app, cx) = open(&fixture, cx);
+    cx.simulate_keystrokes("/");
+    cx.simulate_input("match");
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            let view = app.view.read(cx);
+            view.request.query == "match"
+                && view
+                    .snapshot
+                    .as_ref()
+                    .is_some_and(|s| s.visible == 3 && !s.filtering)
+        })
+    });
+    cx.update(|window, cx| {
+        app.view.update(cx, |view, cx| {
+            // Hold a deterministic partial-search snapshot while exercising
+            // input; worker polling uses a test-clock timer that stays paused.
+            let snapshot = view.snapshot.as_mut().unwrap();
+            snapshot.eof = false;
+            snapshot.filtering = true;
+            view.select(2, window, cx);
+        });
+    });
+    cx.simulate_keystrokes("/ alt-j");
+    assert_eq!(
+        cx.update(|_, cx| app.view.read(cx).pending_selection),
+        Some(3)
+    );
+    cx.simulate_keystrokes("alt-k");
+    assert_eq!(selected(&app.view, cx).as_deref(), Some(oldest.as_str()));
+    assert!(cx.update(|_, cx| app.view.read(cx).pending_selection.is_none()));
+    cx.simulate_keystrokes("alt-k");
+    assert_eq!(selected(&app.view, cx).as_deref(), Some(middle.as_str()));
+    cx.simulate_keystrokes("alt-j");
+    assert_eq!(selected(&app.view, cx).as_deref(), Some(oldest.as_str()));
+    assert!(cx.update(|window, cx| {
+        app.view
+            .read(cx)
+            .filter
+            .read(cx)
+            .focus_handle(cx)
+            .is_focused(window)
+    }));
+}
+
+#[gpui_kit::test]
 fn enter_applies_pending_filter_and_returns_focus_to_history(cx: &mut TestAppContext) {
     let fixture = Fixture::new();
     let oldest = fixture.commit("needle oldest");
