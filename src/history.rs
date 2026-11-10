@@ -1,7 +1,7 @@
 //! Loaded entries live once in memory. The GUI receives only nearby Arc
 //! references; neither history nor filter results persist on disk.
 use crate::{
-    git::{Cancellation, Commit, CommitId, GitStream, Repository, run_bytes},
+    git::{Cancellation, Commit, CommitId, CommitStream, GitStream, Repository, run_bytes},
     graph::{GraphBuilder, GraphRow},
     search::{CompiledQuery, Matcher, Query},
 };
@@ -419,7 +419,7 @@ enum ReloadProgress {
 
 struct LinearReload {
     repository: Repository,
-    stream: GitStream,
+    stream: CommitStream,
     old_head: CommitId,
     expected: CommitId,
     entries: Vec<Arc<Entry>>,
@@ -483,7 +483,7 @@ struct PrefixSearch {
 
 struct Session {
     repository: Repository,
-    stream: Option<GitStream>,
+    stream: Option<CommitStream>,
     cancellation: Cancellation,
     entries: Vec<Arc<Entry>>,
     strings: HashSet<Arc<str>>,
@@ -1570,6 +1570,8 @@ mod tests {
         };
         let started = Instant::now();
         let mut session = Session::open(&request, Cancellation::default()).unwrap();
+        session.step(&request).unwrap();
+        let first_batch_ms = started.elapsed().as_millis();
         while session.step(&request).unwrap() {}
         let mut records = 0;
         let mut metadata = 0;
@@ -1601,6 +1603,7 @@ mod tests {
             started.elapsed().as_millis(),
             records + metadata + messages + graph + index,
         );
+        eprintln!("history_probe first_batch_ms={first_batch_ms}");
         // RSS includes allocator overhead and the test harness. Keep the probe
         // separate from desktop measurements; never combine Git RSS with ours.
         #[cfg(target_os = "linux")]
