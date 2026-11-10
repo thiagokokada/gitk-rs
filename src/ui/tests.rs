@@ -754,7 +754,7 @@ fn keyboard_navigation_and_filter_focus(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn reversing_navigation_from_loading_row_clears_pending_selection(cx: &mut TestAppContext) {
+fn navigation_excludes_loading_row_while_filtering(cx: &mut TestAppContext) {
     let fixture = Fixture::new();
     let oldest = fixture.commit("match oldest");
     let middle = fixture.commit("match middle");
@@ -782,12 +782,7 @@ fn reversing_navigation_from_loading_row_clears_pending_selection(cx: &mut TestA
             view.select(2, window, cx);
         });
     });
-    cx.simulate_keystrokes("/ alt-j");
-    assert_eq!(
-        cx.update(|_, cx| app.view.read(cx).pending_selection),
-        Some(3)
-    );
-    cx.simulate_keystrokes("alt-k");
+    cx.simulate_keystrokes("/ alt-j alt-j");
     assert_eq!(selected(&app.view, cx).as_deref(), Some(oldest.as_str()));
     assert!(cx.update(|_, cx| app.view.read(cx).pending_selection.is_none()));
     cx.simulate_keystrokes("alt-k");
@@ -801,6 +796,30 @@ fn reversing_navigation_from_loading_row_clears_pending_selection(cx: &mut TestA
             .read(cx)
             .focus_handle(cx)
             .is_focused(window)
+    }));
+    // Plain arrows share the same boundary, and both directions stay usable.
+    cx.simulate_keystrokes("escape down down");
+    assert_eq!(selected(&app.view, cx).as_deref(), Some(oldest.as_str()));
+    assert!(cx.update(|_, cx| app.view.read(cx).pending_selection.is_none()));
+    cx.simulate_keystrokes("up");
+    assert_eq!(selected(&app.view, cx).as_deref(), Some(middle.as_str()));
+    cx.simulate_keystrokes("down");
+    assert_eq!(selected(&app.view, cx).as_deref(), Some(oldest.as_str()));
+    cx.update(|window, cx| {
+        app.view.update(cx, |view, cx| {
+            view.select(3, window, cx);
+            assert!(view.pending_selection.is_none());
+            let snapshot = view.snapshot.as_mut().unwrap();
+            snapshot.visible = 0;
+            snapshot.rows.clear();
+            view.selected = None;
+        });
+    });
+    // With no results yet, the loading indicator is the only row on screen.
+    cx.simulate_keystrokes("alt-j alt-k down up home end");
+    assert!(cx.update(|_, cx| {
+        let view = app.view.read(cx);
+        view.pending_selection.is_none() && view.selected.is_none()
     }));
 }
 

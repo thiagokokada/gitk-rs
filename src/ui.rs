@@ -817,6 +817,10 @@ impl HistoryWindow {
     }
 
     fn select(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let count = self.local_rows.len() + self.snapshot.as_ref().map_or(0, |s| s.visible);
+        if index >= count {
+            return;
+        }
         self.focus.focus(window, cx);
         if let Some(kind) = self.local_rows.get(index).copied() {
             self.select_local(kind, cx);
@@ -847,8 +851,9 @@ impl HistoryWindow {
         let Some(snapshot) = &self.snapshot else {
             return;
         };
-        let maximum =
-            (snapshot.visible + self.local_rows.len()).saturating_sub(usize::from(snapshot.eof));
+        let Some(maximum) = (snapshot.visible + self.local_rows.len()).checked_sub(1) else {
+            return;
+        };
         let index = self
             .pending_selection
             .or_else(|| self.selected.as_ref().map(|s| s.0))
