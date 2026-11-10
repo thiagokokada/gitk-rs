@@ -63,3 +63,10 @@ One `contents:` qualifier is allowed per query. Combining `path:` and
 `contents:` requires both to match the commit; they can match different files.
 Like path search, it covers history reachable from HEAD and reports results
 incrementally.
+
+A function present in the current file only appears in contents results when a
+commit adds or removes a matching line. Searching a large history for an older
+change can take time. Add metadata qualifiers such as `author:` or `after:`
+when you know them to reduce the commits whose diffs need searching. A `path:`
+filter narrows results but currently does not skip generating unrelated
+candidate diffs.

@@ -287,6 +287,37 @@ impl Matcher {
         Ok(Self::Regex(compiled))
     }
 
+    /// A necessary (not sufficient) POSIX ERE for Git's changed-line filter.
+    /// Keep Rust's matcher authoritative, including its Unicode lowercase rules.
+    pub(crate) fn git_literal_prefilter(&self) -> Option<String> {
+        let Self::Literal(value) = self else {
+            return None;
+        };
+        if !value.is_ascii() {
+            return None;
+        }
+        // Non-ASCII characters can lowercase to ASCII i (with a combining dot)
+        // or k (Kelvin sign). Avoid those letters rather than losing matches.
+        let fragment = value
+            .split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_' || matches!(ch, 'i' | 'k'))
+            .max_by_key(|fragment| fragment.len())?;
+        if fragment.len() < 3 {
+            return None;
+        }
+        let mut pattern = String::new();
+        for byte in fragment.bytes().take(64) {
+            if byte.is_ascii_lowercase() {
+                pattern.push('[');
+                pattern.push(char::from(byte));
+                pattern.push(char::from(byte.to_ascii_uppercase()));
+                pattern.push(']');
+            } else {
+                pattern.push(char::from(byte));
+            }
+        }
+        Some(pattern)
+    }
+
     pub fn is_match(&self, text: &str) -> bool {
         match self {
             Self::Literal(value) => text.to_lowercase().contains(value),
@@ -527,6 +558,31 @@ mod tests {
             let error = Query::parse(&format!("{key}:")).unwrap_err().to_string();
             assert_eq!(error, format!("{key}: needs a value"));
         }
+    }
+
+    #[test]
+    fn git_prefilter_is_conservative_for_literals_and_unicode_lowercase() {
+        let compile = |value: &str, regex| Matcher::new(value.into(), regex).unwrap();
+        assert_eq!(
+            compile("copy_closure", false)
+                .git_literal_prefilter()
+                .as_deref(),
+            Some("[cC][oO][pP][yY]_[cC][lL][oO][sS][uU][rR][eE]")
+        );
+        for value in ["ki", "a.*b", "λneedle"] {
+            assert!(compile(value, false).git_literal_prefilter().is_none());
+        }
+        assert!(compile("needle", true).git_literal_prefilter().is_none());
+        // Protect the assumption behind using ASCII fragments with Git's regex
+        // engine, which does not share Rust's Unicode lowercase implementation.
+        for ch in (128..=0x10ffff).filter_map(char::from_u32) {
+            for lower in ch.to_lowercase().filter(char::is_ascii) {
+                assert!(matches!(lower, 'i' | 'k'), "{ch:?} lowercases to {lower:?}");
+            }
+        }
+        let pattern = compile("monkey", false).git_literal_prefilter().unwrap();
+        assert!(regex::Regex::new(&pattern).unwrap().is_match("MONKEY"));
+        assert!(compile("monkey", false).is_match("MONKEY"));
     }
 
     #[test]

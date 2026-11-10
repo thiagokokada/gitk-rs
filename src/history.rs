@@ -356,6 +356,14 @@ impl DiffSearch {
                     "--no-textconv",
                     "--diff-merges=first-parent",
                 ];
+                let prefilter = contents
+                    .as_ref()
+                    .and_then(|pattern| pattern.git_literal_prefilter());
+                if let Some(pattern) = &prefilter {
+                    // --always retains one header per candidate, even on a miss.
+                    // Keep all changed paths so path/contents remain commit-level AND.
+                    args.extend(["-G", pattern, "--pickaxe-all"]);
+                }
                 if contents.is_some() {
                     args.extend([
                         "--patch",
@@ -1905,6 +1913,40 @@ mod tests {
         while session.step(&request).unwrap() {}
         assert!(cancel.load(Ordering::Acquire));
         assert_eq!(session.visible_count(), 1);
+    }
+
+    #[test]
+    fn contents_prefilter_preserves_case_unicode_path_and_rename_matches() {
+        let fixture = Fixture::new();
+        std::fs::write(
+            fixture.root().join("source.txt"),
+            "COPY_CLOSURE\nMONKEY\nneedle[1]\n",
+        )
+        .unwrap();
+        std::fs::write(fixture.root().join("other.txt"), "unrelated\n").unwrap();
+        fixture.git(&["add", "."]);
+        fixture.git(&["commit", "-m", "root"]);
+        fixture.git(&["mv", "source.txt", "renamed.txt"]);
+        fixture.git(&["commit", "-m", "rename"]);
+        let mut request = request(&fixture);
+        let mut session = Session::open(&request, Cancellation::default()).unwrap();
+        for (query, expected) in [
+            ("contents:copy_closure", 2),
+            ("contents:copy_closure path:other.txt", 1),
+            ("contents:monkey", 2),
+            ("contents:needle[1]", 2),
+            ("contents:needle[2]", 0),
+            ("contents:absent", 0),
+        ] {
+            request.query = query.into();
+            while session.step(&request).unwrap() {}
+            assert!(
+                session.query_error.is_none(),
+                "{query}: {:?}",
+                session.query_error
+            );
+            assert_eq!(session.visible_count(), expected, "{query}");
+        }
     }
 
     #[test]
