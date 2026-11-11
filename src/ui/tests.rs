@@ -41,17 +41,19 @@ fn open_with_state<'a>(
         ..Config::default()
     };
     let request = Request {
+        source: HistorySource {
+            repository: config.repository.clone(),
+            graph_columns: config.graph_columns,
+            history_readers: config.history_readers,
+            reload_generation: Default::default(),
+        },
         generation: Generation(1),
-        reload_generation: Default::default(),
         id: 0,
         refs_revision: 0,
-        repository: config.repository.clone(),
         range: 0..128,
         query: String::new(),
         regex: false,
         batch: config.batch,
-        graph_columns: config.graph_columns,
-        history_readers: config.history_readers,
         anchor: None,
         restore: None,
     };
@@ -333,7 +335,7 @@ fn shift_f5_rebuilds_history_and_diff_while_preserving_selection(cx: &mut TestAp
         let view = app.view.read(cx);
         (
             view.cached(8).unwrap(),
-            view.request.reload_generation,
+            view.request.source.reload_generation,
             view.diff.read(cx).selection_id(),
         )
     });
@@ -344,7 +346,7 @@ fn shift_f5_rebuilds_history_and_diff_while_preserving_selection(cx: &mut TestAp
             let view = app.view.read(cx);
             view.snapshot
                 .as_ref()
-                .is_some_and(|s| s.reload_generation != reload && s.eof)
+                .is_some_and(|s| s.source.reload_generation != reload && s.eof)
                 && view.reload_selection.is_none()
                 && view
                     .selected
@@ -357,7 +359,7 @@ fn shift_f5_rebuilds_history_and_diff_while_preserving_selection(cx: &mut TestAp
         let view = app.view.read(cx);
         assert!(!Arc::ptr_eq(&before, &view.cached(8).unwrap()));
         assert_ne!(view.diff.read(cx).selection_id(), diff_selection);
-        assert_eq!(view.request.reload_generation.0, reload.0 + 2);
+        assert_eq!(view.request.source.reload_generation.0, reload.0 + 2);
     });
 }
 
@@ -1902,8 +1904,8 @@ fn application_preferences_replace_flags_apply_and_persist(cx: &mut TestAppConte
         assert_eq!(view.preferences, saved);
         assert_eq!(saved.with_config(&view.config), saved);
         assert_eq!(view.request.batch, Some(73));
-        assert_eq!(view.request.graph_columns, 512);
-        assert_eq!(view.request.history_readers, 4);
+        assert_eq!(view.request.source.graph_columns, 512);
+        assert_eq!(view.request.source.history_readers, 4);
         assert!(view.request.generation.0 > generation.0);
     });
     let restarted = gitk_rs::cli::parse_with_preferences([], &saved).unwrap();

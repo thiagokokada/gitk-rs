@@ -28,21 +28,27 @@ pub struct Generation(pub u64);
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ReloadGeneration(pub u64);
 
+/// Settings that determine whether retained history and its Git stream can be reused.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HistorySource {
+    pub repository: PathBuf,
+    pub graph_columns: usize,
+    pub history_readers: usize,
+    pub reload_generation: ReloadGeneration,
+}
+
 #[derive(Clone, Debug)]
 pub struct Request {
     pub generation: Generation,
-    pub reload_generation: ReloadGeneration,
+    pub source: HistorySource,
     pub id: u64,
     pub refs_revision: u64,
-    pub repository: PathBuf,
     pub range: Range<usize>,
     pub query: String,
     pub regex: bool,
     /// None streams to EOF; Some(N) pauses after satisfying browsing demand in
     /// batches of N. Worker steps and the snapshot mailbox stay bounded either way.
     pub batch: Option<usize>,
-    pub graph_columns: usize,
-    pub history_readers: usize,
     pub anchor: Option<usize>,
     pub restore: Option<Restore>,
 }
@@ -85,7 +91,7 @@ pub type Refs = HashMap<CommitId, Vec<RefLabel>>;
 #[derive(Clone, Debug)]
 pub struct Snapshot {
     pub generation: Generation,
-    pub reload_generation: ReloadGeneration,
+    pub source: HistorySource,
     pub request_id: u64,
     pub start: usize,
     pub rows: Vec<Arc<Entry>>,
@@ -108,10 +114,7 @@ struct SharedState {
     snapshot: Option<Snapshot>,
     cancellation: Cancellation,
     generation: Generation,
-    reload_generation: ReloadGeneration,
-    repository: PathBuf,
-    graph_columns: usize,
-    history_readers: usize,
+    source: HistorySource,
     stopped: bool,
 }
 
@@ -135,10 +138,7 @@ impl HistoryEngine {
         let shared = Arc::new(Shared {
             state: Mutex::new(SharedState {
                 generation: initial.generation,
-                reload_generation: initial.reload_generation,
-                repository: initial.repository.clone(),
-                graph_columns: initial.graph_columns,
-                history_readers: initial.history_readers,
+                source: initial.source.clone(),
                 request: Some(initial),
                 snapshot: None,
                 cancellation: Cancellation::default(),
@@ -181,26 +181,18 @@ impl HistoryHandle {
             let mut state = self.shared.state.lock().unwrap();
             // A UI generation invalidates snapshots, not necessarily the Git
             // traversal. Let the worker inspect HEAD before replacing a stream.
-            if request.repository != state.repository
-                || request.graph_columns != state.graph_columns
-                || request.history_readers != state.history_readers
-                || request.reload_generation != state.reload_generation
-            {
+            let source_changed = request.source != state.source;
+            if source_changed {
                 state.cancellation.store(true, Ordering::Release);
                 state.cancellation = Cancellation::default();
             }
-            let snapshot = if request.generation != state.generation
-                || request.reload_generation != state.reload_generation
-            {
+            let snapshot = if request.generation != state.generation || source_changed {
                 state.snapshot.take()
             } else {
                 None
             };
             state.generation = request.generation;
-            state.reload_generation = request.reload_generation;
-            state.repository = request.repository.clone();
-            state.graph_columns = request.graph_columns;
-            state.history_readers = request.history_readers;
+            state.source.clone_from(&request.source);
             (state.request.replace(request), snapshot)
         };
         drop(old);
@@ -216,7 +208,7 @@ fn publish(shared: &Shared, snapshot: Snapshot) {
     let old = {
         let mut state = shared.state.lock().unwrap();
         if snapshot.generation != state.generation
-            || snapshot.reload_generation != state.reload_generation
+            || snapshot.source != state.source
             || state.stopped
         {
             return;
@@ -247,22 +239,18 @@ fn run(shared: Arc<Shared>) {
         let step_started = Instant::now();
         let mut reload = false;
         if let Some(request) = incoming {
-            if current.as_ref().is_none_or(|previous| {
-                previous.generation != request.generation
-                    || previous.history_readers != request.history_readers
-                    || previous.reload_generation != request.reload_generation
-            }) {
+            let source_changed = current
+                .as_ref()
+                .is_none_or(|previous| previous.source != request.source);
+            if source_changed
+                || current
+                    .as_ref()
+                    .is_none_or(|previous| previous.generation != request.generation)
+            {
                 reload = true;
                 load_duration = Duration::ZERO;
                 completed = false;
-                if failed
-                    || current.as_ref().is_none_or(|previous| {
-                        previous.repository != request.repository
-                            || previous.graph_columns != request.graph_columns
-                            || previous.history_readers != request.history_readers
-                            || previous.reload_generation != request.reload_generation
-                    })
-                {
+                if failed || source_changed {
                     // Git cleanup must happen outside the shared UI mailbox lock.
                     session = None;
                 }
@@ -340,7 +328,7 @@ fn run(shared: Arc<Shared>) {
 fn empty_snapshot(request: &Request, error: Option<String>) -> Snapshot {
     Snapshot {
         generation: request.generation,
-        reload_generation: request.reload_generation,
+        source: request.source.clone(),
         request_id: request.id,
         start: 0,
         rows: Vec::new(),
@@ -616,12 +604,14 @@ struct Session {
 
 impl Session {
     fn open(request: &Request, cancellation: Cancellation) -> Result<Self> {
-        let repository = Repository::open(&request.repository, &cancellation)?;
+        let repository = Repository::open(&request.source.repository, &cancellation)?;
         let reusable = history_reusable(&repository, &cancellation)?;
         let stream = repository
             .head
             .as_ref()
-            .map(|_| repository.log_with_readers(cancellation.clone(), request.history_readers))
+            .map(|_| {
+                repository.log_with_readers(cancellation.clone(), request.source.history_readers)
+            })
             .transpose()?;
         let eof = stream.is_none();
         Ok(Self {
@@ -630,7 +620,7 @@ impl Session {
             cancellation,
             entries: Vec::new(),
             strings: HashSet::new(),
-            graph: GraphBuilder::new(request.graph_columns),
+            graph: GraphBuilder::new(request.source.graph_columns),
             refs: Arc::new(Refs::new()),
             refs_loaded: false,
             refs_revision: 0,
@@ -670,7 +660,7 @@ impl Session {
         if self.cancellation.load(Ordering::Acquire) || self.query_error.is_some() {
             return Ok(false);
         }
-        let repository = Repository::open(&request.repository, &self.cancellation)?;
+        let repository = Repository::open(&request.source.repository, &self.cancellation)?;
         if !self.reusable
             || repository.root != self.repository.root
             || repository.git_dir != self.repository.git_dir
@@ -691,12 +681,12 @@ impl Session {
             }
             self.reload = Some(LinearReload {
                 stream: repository
-                    .log_with_readers(self.cancellation.clone(), request.history_readers)?,
+                    .log_with_readers(self.cancellation.clone(), request.source.history_readers)?,
                 repository,
                 old_head,
                 expected,
                 entries: Vec::new(),
-                graph: GraphBuilder::new(request.graph_columns),
+                graph: GraphBuilder::new(request.source.graph_columns),
                 strings: HashSet::new(),
             });
             return Ok(true);
@@ -1094,7 +1084,7 @@ impl Session {
             .collect();
         Snapshot {
             generation: request.generation,
-            reload_generation: request.reload_generation,
+            source: request.source.clone(),
             request_id: request.id,
             start,
             rows,
@@ -1210,17 +1200,19 @@ mod tests {
 
     fn request(fixture: &Fixture) -> Request {
         Request {
+            source: HistorySource {
+                repository: fixture.root().to_owned(),
+                graph_columns: crate::graph::DEFAULT_GRAPH_LANES,
+                history_readers: crate::git::DEFAULT_HISTORY_READERS,
+                reload_generation: ReloadGeneration::default(),
+            },
             generation: Generation(1),
-            reload_generation: ReloadGeneration::default(),
             id: 1,
             refs_revision: 0,
-            repository: fixture.root().to_owned(),
             range: 0..10,
             query: String::new(),
             regex: false,
             batch: Some(1000),
-            graph_columns: crate::graph::DEFAULT_GRAPH_LANES,
-            history_readers: crate::git::DEFAULT_HISTORY_READERS,
             anchor: None,
             restore: None,
         }
@@ -1316,7 +1308,7 @@ mod tests {
         let after = wait(request.generation);
         assert!(Arc::ptr_eq(&before.rows[0], &after.rows[0]));
         request.generation = Generation(3);
-        request.graph_columns = 1;
+        request.source.graph_columns = 1;
         handle.request(request.clone());
         let rebuilt = wait(request.generation);
         assert!(!Arc::ptr_eq(&after.rows[0], &rebuilt.rows[0]));
@@ -1444,7 +1436,7 @@ mod tests {
         fixture.git(&["merge", "--no-ff", "side", "-m", "merge"]);
         for cap in [1, 2, 256] {
             let mut request = request(&fixture);
-            request.graph_columns = cap;
+            request.source.graph_columns = cap;
             let mut session = Session::open(&request, Cancellation::default()).unwrap();
             while session.step(&request).unwrap() {}
             fixture.commit(&format!("linear tip {cap}"));
@@ -1659,17 +1651,19 @@ mod tests {
             .unwrap();
         assert!((1..=crate::git::MAX_HISTORY_READERS).contains(&readers));
         let request = Request {
+            source: HistorySource {
+                repository: repository.into(),
+                graph_columns: crate::graph::DEFAULT_GRAPH_LANES,
+                history_readers: readers,
+                reload_generation: ReloadGeneration::default(),
+            },
             generation: Generation(1),
-            reload_generation: ReloadGeneration::default(),
             id: 1,
             refs_revision: 0,
-            repository: repository.into(),
             range: 0..1,
             query: String::new(),
             regex: false,
             batch: Some(count),
-            graph_columns: crate::graph::DEFAULT_GRAPH_LANES,
-            history_readers: readers,
             anchor: None,
             restore: None,
         };
@@ -1702,8 +1696,8 @@ mod tests {
             + session.strings.capacity() * (size_of::<Arc<str>>() + 1);
         eprintln!(
             "history_probe readers={} graph_lanes={} loaded={} eof={} elapsed_ms={} records_bytes={records} metadata_bytes={metadata} messages_bytes={messages} graph_bytes={graph} index_bytes={index} accounted_bytes={}",
-            request.history_readers,
-            request.graph_columns,
+            request.source.history_readers,
+            request.source.graph_columns,
             session.entries.len(),
             session.eof,
             started.elapsed().as_millis(),
@@ -2073,17 +2067,19 @@ mod tests {
         let query = std::env::var("GITK_SEARCH_QUERY")
             .unwrap_or_else(|_| "path:ci.yml after:2026-01-01".into());
         let mut request = Request {
+            source: HistorySource {
+                repository: repository.into(),
+                graph_columns: crate::graph::DEFAULT_GRAPH_LANES,
+                history_readers: crate::git::DEFAULT_HISTORY_READERS,
+                reload_generation: ReloadGeneration::default(),
+            },
             generation: Generation(1),
-            reload_generation: ReloadGeneration::default(),
             id: 1,
             refs_revision: 0,
-            repository: repository.into(),
             range: 0..128,
             query,
             regex: std::env::var("GITK_SEARCH_REGEX").is_ok_and(|value| value == "1"),
             batch: None,
-            graph_columns: crate::graph::DEFAULT_GRAPH_LANES,
-            history_readers: crate::git::DEFAULT_HISTORY_READERS,
             anchor: None,
             restore: None,
         };
@@ -2094,7 +2090,7 @@ mod tests {
             session.repository.head.as_ref().map(CommitId::to_hex),
             request.query,
             request.regex,
-            request.graph_columns
+            request.source.graph_columns
         );
         let mut first = false;
         while session.step(&request).unwrap() {
@@ -2141,7 +2137,7 @@ mod tests {
         let fixture = Fixture::new();
         fixture.commit("working");
         let mut bad = request(&fixture);
-        bad.repository = fixture.root().join("does-not-exist");
+        bad.source.repository = fixture.root().join("does-not-exist");
         let engine = HistoryEngine::spawn(bad);
         let handle = engine.handle();
         let deadline = Instant::now() + Duration::from_secs(5);

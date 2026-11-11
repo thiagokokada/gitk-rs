@@ -13,7 +13,7 @@ use gitk_rs::{
     diff::{DiffEngine, DiffHandle, DiffSettings},
     graph::{GraphLayout, GraphRow, MAX_GRAPH_LANES, text_graph},
     history::{
-        Entry, Generation, HistoryEngine, HistoryHandle, RefKind, Request,
+        Entry, Generation, HistoryEngine, HistoryHandle, HistorySource, RefKind, Request,
         Restore as HistoryRestore, Snapshot,
     },
     preferences::Preferences,
@@ -491,7 +491,7 @@ impl HistoryWindow {
             return;
         };
         if snapshot.generation != self.request.generation
-            || snapshot.reload_generation != self.request.reload_generation
+            || snapshot.source != self.request.source
             || snapshot.request_id != self.request.id
         {
             return;
@@ -881,7 +881,7 @@ impl HistoryWindow {
     }
 
     fn reload(&mut self, cx: &mut Context<Self>) {
-        self.request.repository = self.config.repository.clone();
+        self.request.source.repository = self.config.repository.clone();
         let index = self.viewport.start.saturating_sub(self.local_rows.len());
         let previous_restore = self.request.restore.as_ref();
         let selected = self
@@ -920,7 +920,7 @@ impl HistoryWindow {
     }
 
     fn force_reload(&mut self, cx: &mut Context<Self>) {
-        self.request.reload_generation.0 += 1;
+        self.request.source.reload_generation.0 += 1;
         // Capture commit-ID bookmarks before releasing the selected entry/page.
         self.reload(cx);
         self.snapshot = None;
@@ -1840,17 +1840,19 @@ pub fn run(mut config: Config, preferences: Preferences, launched: Instant) {
     let guard = TimingGuard::start(config.timings, launched);
     let timing = guard.timing();
     let request = Request {
+        source: HistorySource {
+            repository: config.repository.clone(),
+            graph_columns: config.graph_columns,
+            history_readers: config.history_readers,
+            reload_generation: Default::default(),
+        },
         generation: Generation(1),
-        reload_generation: Default::default(),
         id: 0,
         refs_revision: 0,
-        repository: config.repository.clone(),
         range: 0..128,
         query: String::new(),
         regex: false,
         batch: config.batch,
-        graph_columns: config.graph_columns,
-        history_readers: config.history_readers,
         anchor: None,
         restore: None,
     };
