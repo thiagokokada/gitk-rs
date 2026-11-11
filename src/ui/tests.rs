@@ -1884,7 +1884,7 @@ fn application_preferences_replace_flags_apply_and_persist(cx: &mut TestAppConte
     assert!(cx.update(|_, cx| {
         let view = app.view.read(cx);
         view.operation_message.contains("history readers")
-            && view.config.history_readers == 2
+            && view.config.history_readers == 4
             && view.request.generation == generation
     }));
     cx.update(|window, cx| window.click("history-readers-input", cx));

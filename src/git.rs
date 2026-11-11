@@ -17,7 +17,7 @@ use std::{
 mod commit_pool;
 use commit_pool::CommitPool;
 
-pub const DEFAULT_HISTORY_READERS: usize = 2;
+pub const DEFAULT_HISTORY_READERS: usize = 4;
 pub const MAX_HISTORY_READERS: usize = 64;
 
 pub const MAX_RECORD_BYTES: usize = 2 * 1024 * 1024;

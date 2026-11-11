@@ -212,7 +212,7 @@ mod tests {
             "--timings=false",
             "--no-limit",
             "--graph-cols=256",
-            "--history-readers=2",
+            "--history-readers=4",
             "--text-graph=false",
             "--nosyntax=false",
             "--nowatch=false",
@@ -294,7 +294,7 @@ mod tests {
             );
         }
         assert_eq!(command(&[]).unwrap().graph_columns, 256);
-        assert_eq!(command(&[]).unwrap().history_readers, 2);
+        assert_eq!(command(&[]).unwrap().history_readers, 4);
         for readers in [1, 2, 4, 8, 64] {
             assert_eq!(
                 command(&["--history-readers", &readers.to_string()])
