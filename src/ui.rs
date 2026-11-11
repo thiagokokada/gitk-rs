@@ -57,6 +57,7 @@ actions!(
         First,
         Last,
         Reload,
+        ForceReload,
         FocusFilter,
         BlurFilter,
         HistoryPageUp,
@@ -489,7 +490,9 @@ impl HistoryWindow {
         let Some(snapshot) = self.history.take_snapshot() else {
             return;
         };
-        if snapshot.generation != self.request.generation || snapshot.request_id != self.request.id
+        if snapshot.generation != self.request.generation
+            || snapshot.reload_generation != self.request.reload_generation
+            || snapshot.request_id != self.request.id
         {
             return;
         }
@@ -557,7 +560,11 @@ impl HistoryWindow {
             self.reload_selection = None;
             self.preserve_filter_selection = false;
             self.pending_selection = None;
-            if let Some((index, entry)) = restored.as_ref().and_then(|r| r.selected.clone()) {
+            if self.local_selection.is_some() {
+                self.selected = None;
+                self.pending_selection = None;
+            } else if let Some((index, entry)) = restored.as_ref().and_then(|r| r.selected.clone())
+            {
                 self.set_selection(index + self.local_rows.len(), entry, cx);
             } else {
                 self.selected = None;
@@ -876,10 +883,16 @@ impl HistoryWindow {
     fn reload(&mut self, cx: &mut Context<Self>) {
         self.request.repository = self.config.repository.clone();
         let index = self.viewport.start.saturating_sub(self.local_rows.len());
-        let selected = self.selected.as_ref().map(|s| s.1.commit.id.clone());
+        let previous_restore = self.request.restore.as_ref();
+        let selected = self
+            .selected
+            .as_ref()
+            .map(|s| s.1.commit.id.clone())
+            .or_else(|| previous_restore.and_then(|r| r.selected.clone()));
         let top = self
             .cached(self.viewport.start)
-            .map(|e| e.commit.id.clone());
+            .map(|e| e.commit.id.clone())
+            .or_else(|| previous_restore.and_then(|r| r.top.clone()));
         self.reload_selection = selected.clone().or(top.clone());
         self.request.restore = self
             .reload_selection
@@ -903,6 +916,20 @@ impl HistoryWindow {
         self.detail = "Loading commits…".into();
         self.submit();
         self.refresh_workspace();
+        cx.notify();
+    }
+
+    fn force_reload(&mut self, cx: &mut Context<Self>) {
+        self.request.reload_generation.0 += 1;
+        // Capture commit-ID bookmarks before releasing the selected entry/page.
+        self.reload(cx);
+        self.snapshot = None;
+        self.selected = None;
+        self.diff
+            .update(cx, |diff, cx| diff.clear("Reloading repository…", cx));
+        if let Some(kind) = self.local_selection {
+            self.select_local(kind, cx);
+        }
         cx.notify();
     }
 
@@ -1456,6 +1483,7 @@ impl Render for HistoryWindow {
                 this.switch_branch(this.branch_index, cx)
             }))
             .on_action(cx.listener(|this, _: &Reload, _, cx| this.reload(cx)))
+            .on_action(cx.listener(|this, _: &ForceReload, _, cx| this.force_reload(cx)))
             .on_action(cx.listener(|this, _: &HistoryPageUp, _, cx| {
                 this.scroll.scroll_to_item(
                     this.viewport.start.saturating_sub(this.viewport.len()),
@@ -1505,6 +1533,7 @@ impl Render for HistoryWindow {
                                         .menu("Open repository…", Box::new(OpenRepository))
                                         .menu("Switch local branch…", Box::new(OpenBranches))
                                         .menu("Reload", Box::new(Reload))
+                                        .menu("Force Reload", Box::new(ForceReload))
                                         .separator()
                                         .menu("Copy commit reference", Box::new(CopyCommit))
                                         .menu("Preferences…", Box::new(OpenPreferences))
@@ -1745,6 +1774,7 @@ fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-p", BranchUp, Some("BranchDialog > Input")),
         KeyBinding::new("enter", BranchAccept, Some("BranchDialog")),
         KeyBinding::new("f5", Reload, None),
+        KeyBinding::new("shift-f5", ForceReload, None),
         KeyBinding::new(
             "ctrl-pageup",
             HistoryPageUp,
@@ -1811,6 +1841,7 @@ pub fn run(mut config: Config, preferences: Preferences, launched: Instant) {
     let timing = guard.timing();
     let request = Request {
         generation: Generation(1),
+        reload_generation: Default::default(),
         id: 0,
         refs_revision: 0,
         repository: config.repository.clone(),

@@ -42,6 +42,7 @@ fn open_with_state<'a>(
     };
     let request = Request {
         generation: Generation(1),
+        reload_generation: Default::default(),
         id: 0,
         refs_revision: 0,
         repository: config.repository.clone(),
@@ -317,6 +318,91 @@ fn unchanged_head_reload_retains_rows_and_selection(cx: &mut TestAppContext) {
             before.commit.id
         );
     });
+}
+
+#[gpui_kit::test]
+fn shift_f5_rebuilds_history_and_diff_while_preserving_selection(cx: &mut TestAppContext) {
+    let fixture = history_fixture(20);
+    let (app, cx) = open(&fixture, cx);
+    until(cx, |cx| {
+        cx.update(|_, cx| app.view.read(cx).snapshot.as_ref().is_some_and(|s| s.eof))
+    });
+    app.view
+        .update_in(cx, |view, window, cx| view.select(8, window, cx));
+    let (before, reload, diff_selection) = cx.update(|_, cx| {
+        let view = app.view.read(cx);
+        (
+            view.cached(8).unwrap(),
+            view.request.reload_generation,
+            view.diff.read(cx).selection_id(),
+        )
+    });
+    cx.simulate_keystrokes("/");
+    cx.simulate_keystrokes("shift-f5 shift-f5");
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            let view = app.view.read(cx);
+            view.snapshot
+                .as_ref()
+                .is_some_and(|s| s.reload_generation != reload && s.eof)
+                && view.reload_selection.is_none()
+                && view
+                    .selected
+                    .as_ref()
+                    .is_some_and(|s| s.1.commit.id == before.commit.id)
+                && view.diff.read(cx).has_loaded_selection()
+        })
+    });
+    cx.update(|_, cx| {
+        let view = app.view.read(cx);
+        assert!(!Arc::ptr_eq(&before, &view.cached(8).unwrap()));
+        assert_ne!(view.diff.read(cx).selection_id(), diff_selection);
+        assert_eq!(view.request.reload_generation.0, reload.0 + 2);
+    });
+}
+
+#[gpui_kit::test]
+fn force_reload_preserves_local_selection_and_refreshes_its_diff(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    std::fs::write(fixture.root().join("file"), "before\n").unwrap();
+    fixture.commit("root");
+    fixture.append_history(30, false, "candidate");
+    std::fs::write(fixture.root().join("file"), "after\n").unwrap();
+    let (app, cx) = open(&fixture, cx);
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            app.view
+                .read(cx)
+                .local_rows
+                .contains(&LocalChangeKind::Unstaged)
+        })
+    });
+    app.view.update(cx, |view, cx| {
+        view.select_local(LocalChangeKind::Unstaged, cx)
+    });
+    until(cx, |cx| {
+        cx.update(|_, cx| app.view.read(cx).diff.read(cx).has_loaded_selection())
+    });
+    app.view.update(cx, |view, cx| {
+        view.scroll.scroll_to_item_strict(10, ScrollStrategy::Top);
+        cx.notify();
+    });
+    until(cx, |cx| {
+        cx.update(|_, cx| app.view.read(cx).viewport.start == 10)
+    });
+    let before = cx.update(|_, cx| app.view.read(cx).diff.read(cx).selection_id());
+    cx.simulate_keystrokes("shift-f5");
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            let view = app.view.read(cx);
+            view.snapshot.as_ref().is_some_and(|s| s.eof)
+                && view.diff.read(cx).has_loaded_selection()
+                && view.diff.read(cx).selection_id() != before
+        })
+    });
+    assert!(
+        cx.update(|_, cx| app.view.read(cx).local_selection == Some(LocalChangeKind::Unstaged))
+    );
 }
 
 #[gpui_kit::test]

@@ -23,9 +23,15 @@ const RELOAD_STEP_COMMITS: usize = 256;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Generation(pub u64);
 
+/// Persistent invalidation token; increment to restart traversal and discard
+/// retained history. Carry it on subsequent viewport/filter requests.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ReloadGeneration(pub u64);
+
 #[derive(Clone, Debug)]
 pub struct Request {
     pub generation: Generation,
+    pub reload_generation: ReloadGeneration,
     pub id: u64,
     pub refs_revision: u64,
     pub repository: PathBuf,
@@ -79,6 +85,7 @@ pub type Refs = HashMap<CommitId, Vec<RefLabel>>;
 #[derive(Clone, Debug)]
 pub struct Snapshot {
     pub generation: Generation,
+    pub reload_generation: ReloadGeneration,
     pub request_id: u64,
     pub start: usize,
     pub rows: Vec<Arc<Entry>>,
@@ -101,6 +108,7 @@ struct SharedState {
     snapshot: Option<Snapshot>,
     cancellation: Cancellation,
     generation: Generation,
+    reload_generation: ReloadGeneration,
     repository: PathBuf,
     graph_columns: usize,
     history_readers: usize,
@@ -127,6 +135,7 @@ impl HistoryEngine {
         let shared = Arc::new(Shared {
             state: Mutex::new(SharedState {
                 generation: initial.generation,
+                reload_generation: initial.reload_generation,
                 repository: initial.repository.clone(),
                 graph_columns: initial.graph_columns,
                 history_readers: initial.history_readers,
@@ -175,16 +184,20 @@ impl HistoryHandle {
             if request.repository != state.repository
                 || request.graph_columns != state.graph_columns
                 || request.history_readers != state.history_readers
+                || request.reload_generation != state.reload_generation
             {
                 state.cancellation.store(true, Ordering::Release);
                 state.cancellation = Cancellation::default();
             }
-            let snapshot = if request.generation != state.generation {
+            let snapshot = if request.generation != state.generation
+                || request.reload_generation != state.reload_generation
+            {
                 state.snapshot.take()
             } else {
                 None
             };
             state.generation = request.generation;
+            state.reload_generation = request.reload_generation;
             state.repository = request.repository.clone();
             state.graph_columns = request.graph_columns;
             state.history_readers = request.history_readers;
@@ -202,7 +215,10 @@ impl HistoryHandle {
 fn publish(shared: &Shared, snapshot: Snapshot) {
     let old = {
         let mut state = shared.state.lock().unwrap();
-        if snapshot.generation != state.generation || state.stopped {
+        if snapshot.generation != state.generation
+            || snapshot.reload_generation != state.reload_generation
+            || state.stopped
+        {
             return;
         }
         state.snapshot.replace(snapshot)
@@ -234,6 +250,7 @@ fn run(shared: Arc<Shared>) {
             if current.as_ref().is_none_or(|previous| {
                 previous.generation != request.generation
                     || previous.history_readers != request.history_readers
+                    || previous.reload_generation != request.reload_generation
             }) {
                 reload = true;
                 load_duration = Duration::ZERO;
@@ -243,6 +260,7 @@ fn run(shared: Arc<Shared>) {
                         previous.repository != request.repository
                             || previous.graph_columns != request.graph_columns
                             || previous.history_readers != request.history_readers
+                            || previous.reload_generation != request.reload_generation
                     })
                 {
                     // Git cleanup must happen outside the shared UI mailbox lock.
@@ -322,6 +340,7 @@ fn run(shared: Arc<Shared>) {
 fn empty_snapshot(request: &Request, error: Option<String>) -> Snapshot {
     Snapshot {
         generation: request.generation,
+        reload_generation: request.reload_generation,
         request_id: request.id,
         start: 0,
         rows: Vec::new(),
@@ -1075,6 +1094,7 @@ impl Session {
             .collect();
         Snapshot {
             generation: request.generation,
+            reload_generation: request.reload_generation,
             request_id: request.id,
             start,
             rows,
@@ -1191,6 +1211,7 @@ mod tests {
     fn request(fixture: &Fixture) -> Request {
         Request {
             generation: Generation(1),
+            reload_generation: ReloadGeneration::default(),
             id: 1,
             refs_revision: 0,
             repository: fixture.root().to_owned(),
@@ -1639,6 +1660,7 @@ mod tests {
         assert!((1..=crate::git::MAX_HISTORY_READERS).contains(&readers));
         let request = Request {
             generation: Generation(1),
+            reload_generation: ReloadGeneration::default(),
             id: 1,
             refs_revision: 0,
             repository: repository.into(),
@@ -2052,6 +2074,7 @@ mod tests {
             .unwrap_or_else(|_| "path:ci.yml after:2026-01-01".into());
         let mut request = Request {
             generation: Generation(1),
+            reload_generation: ReloadGeneration::default(),
             id: 1,
             refs_revision: 0,
             repository: repository.into(),
