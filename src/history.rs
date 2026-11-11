@@ -354,6 +354,7 @@ struct DiffSearch {
     workers: Vec<DiffWorker>,
     batches: VecDeque<(usize, usize)>,
     next: usize,
+    batch_size: usize,
     closed: bool,
     done: bool,
 }
@@ -384,24 +385,45 @@ impl DiffSearch {
             workers,
             batches: VecDeque::new(),
             next: 0,
+            batch_size: if query.contents.is_some() { 64 } else { 1000 },
             closed: false,
             done: false,
         })
     }
 
+    // On backpressure, return only the unsent suffix. Accepted chunks already
+    // have their ordering recorded and must never be submitted again.
     fn try_send(
         &mut self,
         batch: Vec<CommitId>,
     ) -> std::result::Result<(), TrySendError<Vec<CommitId>>> {
-        let count = batch.len();
-        self.workers[self.next]
-            .input
-            .as_ref()
-            .unwrap()
-            .try_send(batch)?;
-        self.batches.push_back((self.next, count));
-        self.next = (self.next + 1) % self.workers.len();
-        Ok(())
+        let mut remaining = batch.into_iter();
+        loop {
+            let chunk: Vec<_> = remaining.by_ref().take(self.batch_size).collect();
+            if chunk.is_empty() {
+                return Ok(());
+            }
+            let count = chunk.len();
+            match self.workers[self.next]
+                .input
+                .as_ref()
+                .unwrap()
+                .try_send(chunk)
+            {
+                Ok(()) => {
+                    self.batches.push_back((self.next, count));
+                    self.next = (self.next + 1) % self.workers.len();
+                }
+                Err(TrySendError::Full(mut chunk)) => {
+                    chunk.extend(remaining);
+                    return Err(TrySendError::Full(chunk));
+                }
+                Err(TrySendError::Disconnected(mut chunk)) => {
+                    chunk.extend(remaining);
+                    return Err(TrySendError::Disconnected(chunk));
+                }
+            }
+        }
     }
 
     fn close(&mut self) {
@@ -960,9 +982,11 @@ impl Session {
         if let Some(paths) = &mut self.paths {
             if !self.path_pending.is_empty() {
                 let batch = std::mem::take(&mut self.path_pending);
+                let pending = batch.len();
                 match paths.try_send(batch) {
                     Ok(()) => progressed = true,
                     Err(TrySendError::Full(batch)) => {
+                        progressed |= batch.len() < pending;
                         self.path_pending = batch;
                         if !progressed {
                             thread::sleep(Duration::from_millis(5));
@@ -1019,13 +1043,7 @@ impl Session {
             .map(|prefix| prefix.range.clone())
             .unwrap_or(self.scanned..self.entries.len());
         if !self.query.is_empty() && !scan.is_empty() {
-            // Small batches feed every worker before the global candidate cap.
-            let chunk = if self.parsed.contents.is_some() {
-                64
-            } else {
-                1000
-            };
-            let end = (scan.start + chunk).min(scan.end);
+            let end = (scan.start + 1000).min(scan.end);
             for index in scan.start..end {
                 let commit = &self.entries[index].commit;
                 if self.parsed.matches(commit) {
@@ -2025,6 +2043,34 @@ mod tests {
             while session.step(&request).unwrap() {}
             assert!(session.query_error.is_none(), "{:?}", session.query_error);
             assert_eq!(session.visible_count(), expected, "{query}");
+            assert!(session.candidates.is_empty());
+        }
+    }
+
+    #[test]
+    fn content_pool_bounds_backpressure_across_large_loading_batches() {
+        let fixture = Fixture::new();
+        fixture.commit("root");
+        fixture.append_history(6000, true, "change");
+        for count in [1, 2, 4, 8] {
+            let mut request = request(&fixture);
+            request.query = "contents:[0-9]".into();
+            request.regex = true;
+            request.batch = None;
+            let mut session = Session::open(&request, Cancellation::default()).unwrap();
+            session.step(&request).unwrap();
+            session.paths =
+                DiffSearch::start_with_workers(&session.repository, &session.parsed, count);
+            let deadline = Instant::now() + Duration::from_secs(30);
+            while session.step(&request).unwrap() {
+                assert!(
+                    Instant::now() < deadline,
+                    "pool stalled with {count} workers"
+                );
+                assert!(session.candidates.len() <= 5096);
+                assert!(session.query_error.is_none(), "{:?}", session.query_error);
+            }
+            assert_eq!(session.matches, (0..6000).collect::<Vec<_>>());
             assert!(session.candidates.is_empty());
         }
     }
