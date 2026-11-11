@@ -127,6 +127,18 @@ pub(super) struct DiffPane {
 }
 
 impl DiffPane {
+    #[cfg(test)]
+    pub(super) fn selection_id(&self) -> SelectionId {
+        self.page.selection
+    }
+
+    #[cfg(test)]
+    pub(super) fn has_loaded_selection(&self) -> bool {
+        self.snapshot.as_ref().is_some_and(|snapshot| {
+            snapshot.selection == self.page.selection && snapshot.request == self.page.id
+        })
+    }
+
     pub(super) fn new(
         handle: DiffHandle,
         settings: DiffSettings,

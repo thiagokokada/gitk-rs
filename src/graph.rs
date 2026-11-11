@@ -1,5 +1,6 @@
 //! Incremental graph geometry, bounded by an internal logical lane guard.
 use crate::git::{Commit, CommitId};
+use std::collections::HashMap;
 
 /// Bound pathological graph frontiers independently of folded display columns.
 pub const DEFAULT_GRAPH_LANES: usize = 256;
@@ -210,6 +211,7 @@ pub struct GraphBuilder {
     lanes: Vec<Option<Lane>>,
     limit: usize,
     next_color: u8,
+    targets: HashMap<CommitId, usize>,
 }
 impl GraphBuilder {
     pub fn new(limit: usize) -> Self {
@@ -217,6 +219,7 @@ impl GraphBuilder {
             lanes: Vec::new(),
             limit: limit.clamp(1, MAX_GRAPH_LANES),
             next_color: 0,
+            targets: HashMap::new(),
         }
     }
     fn color(&mut self) -> u8 {
@@ -225,19 +228,15 @@ impl GraphBuilder {
         color
     }
     fn find(&self, target: &CommitId) -> Option<usize> {
-        self.lanes
-            .iter()
-            .position(|lane| lane.as_ref().is_some_and(|lane| &lane.target == target))
+        self.targets.get(target).copied()
     }
     pub fn push(&mut self, commit: &Commit) -> GraphRow {
         let before_width = self.lanes.len();
         // Lanes never shift. Remember only colors for unchanged continuation
         // edges; moving the replaced node below preserves its one displaced ID.
         let mut before = [None; MAX_GRAPH_LANES];
-        let mut occupied = 0;
         for (color, lane) in before.iter_mut().zip(&self.lanes) {
             *color = lane.as_ref().map(|lane| lane.color);
-            occupied += usize::from(color.is_some());
         }
         let existing = self.find(&commit.id);
         let mut overflow = false;
@@ -258,6 +257,9 @@ impl GraphBuilder {
             }
         });
         let displaced = self.lanes[node].take();
+        if let Some(lane) = &displaced {
+            self.targets.remove(&lane.target);
+        }
         let color = if existing.is_some() {
             displaced.as_ref().unwrap().color
         } else {
@@ -272,7 +274,7 @@ impl GraphBuilder {
             overflow,
             edges: GraphEdges::default(),
         };
-        let mut edges = Vec::with_capacity(occupied + commit.parents.len());
+        let mut edges = Vec::with_capacity(commit.parents.len() + 1);
         for (index, parent) in commit.parents.iter().enumerate() {
             let to = if let Some(to) = self.find(parent) {
                 Some(to)
@@ -291,6 +293,7 @@ impl GraphBuilder {
                 };
                 slot.inspect(|&slot| {
                     let color = if index == 0 { color } else { self.color() };
+                    self.targets.insert(parent.clone(), slot);
                     self.lanes[slot] = Some(Lane {
                         target: parent.clone(),
                         color,
@@ -308,28 +311,38 @@ impl GraphBuilder {
                 row.overflow = true;
             }
         }
+        let displaced_to = displaced.as_ref().and_then(|lane| self.find(&lane.target));
+        let explicit_end = if displaced_to.is_some_and(|to| to != node) {
+            node + 1
+        } else {
+            0
+        };
+        let mut packed = Vec::new();
         for (from, color) in before[..before_width].iter().enumerate() {
             let Some(color) = color else { continue };
             let to = if from != node {
-                // Only the current node can replace an occupied lane. Every
-                // other target and its color are still at their original index.
                 Some(from)
             } else {
-                // At the lane cap a disconnected commit may evict a target,
-                // then immediately reintroduce it as a parent. Preserve the
-                // original continuation edge and color in that case too.
-                displaced.as_ref().and_then(|lane| self.find(&lane.target))
+                displaced_to
             };
             if let Some(to) = to {
-                edges.push(Edge {
-                    from: from as u16,
-                    to: to as u16,
-                    parent: false,
-                    color: *color,
-                });
+                if from < explicit_end {
+                    edges.push(Edge {
+                        from: from as u16,
+                        to: to as u16,
+                        parent: false,
+                        color: *color,
+                    });
+                } else {
+                    packed.resize(from / 2 + 1, 0);
+                    packed[from / 2] |= (color + 1) << ((from % 2) * 4);
+                }
             }
         }
-        row.edges = edges.into();
+        row.edges = GraphEdges {
+            explicit: edges.into_boxed_slice(),
+            continuations: packed.into_boxed_slice(),
+        };
         while self.lanes.last().is_some_and(Option::is_none) {
             self.lanes.pop();
         }
@@ -341,6 +354,126 @@ impl GraphBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Differential oracle: the original linear lookup and temporary edge-vector
+    // implementation. Keep it independent of the production target index and
+    // direct continuation packing.
+    impl GraphBuilder {
+        fn find_linear(&self, target: &CommitId) -> Option<usize> {
+            self.lanes
+                .iter()
+                .position(|lane| lane.as_ref().is_some_and(|lane| &lane.target == target))
+        }
+        fn push_reference(&mut self, commit: &Commit) -> GraphRow {
+            let before_width = self.lanes.len();
+            // Lanes never shift. Remember only colors for unchanged continuation
+            // edges; moving the replaced node below preserves its one displaced ID.
+            let mut before = [None; MAX_GRAPH_LANES];
+            let mut occupied = 0;
+            for (color, lane) in before.iter_mut().zip(&self.lanes) {
+                *color = lane.as_ref().map(|lane| lane.color);
+                occupied += usize::from(color.is_some());
+            }
+            let existing = self.find_linear(&commit.id);
+            let mut overflow = false;
+            let node = existing.unwrap_or_else(|| {
+                let slot = self
+                    .lanes
+                    .iter()
+                    .position(Option::is_none)
+                    .unwrap_or(self.lanes.len());
+                if slot >= self.limit {
+                    overflow = true;
+                    self.limit - 1
+                } else {
+                    if slot == self.lanes.len() {
+                        self.lanes.push(None);
+                    }
+                    slot
+                }
+            });
+            let displaced = self.lanes[node].take();
+            let color = if existing.is_some() {
+                displaced.as_ref().unwrap().color
+            } else {
+                self.color()
+            };
+            let displaced = if existing.is_none() { displaced } else { None };
+            let mut row = GraphRow {
+                node: Some(node as u16),
+                incoming: existing.is_some(),
+                color,
+                width: before_width.max(self.lanes.len()).max(1) as u16,
+                overflow,
+                edges: GraphEdges::default(),
+            };
+            let mut edges = Vec::with_capacity(occupied + commit.parents.len());
+            for (index, parent) in commit.parents.iter().enumerate() {
+                let to = if let Some(to) = self.find_linear(parent) {
+                    Some(to)
+                } else {
+                    let slot = if index == 0 {
+                        Some(node)
+                    } else {
+                        self.lanes.iter().position(Option::is_none).or_else(|| {
+                            if self.lanes.len() < self.limit {
+                                self.lanes.push(None);
+                                Some(self.lanes.len() - 1)
+                            } else {
+                                None
+                            }
+                        })
+                    };
+                    slot.inspect(|&slot| {
+                        let color = if index == 0 { color } else { self.color() };
+                        self.lanes[slot] = Some(Lane {
+                            target: parent.clone(),
+                            color,
+                        });
+                    })
+                };
+                if let Some(to) = to {
+                    edges.push(Edge {
+                        from: node as u16,
+                        to: to as u16,
+                        parent: true,
+                        color: self.lanes[to].as_ref().unwrap().color,
+                    });
+                } else {
+                    row.overflow = true;
+                }
+            }
+            for (from, color) in before[..before_width].iter().enumerate() {
+                let Some(color) = color else { continue };
+                let to = if from != node {
+                    // Only the current node can replace an occupied lane. Every
+                    // other target and its color are still at their original index.
+                    Some(from)
+                } else {
+                    // At the lane cap a disconnected commit may evict a target,
+                    // then immediately reintroduce it as a parent. Preserve the
+                    // original continuation edge and color in that case too.
+                    displaced
+                        .as_ref()
+                        .and_then(|lane| self.find_linear(&lane.target))
+                };
+                if let Some(to) = to {
+                    edges.push(Edge {
+                        from: from as u16,
+                        to: to as u16,
+                        parent: false,
+                        color: *color,
+                    });
+                }
+            }
+            row.edges = edges.into();
+            while self.lanes.last().is_some_and(Option::is_none) {
+                self.lanes.pop();
+            }
+            row.width = row.width.max(self.lanes.len() as u16);
+            row
+        }
+    }
 
     fn commit(id: u64, parents: &[u64]) -> Commit {
         let parents = parents
@@ -421,6 +554,7 @@ mod tests {
     fn generated_dags_keep_geometry_within_the_frontier() {
         for cap in [1, 2, 3, 8, 32, 200, MAX_GRAPH_LANES] {
             let mut graph = GraphBuilder::new(cap);
+            let mut reference = GraphBuilder::new(cap);
             let mut state = 0x23456789_u64;
             for id in (1..=512_u64).rev() {
                 state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
@@ -433,6 +567,11 @@ mod tests {
                     .join(" ");
                 let commit = crate::git::parse_commit(format!("{id:040x}\n{parents}\nA\na@b\n2026-01-01T00:00:00Z\nA\na@b\n2026-01-01T00:00:00Z\nMessage\n").as_bytes()).unwrap();
                 let actual = graph.push(&commit);
+                assert_eq!(
+                    actual,
+                    reference.push_reference(&commit),
+                    "cap={cap}, id={id}"
+                );
                 assert!(actual.node.is_some_and(|node| usize::from(node) < cap));
                 assert!(usize::from(actual.width) <= cap);
                 assert!(actual.edges.len() <= commit.parents.len() + cap);

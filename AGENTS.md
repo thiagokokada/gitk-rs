@@ -75,6 +75,7 @@ milestone without waiting for confirmation. Stop only when user input is actuall
 - `GITK_PROFILE_REPOSITORY`: required repository path; the probe only reads it.
 - `GITK_PROFILE_COMMITS`: prefetch target, defaults to 100000; must be an integer
   greater than 64 that fits usize. Stops earlier if Git reaches EOF.
+- `GITK_PROFILE_READERS`: reader count, defaults to 2; integer from 1 to 64.
 - Run explicitly; this test is ignored by ordinary test runs:
 
 ```sh
@@ -84,7 +85,7 @@ nix develop --command env \
   cargo test --lib profile_retained_history --locked -- --ignored --nocapture
 ```
 
-- Compare the same repository HEAD, loaded count, and graph lane cap
+- Compare the same repository HEAD, loaded count, reader count, and graph lane cap
   (default 256, configurable with --graph-cols up to 1024; printed by the probe).
   Accounted retained bytes exclude allocator/runtime overhead. Linux RSS reports
   the history-only test process and live children separately; these are neither

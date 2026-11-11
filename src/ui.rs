@@ -13,7 +13,7 @@ use gitk_rs::{
     diff::{DiffEngine, DiffHandle, DiffSettings},
     graph::{GraphLayout, GraphRow, MAX_GRAPH_LANES, text_graph},
     history::{
-        Entry, Generation, HistoryEngine, HistoryHandle, RefKind, Request,
+        Entry, Generation, HistoryEngine, HistoryHandle, HistorySource, RefKind, Request,
         Restore as HistoryRestore, Snapshot,
     },
     preferences::Preferences,
@@ -57,6 +57,7 @@ actions!(
         First,
         Last,
         Reload,
+        ForceReload,
         FocusFilter,
         BlurFilter,
         HistoryPageUp,
@@ -145,6 +146,7 @@ struct HistoryWindow {
     preferences_draft: Preferences,
     graph_columns_input: Entity<InputState>,
     batch_input: Entity<InputState>,
+    history_readers_input: Entity<InputState>,
     preferences_path: Option<std::path::PathBuf>,
     preferences_save_generation: u64,
     preferences_save_pending: bool,
@@ -254,6 +256,7 @@ impl HistoryWindow {
         });
         let graph_columns_input = cx.new(|cx| InputState::new(window, cx));
         let batch_input = cx.new(|cx| InputState::new(window, cx));
+        let history_readers_input = cx.new(|cx| InputState::new(window, cx));
         let mut font_subscriptions = Vec::new();
         for selector in [&ui_font_select, &fixed_font_select] {
             font_subscriptions.push(
@@ -269,7 +272,7 @@ impl HistoryWindow {
                 }
             }),
         );
-        for input in [&graph_columns_input, &batch_input] {
+        for input in [&graph_columns_input, &batch_input, &history_readers_input] {
             font_subscriptions.push(cx.subscribe(input, |_, _, _: &InputEvent, cx| cx.notify()));
         }
         let branch_filter =
@@ -363,6 +366,7 @@ impl HistoryWindow {
             preferences_draft: preferences.clone(),
             graph_columns_input,
             batch_input,
+            history_readers_input,
             preferences_path: None,
             preferences_save_generation: 0,
             preferences_save_pending: false,
@@ -486,7 +490,9 @@ impl HistoryWindow {
         let Some(snapshot) = self.history.take_snapshot() else {
             return;
         };
-        if snapshot.generation != self.request.generation || snapshot.request_id != self.request.id
+        if snapshot.generation != self.request.generation
+            || snapshot.source != self.request.source
+            || snapshot.request_id != self.request.id
         {
             return;
         }
@@ -554,7 +560,11 @@ impl HistoryWindow {
             self.reload_selection = None;
             self.preserve_filter_selection = false;
             self.pending_selection = None;
-            if let Some((index, entry)) = restored.as_ref().and_then(|r| r.selected.clone()) {
+            if self.local_selection.is_some() {
+                self.selected = None;
+                self.pending_selection = None;
+            } else if let Some((index, entry)) = restored.as_ref().and_then(|r| r.selected.clone())
+            {
                 self.set_selection(index + self.local_rows.len(), entry, cx);
             } else {
                 self.selected = None;
@@ -871,12 +881,18 @@ impl HistoryWindow {
     }
 
     fn reload(&mut self, cx: &mut Context<Self>) {
-        self.request.repository = self.config.repository.clone();
+        self.request.source.repository = self.config.repository.clone();
         let index = self.viewport.start.saturating_sub(self.local_rows.len());
-        let selected = self.selected.as_ref().map(|s| s.1.commit.id.clone());
+        let previous_restore = self.request.restore.as_ref();
+        let selected = self
+            .selected
+            .as_ref()
+            .map(|s| s.1.commit.id.clone())
+            .or_else(|| previous_restore.and_then(|r| r.selected.clone()));
         let top = self
             .cached(self.viewport.start)
-            .map(|e| e.commit.id.clone());
+            .map(|e| e.commit.id.clone())
+            .or_else(|| previous_restore.and_then(|r| r.top.clone()));
         self.reload_selection = selected.clone().or(top.clone());
         self.request.restore = self
             .reload_selection
@@ -903,6 +919,20 @@ impl HistoryWindow {
         cx.notify();
     }
 
+    fn force_reload(&mut self, cx: &mut Context<Self>) {
+        self.request.source.reload_generation.0 += 1;
+        // Capture commit-ID bookmarks before releasing the selected entry/page.
+        self.reload(cx);
+        self.snapshot = None;
+        self.selected = None;
+        self.diff
+            .update(cx, |diff, cx| diff.clear("Reloading repository…", cx));
+        if let Some(kind) = self.local_selection {
+            self.select_local(kind, cx);
+        }
+        cx.notify();
+    }
+
     fn status_text(&self) -> String {
         // History and workspace probe the same repository independently. Prefer
         // one repository error in the status bar; operation failures remain separate.
@@ -925,13 +955,13 @@ impl HistoryWindow {
                         s.loaded,
                         s.branch,
                         if !s.eof {
-                            " — more available"
+                            " — more available".to_owned()
                         } else if self.show_end_of_history
                             && self.end_of_history_generation == Some(s.generation)
                         {
-                            " — end of history"
+                            format!(" — end of history ({:.2} s)", s.load_duration.as_secs_f64())
                         } else {
-                            ""
+                            String::new()
                         },
                         if s.filtering { " — filtering…" } else { "" }
                     )
@@ -1453,6 +1483,7 @@ impl Render for HistoryWindow {
                 this.switch_branch(this.branch_index, cx)
             }))
             .on_action(cx.listener(|this, _: &Reload, _, cx| this.reload(cx)))
+            .on_action(cx.listener(|this, _: &ForceReload, _, cx| this.force_reload(cx)))
             .on_action(cx.listener(|this, _: &HistoryPageUp, _, cx| {
                 this.scroll.scroll_to_item(
                     this.viewport.start.saturating_sub(this.viewport.len()),
@@ -1502,6 +1533,7 @@ impl Render for HistoryWindow {
                                         .menu("Open repository…", Box::new(OpenRepository))
                                         .menu("Switch local branch…", Box::new(OpenBranches))
                                         .menu("Reload", Box::new(Reload))
+                                        .menu("Force Reload", Box::new(ForceReload))
                                         .separator()
                                         .menu("Copy commit reference", Box::new(CopyCommit))
                                         .menu("Preferences…", Box::new(OpenPreferences))
@@ -1742,6 +1774,7 @@ fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-p", BranchUp, Some("BranchDialog > Input")),
         KeyBinding::new("enter", BranchAccept, Some("BranchDialog")),
         KeyBinding::new("f5", Reload, None),
+        KeyBinding::new("shift-f5", ForceReload, None),
         KeyBinding::new(
             "ctrl-pageup",
             HistoryPageUp,
@@ -1807,15 +1840,19 @@ pub fn run(mut config: Config, preferences: Preferences, launched: Instant) {
     let guard = TimingGuard::start(config.timings, launched);
     let timing = guard.timing();
     let request = Request {
+        source: HistorySource {
+            repository: config.repository.clone(),
+            graph_columns: config.graph_columns,
+            history_readers: config.history_readers,
+            reload_generation: Default::default(),
+        },
         generation: Generation(1),
         id: 0,
         refs_revision: 0,
-        repository: config.repository.clone(),
         range: 0..128,
         query: String::new(),
         regex: false,
         batch: config.batch,
-        graph_columns: config.graph_columns,
         anchor: None,
         restore: None,
     };

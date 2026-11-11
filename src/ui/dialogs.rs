@@ -588,9 +588,11 @@ impl HistoryWindow {
             return;
         }
         let previous = self.config.clone();
+        let previous_source = self.request.source.clone();
         self.config.apply_preferences(&preferences);
         self.request.batch = self.config.batch;
-        self.request.graph_columns = self.config.graph_columns;
+        self.request.source.graph_columns = self.config.graph_columns;
+        self.request.source.history_readers = self.config.history_readers;
         if previous.watch != self.config.watch {
             self.workspace_generation.0 += 1;
             self.refresh_workspace();
@@ -623,7 +625,7 @@ impl HistoryWindow {
         apply_fonts(&preferences, cx);
         window.refresh();
         self.preferences = preferences.clone();
-        if previous.graph_columns != self.config.graph_columns {
+        if previous_source != self.request.source {
             self.reload(cx);
         } else if previous.batch != self.config.batch {
             self.submit();

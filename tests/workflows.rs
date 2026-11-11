@@ -8,7 +8,7 @@ use gitk_rs::{
         CopyRequest, DiffEngine, DiffPage, DiffSelection, DiffSettings, DiffSource, LineKind,
         SelectionId, TextPoint, TextSelection,
     },
-    history::{Generation, HistoryEngine, Request, Restore},
+    history::{Generation, HistoryEngine, HistorySource, Request, Restore},
     workspace::{Operation, WorkspaceEngine, WorkspaceGeneration, WorkspaceRequest},
 };
 use std::{
@@ -77,15 +77,19 @@ fn wait<T>(mut poll: impl FnMut() -> Option<T>) -> T {
 
 fn history_request(fixture: &Fixture) -> Request {
     Request {
+        source: HistorySource {
+            repository: fixture.root().into(),
+            graph_columns: 200,
+            history_readers: gitk_rs::git::DEFAULT_HISTORY_READERS,
+            reload_generation: Default::default(),
+        },
         generation: Generation(1),
         id: 1,
         refs_revision: 0,
-        repository: fixture.root().into(),
         range: 0..8,
         query: String::new(),
         regex: false,
         batch: Some(7),
-        graph_columns: 200,
         anchor: None,
         restore: None,
     }
@@ -450,7 +454,7 @@ fn demand_pauses_history_then_filter_streams_further_and_generation_switches() {
     request.generation = Generation(2);
     request.id += 1;
     request.query.clear();
-    request.repository = other.root().into();
+    request.source.repository = other.root().into();
     handle.request(request.clone());
     let switched = wait(|| {
         handle
@@ -700,4 +704,168 @@ fn regex_mode_changes_refilter_retained_history_and_paths() {
     assert!(recovered.error.is_none(), "{:?}", recovered.error);
     assert_eq!(recovered.visible, 1);
     assert!(Arc::ptr_eq(&retained, &recovered.rows[0]));
+}
+
+#[test]
+fn reader_changes_restart_history_and_completed_timings_stay_fixed() {
+    let fixture = Fixture::new();
+    fixture.commit("root");
+    fixture.append_history(600, false, "candidate");
+    let mut request = history_request(&fixture);
+    request.batch = None;
+    request.source.history_readers = 1;
+    let engine = HistoryEngine::spawn(request.clone());
+    let handle = engine.handle();
+    let before = wait(|| handle.take_snapshot().filter(|s| s.eof));
+    assert!(before.error.is_none());
+    assert!(before.load_duration > Duration::ZERO);
+    request.id += 1;
+    request.refs_revision += 1;
+    handle.request(request.clone());
+    let same = wait(|| {
+        handle
+            .take_snapshot()
+            .filter(|s| s.request_id == request.id)
+    });
+    assert_eq!(same.load_duration, before.load_duration);
+    assert!(Arc::ptr_eq(&same.rows[0], &before.rows[0]));
+    request.source.history_readers = 4;
+    request.generation.0 += 1;
+    request.id += 1;
+    handle.request(request.clone());
+    let changed = wait(|| {
+        handle
+            .take_snapshot()
+            .filter(|s| s.generation == request.generation && s.eof)
+    });
+    assert!(changed.error.is_none());
+    assert_eq!(changed.loaded, 601);
+    assert_eq!(changed.rows[0].commit.id, before.rows[0].commit.id);
+    assert!(!Arc::ptr_eq(&changed.rows[0], &before.rows[0]));
+    assert!(changed.load_duration > Duration::ZERO);
+}
+
+#[test]
+fn history_completion_time_excludes_on_demand_idle_pauses() {
+    let fixture = Fixture::new();
+    fixture.commit("root");
+    fixture.append_history(300, false, "candidate");
+    let mut request = history_request(&fixture);
+    request.batch = Some(1);
+    request.range = 0..1;
+    let engine = HistoryEngine::spawn(request.clone());
+    let handle = engine.handle();
+    wait(|| handle.take_snapshot().filter(|s| s.loaded == 65));
+    // A no-op demand request acknowledges the fully paused state.
+    request.id += 1;
+    handle.request(request.clone());
+    let paused = wait(|| {
+        handle
+            .take_snapshot()
+            .filter(|s| s.request_id == request.id)
+    });
+    assert!(!paused.eof);
+    let started = Instant::now();
+    let idle = Duration::from_millis(40);
+    thread::sleep(idle);
+    request.id += 1;
+    request.batch = None;
+    handle.request(request.clone());
+    let finished = wait(|| {
+        handle
+            .take_snapshot()
+            .filter(|s| s.request_id == request.id && s.eof)
+    });
+    let active = finished.load_duration.saturating_sub(paused.load_duration);
+    assert!(
+        started.elapsed().saturating_sub(active) >= idle * 3 / 4,
+        "idle prefetch time was included in completion timing"
+    );
+}
+
+#[test]
+fn force_reload_survives_coalesced_requests_and_normal_reload_reuses_again() {
+    let fixture = Fixture::new();
+    fixture.commit("root");
+    fixture.append_history(300, false, "candidate");
+    let mut request = history_request(&fixture);
+    request.batch = None;
+    let engine = HistoryEngine::spawn(request.clone());
+    let handle = engine.handle();
+    let initial = wait(|| handle.take_snapshot().filter(|s| s.eof));
+    request.generation.0 += 1;
+    request.source.reload_generation.0 += 1;
+    request.id += 1;
+    handle.request(request.clone());
+    // Demand updates may replace the force request in the one-slot mailbox.
+    request.id += 1;
+    request.range = 0..100;
+    handle.request(request.clone());
+    let forced = wait(|| {
+        handle.take_snapshot().filter(|s| {
+            s.source.reload_generation == request.source.reload_generation
+                && s.request_id == request.id
+                && s.eof
+        })
+    });
+    assert!(forced.error.is_none());
+    assert_eq!(forced.loaded, initial.loaded);
+    assert_eq!(forced.rows[0].commit.id, initial.rows[0].commit.id);
+    assert!(!Arc::ptr_eq(&forced.rows[0], &initial.rows[0]));
+    request.generation.0 += 1;
+    request.id += 1;
+    handle.request(request.clone());
+    let incremental = wait(|| {
+        handle
+            .take_snapshot()
+            .filter(|s| s.generation == request.generation && s.eof)
+    });
+    assert!(Arc::ptr_eq(&incremental.rows[0], &forced.rows[0]));
+}
+
+#[test]
+fn source_identity_restarts_history_while_viewport_changes_keep_entries() {
+    let fixture = Fixture::new();
+    fixture.commit("root");
+    fixture.append_history(90, false, "candidate");
+    let mut request = history_request(&fixture);
+    request.batch = None;
+    let engine = HistoryEngine::spawn(request.clone());
+    let handle = engine.handle();
+    let original = wait(|| handle.take_snapshot().filter(|s| s.eof));
+    request.id += 1;
+    request.source.graph_columns = 1;
+    handle.request(request.clone());
+    let changed = wait(|| {
+        handle
+            .take_snapshot()
+            .filter(|s| s.source == request.source && s.request_id == request.id && s.eof)
+    });
+    assert!(changed.error.is_none());
+    assert_eq!(changed.generation, original.generation);
+    assert_eq!(changed.rows[0].commit.id, original.rows[0].commit.id);
+    assert!(!Arc::ptr_eq(&changed.rows[0], &original.rows[0]));
+    assert!(changed.rows.iter().all(|row| row.graph.width <= 1));
+    request.id += 1;
+    request.range = 0..4;
+    handle.request(request.clone());
+    let viewport = wait(|| {
+        handle
+            .take_snapshot()
+            .filter(|s| s.request_id == request.id)
+    });
+    assert!(Arc::ptr_eq(&viewport.rows[0], &changed.rows[0]));
+    let other = Fixture::new();
+    let tip = other.commit("other repository");
+    request.id += 1;
+    request.source.repository = other.root().into();
+    handle.request(request.clone());
+    let switched = wait(|| {
+        handle
+            .take_snapshot()
+            .filter(|s| s.source == request.source && s.request_id == request.id && s.eof)
+    });
+    assert!(switched.error.is_none());
+    assert_eq!(switched.loaded, 1);
+    assert_eq!(switched.rows[0].commit.id.to_hex(), tip);
 }

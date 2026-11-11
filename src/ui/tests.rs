@@ -41,15 +41,19 @@ fn open_with_state<'a>(
         ..Config::default()
     };
     let request = Request {
+        source: HistorySource {
+            repository: config.repository.clone(),
+            graph_columns: config.graph_columns,
+            history_readers: config.history_readers,
+            reload_generation: Default::default(),
+        },
         generation: Generation(1),
         id: 0,
         refs_revision: 0,
-        repository: config.repository.clone(),
         range: 0..128,
         query: String::new(),
         regex: false,
         batch: config.batch,
-        graph_columns: config.graph_columns,
         anchor: None,
         restore: None,
     };
@@ -316,6 +320,91 @@ fn unchanged_head_reload_retains_rows_and_selection(cx: &mut TestAppContext) {
             before.commit.id
         );
     });
+}
+
+#[gpui_kit::test]
+fn shift_f5_rebuilds_history_and_diff_while_preserving_selection(cx: &mut TestAppContext) {
+    let fixture = history_fixture(20);
+    let (app, cx) = open(&fixture, cx);
+    until(cx, |cx| {
+        cx.update(|_, cx| app.view.read(cx).snapshot.as_ref().is_some_and(|s| s.eof))
+    });
+    app.view
+        .update_in(cx, |view, window, cx| view.select(8, window, cx));
+    let (before, reload, diff_selection) = cx.update(|_, cx| {
+        let view = app.view.read(cx);
+        (
+            view.cached(8).unwrap(),
+            view.request.source.reload_generation,
+            view.diff.read(cx).selection_id(),
+        )
+    });
+    cx.simulate_keystrokes("/");
+    cx.simulate_keystrokes("shift-f5 shift-f5");
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            let view = app.view.read(cx);
+            view.snapshot
+                .as_ref()
+                .is_some_and(|s| s.source.reload_generation != reload && s.eof)
+                && view.reload_selection.is_none()
+                && view
+                    .selected
+                    .as_ref()
+                    .is_some_and(|s| s.1.commit.id == before.commit.id)
+                && view.diff.read(cx).has_loaded_selection()
+        })
+    });
+    cx.update(|_, cx| {
+        let view = app.view.read(cx);
+        assert!(!Arc::ptr_eq(&before, &view.cached(8).unwrap()));
+        assert_ne!(view.diff.read(cx).selection_id(), diff_selection);
+        assert_eq!(view.request.source.reload_generation.0, reload.0 + 2);
+    });
+}
+
+#[gpui_kit::test]
+fn force_reload_preserves_local_selection_and_refreshes_its_diff(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    std::fs::write(fixture.root().join("file"), "before\n").unwrap();
+    fixture.commit("root");
+    fixture.append_history(30, false, "candidate");
+    std::fs::write(fixture.root().join("file"), "after\n").unwrap();
+    let (app, cx) = open(&fixture, cx);
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            app.view
+                .read(cx)
+                .local_rows
+                .contains(&LocalChangeKind::Unstaged)
+        })
+    });
+    app.view.update(cx, |view, cx| {
+        view.select_local(LocalChangeKind::Unstaged, cx)
+    });
+    until(cx, |cx| {
+        cx.update(|_, cx| app.view.read(cx).diff.read(cx).has_loaded_selection())
+    });
+    app.view.update(cx, |view, cx| {
+        view.scroll.scroll_to_item_strict(10, ScrollStrategy::Top);
+        cx.notify();
+    });
+    until(cx, |cx| {
+        cx.update(|_, cx| app.view.read(cx).viewport.start == 10)
+    });
+    let before = cx.update(|_, cx| app.view.read(cx).diff.read(cx).selection_id());
+    cx.simulate_keystrokes("shift-f5");
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            let view = app.view.read(cx);
+            view.snapshot.as_ref().is_some_and(|s| s.eof)
+                && view.diff.read(cx).has_loaded_selection()
+                && view.diff.read(cx).selection_id() != before
+        })
+    });
+    assert!(
+        cx.update(|_, cx| app.view.read(cx).local_selection == Some(LocalChangeKind::Unstaged))
+    );
 }
 
 #[gpui_kit::test]
@@ -940,6 +1029,21 @@ fn end_of_history_notice_expires_without_changing_eof_or_repeating(cx: &mut Test
     let (app, cx) = open(&fixture, cx);
     until(cx, |cx| {
         cx.update(|_, cx| app.view.read(cx).status_text().contains("end of history"))
+    });
+    app.view.update(cx, |view, _| {
+        let original = view.snapshot.as_ref().unwrap().load_duration;
+        for (duration, expected) in [
+            (Duration::ZERO, "0.00"),
+            (Duration::from_secs(2), "2.00"),
+            (Duration::from_millis(12346), "12.35"),
+        ] {
+            view.snapshot.as_mut().unwrap().load_duration = duration;
+            assert!(
+                view.status_text()
+                    .contains(&format!("end of history ({expected} s)"))
+            );
+        }
+        view.snapshot.as_mut().unwrap().load_duration = original;
     });
     let generation = cx.update(|_, cx| app.view.read(cx).request.generation);
     cx.background_executor.advance_clock(Duration::from_secs(2));
@@ -1768,6 +1872,21 @@ fn application_preferences_replace_flags_apply_and_persist(cx: &mut TestAppConte
     cx.update(|window, cx| window.click("graph-columns-input", cx));
     cx.simulate_keystrokes("ctrl-a ctrl-k");
     cx.simulate_input("512");
+    scroll_preferences_to("history-readers-input", cx);
+    cx.update(|window, cx| window.click("history-readers-input", cx));
+    cx.simulate_keystrokes("ctrl-a ctrl-k");
+    cx.simulate_input("0");
+    cx.update(|window, cx| window.click("apply-preferences", cx));
+    assert!(cx.update(|_, cx| {
+        let view = app.view.read(cx);
+        view.operation_message.contains("history readers")
+            && view.config.history_readers == 2
+            && view.request.generation == generation
+    }));
+    cx.update(|window, cx| window.click("history-readers-input", cx));
+    cx.simulate_keystrokes("ctrl-a ctrl-k");
+    cx.simulate_input("4");
+
     cx.update(|window, cx| window.click("apply-preferences", cx));
     until(cx, |cx| {
         cx.update(|_, cx| !app.view.read(cx).preferences_save_pending)
@@ -1777,6 +1896,7 @@ fn application_preferences_replace_flags_apply_and_persist(cx: &mut TestAppConte
     assert_eq!(saved.theme, Theme::Dark);
     assert_eq!(saved.batch, Some(73));
     assert_eq!(saved.graph_columns, 512);
+    assert_eq!(saved.history_readers, 4);
     assert!(saved.syntax && saved.watch);
     assert!(!saved.text_graph);
     cx.update(|_, cx| {
@@ -1784,7 +1904,8 @@ fn application_preferences_replace_flags_apply_and_persist(cx: &mut TestAppConte
         assert_eq!(view.preferences, saved);
         assert_eq!(saved.with_config(&view.config), saved);
         assert_eq!(view.request.batch, Some(73));
-        assert_eq!(view.request.graph_columns, 512);
+        assert_eq!(view.request.source.graph_columns, 512);
+        assert_eq!(view.request.source.history_readers, 4);
         assert!(view.request.generation.0 > generation.0);
     });
     let restarted = gitk_rs::cli::parse_with_preferences([], &saved).unwrap();
