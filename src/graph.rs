@@ -364,17 +364,8 @@ mod tests {
                 .iter()
                 .position(|lane| lane.as_ref().is_some_and(|lane| &lane.target == target))
         }
-        fn push_reference(&mut self, commit: &Commit) -> GraphRow {
-            let before_width = self.lanes.len();
-            // Lanes never shift. Remember only colors for unchanged continuation
-            // edges; moving the replaced node below preserves its one displaced ID.
-            let mut before = [None; MAX_GRAPH_LANES];
-            let mut occupied = 0;
-            for (color, lane) in before.iter_mut().zip(&self.lanes) {
-                *color = lane.as_ref().map(|lane| lane.color);
-                occupied += usize::from(color.is_some());
-            }
-            let existing = self.find_linear(&commit.id);
+        fn reference_node(&mut self, id: &CommitId) -> (usize, bool, bool, Option<Lane>, u8) {
+            let existing = self.find_linear(id);
             let mut overflow = false;
             let node = existing.unwrap_or_else(|| {
                 let slot = self
@@ -399,15 +390,17 @@ mod tests {
                 self.color()
             };
             let displaced = if existing.is_none() { displaced } else { None };
-            let mut row = GraphRow {
-                node: Some(node as u16),
-                incoming: existing.is_some(),
-                color,
-                width: before_width.max(self.lanes.len()).max(1) as u16,
-                overflow,
-                edges: GraphEdges::default(),
-            };
-            let mut edges = Vec::with_capacity(occupied + commit.parents.len());
+            (node, existing.is_some(), overflow, displaced, color)
+        }
+
+        fn reference_parent_edges(
+            &mut self,
+            commit: &Commit,
+            node: usize,
+            color: u8,
+            edges: &mut Vec<Edge>,
+        ) -> bool {
+            let mut overflow = false;
             for (index, parent) in commit.parents.iter().enumerate() {
                 let to = if let Some(to) = self.find_linear(parent) {
                     Some(to)
@@ -440,22 +433,27 @@ mod tests {
                         color: self.lanes[to].as_ref().unwrap().color,
                     });
                 } else {
-                    row.overflow = true;
+                    overflow = true;
                 }
             }
-            for (from, color) in before[..before_width].iter().enumerate() {
+            overflow
+        }
+
+        fn reference_continuations(
+            &self,
+            before: &[Option<u8>],
+            node: usize,
+            displaced: Option<&Lane>,
+            edges: &mut Vec<Edge>,
+        ) {
+            for (from, color) in before.iter().enumerate() {
                 let Some(color) = color else { continue };
                 let to = if from != node {
-                    // Only the current node can replace an occupied lane. Every
-                    // other target and its color are still at their original index.
+                    // Other targets remain at their original indices.
                     Some(from)
                 } else {
-                    // At the lane cap a disconnected commit may evict a target,
-                    // then immediately reintroduce it as a parent. Preserve the
-                    // original continuation edge and color in that case too.
-                    displaced
-                        .as_ref()
-                        .and_then(|lane| self.find_linear(&lane.target))
+                    // An evicted target may be reintroduced as a parent.
+                    displaced.and_then(|lane| self.find_linear(&lane.target))
                 };
                 if let Some(to) = to {
                     edges.push(Edge {
@@ -466,6 +464,33 @@ mod tests {
                     });
                 }
             }
+        }
+
+        fn push_reference(&mut self, commit: &Commit) -> GraphRow {
+            let before_width = self.lanes.len();
+            let mut before = [None; MAX_GRAPH_LANES];
+            let mut occupied = 0;
+            for (color, lane) in before.iter_mut().zip(&self.lanes) {
+                *color = lane.as_ref().map(|lane| lane.color);
+                occupied += usize::from(color.is_some());
+            }
+            let (node, incoming, overflow, displaced, color) = self.reference_node(&commit.id);
+            let mut row = GraphRow {
+                node: Some(node as u16),
+                incoming,
+                color,
+                width: before_width.max(self.lanes.len()).max(1) as u16,
+                overflow,
+                edges: GraphEdges::default(),
+            };
+            let mut edges = Vec::with_capacity(occupied + commit.parents.len());
+            row.overflow |= self.reference_parent_edges(commit, node, color, &mut edges);
+            self.reference_continuations(
+                &before[..before_width],
+                node,
+                displaced.as_ref(),
+                &mut edges,
+            );
             row.edges = edges.into();
             while self.lanes.last().is_some_and(Option::is_none) {
                 self.lanes.pop();
