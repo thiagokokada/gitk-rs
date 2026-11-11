@@ -1,4 +1,7 @@
-use crate::graph::{DEFAULT_GRAPH_LANES, MAX_GRAPH_LANES};
+use crate::{
+    git::{DEFAULT_HISTORY_READERS, MAX_HISTORY_READERS},
+    graph::{DEFAULT_GRAPH_LANES, MAX_GRAPH_LANES},
+};
 use clap::{CommandFactory, FromArgMatches, Parser, ValueEnum, parser::ValueSource};
 use std::{ffi::OsString, num::NonZeroUsize, path::PathBuf};
 
@@ -16,6 +19,7 @@ pub struct Config {
     pub timings: bool,
     pub batch: Option<usize>,
     pub graph_columns: usize,
+    pub history_readers: usize,
     pub text_graph: bool,
     pub syntax: bool,
     pub watch: bool,
@@ -30,6 +34,7 @@ impl Default for Config {
             timings: false,
             batch: None,
             graph_columns: DEFAULT_GRAPH_LANES,
+            history_readers: DEFAULT_HISTORY_READERS,
             text_graph: false,
             syntax: true,
             watch: true,
@@ -44,6 +49,7 @@ impl Config {
         self.theme = preferences.theme;
         self.batch = preferences.batch;
         self.graph_columns = preferences.graph_columns;
+        self.history_readers = preferences.history_readers;
         self.text_graph = preferences.text_graph;
         self.syntax = preferences.syntax;
         self.watch = preferences.watch;
@@ -76,6 +82,10 @@ struct Args {
     /// Logical graph lane cap before idle columns are folded (1..1024)
     #[arg(long, value_name = "N", default_value_t = DEFAULT_GRAPH_LANES as u16, value_parser = clap::value_parser!(u16).range(1..=MAX_GRAPH_LANES as i64))]
     graph_cols: u16,
+
+    /// Parallel Git object readers (1 uses a direct pipe; 1..64)
+    #[arg(long, value_name = "N", default_value_t = DEFAULT_HISTORY_READERS as u16, value_parser = clap::value_parser!(u16).range(1..=MAX_HISTORY_READERS as i64))]
+    history_readers: u16,
 
     /// Use a text graph instead of canvas geometry
     #[arg(long, action = clap::ArgAction::Set, num_args = 0..=1, default_missing_value = "true", default_value = "false", require_equals = true)]
@@ -124,6 +134,9 @@ pub fn parse_with_preferences(
     }
     if explicit("graph_cols") {
         config.graph_columns = usize::from(args.graph_cols);
+    }
+    if explicit("history_readers") {
+        config.history_readers = usize::from(args.history_readers);
     }
     if explicit("text_graph") {
         config.text_graph = args.text_graph;
@@ -188,6 +201,7 @@ mod tests {
             theme: Theme::Light,
             batch: Some(73),
             graph_columns: 1024,
+            history_readers: 8,
             text_graph: true,
             syntax: false,
             watch: false,
@@ -198,6 +212,7 @@ mod tests {
             "--timings=false",
             "--no-limit",
             "--graph-cols=256",
+            "--history-readers=2",
             "--text-graph=false",
             "--nosyntax=false",
             "--nowatch=false",
@@ -213,6 +228,7 @@ mod tests {
         assert!(!partial.syntax && !partial.watch);
         assert!(!partial.timings && !partial.verbose);
         assert_eq!(partial.graph_columns, 1024);
+        assert_eq!(partial.history_readers, 8);
         let mut diagnostics = parse(["--timings".into(), "--verbose".into()]).unwrap();
         diagnostics.apply_preferences(&preferences);
         assert!(diagnostics.timings && diagnostics.verbose);
@@ -239,6 +255,7 @@ mod tests {
                 timings: true,
                 batch: Some(42),
                 graph_columns: 1,
+                history_readers: DEFAULT_HISTORY_READERS,
                 text_graph: true,
                 syntax: false,
                 watch: false,
@@ -259,6 +276,11 @@ mod tests {
             &["--graph-cols", "0"],
             &["--graph-cols", "1025"],
             &["--graph-cols", "65536"],
+            &["--history-readers"],
+            &["--history-readers", "0"],
+            &["--history-readers", "65"],
+            &["--history-readers", "invalid"],
+            &["--history-readers", "-1"],
         ] {
             assert!(
                 command(args).is_err(),
@@ -272,6 +294,15 @@ mod tests {
             );
         }
         assert_eq!(command(&[]).unwrap().graph_columns, 256);
+        assert_eq!(command(&[]).unwrap().history_readers, 2);
+        for readers in [1, 2, 4, 8, 64] {
+            assert_eq!(
+                command(&["--history-readers", &readers.to_string()])
+                    .unwrap()
+                    .history_readers,
+                readers
+            );
+        }
     }
 
     #[test]

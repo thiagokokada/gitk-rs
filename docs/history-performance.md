@@ -1,16 +1,44 @@
 # History loading performance
 
-History uses one `git rev-list --parents` traversal, piped directly into `git
-cat-file --buffer --batch`. Git echoes the traversal's parent lists with each
-object, so shallow boundaries and replacement ancestry keep Git's normal
-semantics. Rust parses raw commit headers and formats dates. Both processes run
-on the history worker; OS pipe backpressure bounds pending data. Loading still
-streams to EOF by default and pauses for browsing demand with `--limit`.
+History uses one `git rev-list --parents` traversal. By default, two persistent
+`git cat-file --batch` processes read its objects, with parsing on reader threads
+and graph construction on the history worker. The dispatcher preserves the
+traversal's parent lists and publishes batches in their original order, preserving
+shallow boundaries, replacements, and Git's default traversal order.
 
-The raw reader reuses one bounded buffer. It does not write a cache, retain a
-second history, count commits first, or restart traversal with `--skip`. Both
-Git processes drain bounded stderr and are terminated and reaped on
-cancellation or stream replacement. Both exit statuses are checked at EOF.
+`--history-readers N` and the saved `history_readers` preference select 1 through
+64 readers (default 2). One reader uses the original buffered direct OS pipe.
+Larger pools increase child process memory; they do not limit retained history.
+Readers start lazily, allowing the first 64 commits to reach the UI while the
+remaining pool starts. Loading streams to EOF by default and pauses for browsing
+demand with `--limit`.
+
+Dispatch batches contain at most 64 traversal records and target 2 MiB; a single
+bounded record can exceed that target by its terminating newline. Parsed output
+chunks also target 2 MiB, plus at most one bounded commit. Input and output
+channels have fixed capacities, and the ordered mailbox is capped at the reader
+count. A worker reuses its bounded raw-object buffer. Full messages stay in memory
+once, alongside shared identities and incremental graph rows; pending work is
+bounded independently of retained history.
+
+Each pool has its own shutdown token linked to the history generation's
+cancellation. Dropping a provisional reload pool leaves the retained stream
+usable. Shutdown closes output receivers before joining workers, terminates and
+reaps Git children, and drains bounded stderr. EOF is published only after the
+traversal and all object-reader exit statuses have been checked. No Python
+adapter is used by the application.
+
+Graph construction indexes active commit targets by lane and writes packed
+continuations directly, avoiding repeated linear target searches and temporary
+continuation-edge vectors. Differential tests compare the resulting graph rows
+with the original algorithm, including merges and frontier overflow.
+
+The end-of-history notice displays this generation's active history-worker time
+as seconds with two decimal places. It includes repository discovery, reading,
+filter preparation, and snapshot preparation. It excludes time paused waiting
+for browsing demand and freezes at completion; later viewport requests do not
+increase it. A new generation starts a new measurement. This measures worker
+completion, not desktop paint or application/child CPU time.
 
 Non-UTF-8 output configuration uses the original formatted log stream.
 Individual commits with other encodings or unusual metadata use a bounded,
@@ -20,7 +48,7 @@ the formatted record size limit. Repositories needing many such fallbacks may
 benefit less. Date formatting uses chrono, already present in the dependency
 graph.
 
-## Measurement
+## Historical single-reader measurement
 
 On 2026-11-10, the release-mode history probe was run on macOS arm64 with the
 pinned Nix toolchain. The baseline was commit
@@ -52,6 +80,10 @@ nix develop --command env \
   GITK_PROFILE_COMMITS=2000000 \
   cargo test --release --lib profile_retained_history --locked -- --ignored --nocapture
 ```
+
+Set `GITK_PROFILE_READERS` to select the reader count for either opt-in probe
+(default 2, range 1 through 64). Compare the same reader count as well as the same
+HEAD, loaded count, and lane cap. The probe prints the selected reader count.
 
 The probe also reports the time to prepare its first batch. To compare every
 commit's order, ID, parents, signatures, dates, and full message with the

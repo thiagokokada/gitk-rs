@@ -97,6 +97,18 @@ impl HistoryWindow {
                             .size_full(),
                     ),
             )
+            .child(format!(
+                "Git object readers (1-{})",
+                gitk_rs::git::MAX_HISTORY_READERS
+            ))
+            .child(
+                div()
+                    .id("history-readers-input")
+                    .test_support()
+                    .h_8()
+                    .flex_shrink_0()
+                    .child(Input::new(&self.history_readers_input).size_full()),
+            )
             .child(format!("Logical graph columns (1–{MAX_GRAPH_LANES})"))
             .child(
                 div()
@@ -139,6 +151,12 @@ impl HistoryWindow {
                 .value()
                 .parse()
                 .unwrap_or(f32::NAN),
+            history_readers: self
+                .history_readers_input
+                .read(cx)
+                .value()
+                .parse()
+                .unwrap_or(0),
             graph_columns: self
                 .graph_columns_input
                 .read(cx)
@@ -188,6 +206,9 @@ impl HistoryWindow {
         self.preferences_draft = self.preferences.with_config(&self.config);
         self.graph_columns_input.update(cx, |input, cx| {
             input.set_value(self.config.graph_columns.to_string(), window, cx)
+        });
+        self.history_readers_input.update(cx, |input, cx| {
+            input.set_value(self.config.history_readers.to_string(), window, cx)
         });
         self.batch_input.update(cx, |input, cx| {
             input.set_value(self.config.batch.unwrap_or(1000).to_string(), window, cx)

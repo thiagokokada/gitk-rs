@@ -50,6 +50,7 @@ fn open_with_state<'a>(
         regex: false,
         batch: config.batch,
         graph_columns: config.graph_columns,
+        history_readers: config.history_readers,
         anchor: None,
         restore: None,
     };
@@ -941,6 +942,21 @@ fn end_of_history_notice_expires_without_changing_eof_or_repeating(cx: &mut Test
     until(cx, |cx| {
         cx.update(|_, cx| app.view.read(cx).status_text().contains("end of history"))
     });
+    app.view.update(cx, |view, _| {
+        let original = view.snapshot.as_ref().unwrap().load_duration;
+        for (duration, expected) in [
+            (Duration::ZERO, "0.00"),
+            (Duration::from_secs(2), "2.00"),
+            (Duration::from_millis(12346), "12.35"),
+        ] {
+            view.snapshot.as_mut().unwrap().load_duration = duration;
+            assert!(
+                view.status_text()
+                    .contains(&format!("end of history ({expected} s)"))
+            );
+        }
+        view.snapshot.as_mut().unwrap().load_duration = original;
+    });
     let generation = cx.update(|_, cx| app.view.read(cx).request.generation);
     cx.background_executor.advance_clock(Duration::from_secs(2));
     cx.run_until_parked();
@@ -1768,6 +1784,21 @@ fn application_preferences_replace_flags_apply_and_persist(cx: &mut TestAppConte
     cx.update(|window, cx| window.click("graph-columns-input", cx));
     cx.simulate_keystrokes("ctrl-a ctrl-k");
     cx.simulate_input("512");
+    scroll_preferences_to("history-readers-input", cx);
+    cx.update(|window, cx| window.click("history-readers-input", cx));
+    cx.simulate_keystrokes("ctrl-a ctrl-k");
+    cx.simulate_input("0");
+    cx.update(|window, cx| window.click("apply-preferences", cx));
+    assert!(cx.update(|_, cx| {
+        let view = app.view.read(cx);
+        view.operation_message.contains("history readers")
+            && view.config.history_readers == 2
+            && view.request.generation == generation
+    }));
+    cx.update(|window, cx| window.click("history-readers-input", cx));
+    cx.simulate_keystrokes("ctrl-a ctrl-k");
+    cx.simulate_input("4");
+
     cx.update(|window, cx| window.click("apply-preferences", cx));
     until(cx, |cx| {
         cx.update(|_, cx| !app.view.read(cx).preferences_save_pending)
@@ -1777,6 +1808,7 @@ fn application_preferences_replace_flags_apply_and_persist(cx: &mut TestAppConte
     assert_eq!(saved.theme, Theme::Dark);
     assert_eq!(saved.batch, Some(73));
     assert_eq!(saved.graph_columns, 512);
+    assert_eq!(saved.history_readers, 4);
     assert!(saved.syntax && saved.watch);
     assert!(!saved.text_graph);
     cx.update(|_, cx| {
@@ -1785,6 +1817,7 @@ fn application_preferences_replace_flags_apply_and_persist(cx: &mut TestAppConte
         assert_eq!(saved.with_config(&view.config), saved);
         assert_eq!(view.request.batch, Some(73));
         assert_eq!(view.request.graph_columns, 512);
+        assert_eq!(view.request.history_readers, 4);
         assert!(view.request.generation.0 > generation.0);
     });
     let restarted = gitk_rs::cli::parse_with_preferences([], &saved).unwrap();

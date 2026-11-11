@@ -145,6 +145,7 @@ struct HistoryWindow {
     preferences_draft: Preferences,
     graph_columns_input: Entity<InputState>,
     batch_input: Entity<InputState>,
+    history_readers_input: Entity<InputState>,
     preferences_path: Option<std::path::PathBuf>,
     preferences_save_generation: u64,
     preferences_save_pending: bool,
@@ -254,6 +255,7 @@ impl HistoryWindow {
         });
         let graph_columns_input = cx.new(|cx| InputState::new(window, cx));
         let batch_input = cx.new(|cx| InputState::new(window, cx));
+        let history_readers_input = cx.new(|cx| InputState::new(window, cx));
         let mut font_subscriptions = Vec::new();
         for selector in [&ui_font_select, &fixed_font_select] {
             font_subscriptions.push(
@@ -269,7 +271,7 @@ impl HistoryWindow {
                 }
             }),
         );
-        for input in [&graph_columns_input, &batch_input] {
+        for input in [&graph_columns_input, &batch_input, &history_readers_input] {
             font_subscriptions.push(cx.subscribe(input, |_, _, _: &InputEvent, cx| cx.notify()));
         }
         let branch_filter =
@@ -363,6 +365,7 @@ impl HistoryWindow {
             preferences_draft: preferences.clone(),
             graph_columns_input,
             batch_input,
+            history_readers_input,
             preferences_path: None,
             preferences_save_generation: 0,
             preferences_save_pending: false,
@@ -925,13 +928,13 @@ impl HistoryWindow {
                         s.loaded,
                         s.branch,
                         if !s.eof {
-                            " — more available"
+                            " — more available".to_owned()
                         } else if self.show_end_of_history
                             && self.end_of_history_generation == Some(s.generation)
                         {
-                            " — end of history"
+                            format!(" — end of history ({:.2} s)", s.load_duration.as_secs_f64())
                         } else {
-                            ""
+                            String::new()
                         },
                         if s.filtering { " — filtering…" } else { "" }
                     )
@@ -1816,6 +1819,7 @@ pub fn run(mut config: Config, preferences: Preferences, launched: Instant) {
         regex: false,
         batch: config.batch,
         graph_columns: config.graph_columns,
+        history_readers: config.history_readers,
         anchor: None,
         restore: None,
     };

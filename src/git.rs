@@ -14,6 +14,12 @@ use std::{
     time::Duration,
 };
 
+mod commit_pool;
+use commit_pool::CommitPool;
+
+pub const DEFAULT_HISTORY_READERS: usize = 2;
+pub const MAX_HISTORY_READERS: usize = 64;
+
 pub const MAX_RECORD_BYTES: usize = 2 * 1024 * 1024;
 const MAX_STDERR_BYTES: usize = 64 * 1024;
 /// Shared cancellation flag with a notification for blocked process monitors.
@@ -208,8 +214,12 @@ impl Repository {
     }
 
     pub fn log(&self, cancel: Cancellation) -> Result<CommitStream> {
+        self.log_with_readers(cancel, DEFAULT_HISTORY_READERS)
+    }
+
+    pub fn log_with_readers(&self, cancel: Cancellation, readers: usize) -> Result<CommitStream> {
         let head = self.head.as_ref().context("repository has no commits")?;
-        CommitStream::open(&self.root, head, cancel)
+        CommitStream::open(&self.root, head, cancel, readers)
     }
 
     pub fn refs(&self, cancel: Cancellation) -> Result<GitStream> {
@@ -264,6 +274,11 @@ pub struct Record {
     pub terminated: bool,
 }
 
+enum GitInput {
+    Ids(Receiver<Vec<CommitId>>),
+    Records(Receiver<Vec<u8>>),
+}
+
 pub struct GitStream {
     child: Arc<Mutex<Child>>,
     stdout: Option<BufReader<ChildStdout>>,
@@ -294,7 +309,14 @@ impl GitStream {
         allowed: &[i32],
         input: Receiver<Vec<CommitId>>,
     ) -> Result<Self> {
-        Self::spawn_inner(root, args, cancel, allowed, Some(input), None)
+        Self::spawn_inner(
+            root,
+            args,
+            cancel,
+            allowed,
+            Some(GitInput::Ids(input)),
+            None,
+        )
     }
 
     fn spawn_inner<S: AsRef<OsStr>>(
@@ -302,7 +324,7 @@ impl GitStream {
         args: &[S],
         cancel: Cancellation,
         allowed: &[i32],
-        input: Option<Receiver<Vec<CommitId>>>,
+        input: Option<GitInput>,
         stdin: Option<Stdio>,
     ) -> Result<Self> {
         ensure!(!cancel.load(Ordering::Acquire), "Git operation cancelled");
@@ -358,11 +380,25 @@ impl GitStream {
             let finished = finished.clone();
             thread::spawn(move || -> Result<()> {
                 while !cancel.load(Ordering::Acquire) && !finished.load(Ordering::Acquire) {
-                    match receiver.recv_timeout(Duration::from_millis(10)) {
-                        Ok(ids) => {
-                            for id in ids {
-                                writeln!(stdin, "{id}")?;
-                            }
+                    let written = match &receiver {
+                        GitInput::Ids(receiver) => receiver
+                            .recv_timeout(Duration::from_millis(10))
+                            .map(|ids| -> Result<()> {
+                                for id in ids {
+                                    writeln!(stdin, "{id}")?;
+                                }
+                                Ok(())
+                            }),
+                        GitInput::Records(receiver) => receiver
+                            .recv_timeout(Duration::from_millis(10))
+                            .map(|bytes| -> Result<()> {
+                                stdin.write_all(&bytes)?;
+                                Ok(())
+                            }),
+                    };
+                    match written {
+                        Ok(result) => {
+                            result?;
                             stdin.flush()?;
                         }
                         Err(RecvTimeoutError::Timeout) => (),
@@ -533,19 +569,28 @@ fn pretty_log(root: &Path, head: &CommitId, cancel: Cancellation) -> Result<GitS
     )
 }
 
-/// Git walks revisions once; cat-file reads the resulting objects through a
-/// bounded OS pipe. The echoed parent list preserves Git's shallow/graft rules.
+/// A single traversal, with either a direct pipe or an ordered object-reader pool.
 pub struct CommitStream {
-    traversal: Option<GitStream>,
-    reader: GitStream,
+    source: CommitSource,
     root: PathBuf,
     record_buffer: Vec<u8>,
 }
 
+enum CommitSource {
+    Pretty(GitStream),
+    Single {
+        traversal: GitStream,
+        reader: GitStream,
+    },
+    Pool(CommitPool),
+}
+
 impl CommitStream {
-    fn open(root: &Path, head: &CommitId, cancel: Cancellation) -> Result<Self> {
-        // Let Git handle configured output encodings, just as the pretty stream
-        // does. Individual commits with other encodings also use that fallback.
+    fn open(root: &Path, head: &CommitId, cancel: Cancellation, readers: usize) -> Result<Self> {
+        ensure!(
+            (1..=MAX_HISTORY_READERS).contains(&readers),
+            "history readers must be between 1 and {MAX_HISTORY_READERS}"
+        );
         let mut encoding = run_bytes(
             root,
             &["config", "--get", "i18n.logOutputEncoding"],
@@ -560,118 +605,123 @@ impl CommitStream {
                 &[0, 1],
             )?;
         }
-        if !encoding.is_empty() && !utf8_encoding(trim_newline(&encoding)) {
-            return Ok(Self {
-                traversal: None,
-                reader: pretty_log(root, head, cancel)?,
-                root: root.to_owned(),
-                record_buffer: Vec::new(),
-            });
-        }
-        // Keep the default traversal order and stream immediately, without a
-        // count pass or a topological sort before the first viewport.
-        let mut traversal = GitStream::spawn(
-            root,
-            &["rev-list", "--parents", &head.to_hex()],
-            cancel.clone(),
-            &[0],
-        )?;
-        let pipe = traversal.stdout.take().unwrap().into_inner();
-        let reader = GitStream::spawn_inner(
-            root,
-            &[
-                "cat-file",
-                "--buffer",
-                "--batch=%(objectname) %(objecttype) %(objectsize) %(rest)",
-            ],
-            cancel,
-            &[0],
-            None,
-            Some(Stdio::from(pipe)),
-        )?;
+        let source = if !encoding.is_empty() && !utf8_encoding(trim_newline(&encoding)) {
+            CommitSource::Pretty(pretty_log(root, head, cancel)?)
+        } else if readers == 1 {
+            // Preserve the native, buffered OS-pipe fast path for one reader.
+            let mut traversal = GitStream::spawn(
+                root,
+                &["rev-list", "--parents", &head.to_hex()],
+                cancel.clone(),
+                &[0],
+            )?;
+            let pipe = traversal.stdout.take().unwrap().into_inner();
+            let reader = GitStream::spawn_inner(
+                root,
+                &[
+                    "cat-file",
+                    "--buffer",
+                    "--batch=%(objectname) %(objecttype) %(objectsize) %(rest)",
+                ],
+                cancel,
+                &[0],
+                None,
+                Some(Stdio::from(pipe)),
+            )?;
+            CommitSource::Single { traversal, reader }
+        } else {
+            CommitSource::Pool(CommitPool::open(root, head, cancel, readers)?)
+        };
         Ok(Self {
-            traversal: Some(traversal),
-            reader,
+            source,
             root: root.to_owned(),
             record_buffer: Vec::new(),
         })
     }
 
     pub fn next_commit(&mut self) -> Result<Option<Commit>> {
-        let Some(traversal) = &mut self.traversal else {
-            return self.reader.next_commit();
-        };
-        let mut bytes = std::mem::take(&mut self.record_buffer);
-        let result = (|| {
-            let Some(terminated) = self.reader.read_record(b'\n', &mut bytes)? else {
-                traversal.finish()?;
-                return Ok(None);
-            };
-            ensure!(terminated, "Git cat-file ended in an incomplete header");
-            let header = std::str::from_utf8(&bytes)?;
-            let mut fields = header.split_whitespace();
-            let id = CommitId::parse(fields.next().context("missing object ID")?)?;
-            ensure!(
-                fields.next() == Some("commit"),
-                "Git returned a non-commit object"
-            );
-            let size: usize = fields.next().context("missing object size")?.parse()?;
-            let parents = fields
-                .map(CommitId::parse)
-                .collect::<Result<Vec<_>>>()?
-                .into_boxed_slice();
-            let reader = self.reader.stdout.as_mut().unwrap();
-            // A large signature may exceed the raw buffer limit even when the
-            // formatted record fits. Drain it without retaining it, then let the
-            // original bounded parser decide whether that commit is acceptable.
-            if size > MAX_RECORD_BYTES {
-                ensure!(
-                    std::io::copy(&mut reader.take(size as u64), &mut std::io::sink())?
-                        == size as u64,
-                    "Git cat-file ended in an incomplete object"
-                );
-            } else {
-                bytes.resize(size, 0);
-                reader.read_exact(&mut bytes)?;
+        match &mut self.source {
+            CommitSource::Pretty(reader) => reader.next_commit(),
+            CommitSource::Pool(pool) => pool.next_commit(),
+            CommitSource::Single { traversal, reader } => {
+                let result = read_raw_commit(&self.root, reader, &mut self.record_buffer)?;
+                if result.is_none() {
+                    traversal.finish()?;
+                }
+                Ok(result)
             }
-            let mut terminator = [0];
-            reader.read_exact(&mut terminator)?;
-            ensure!(
-                terminator == *b"\n",
-                "Git cat-file omitted its object terminator"
-            );
-            if size <= MAX_RECORD_BYTES
-                && let Ok(commit) = parse_raw_commit(id.clone(), parents, &bytes)
-            {
-                return Ok(Some(commit));
-            }
-            let mut fallback = GitStream::spawn(
-                &self.root,
-                &[
-                    "log",
-                    "-1",
-                    "--no-color",
-                    "--no-decorate",
-                    "--no-patch",
-                    LOG_FORMAT,
-                    &id.to_hex(),
-                ],
-                self.reader.cancel.clone(),
-                &[0],
-            )?;
-            let commit = fallback
-                .next_commit()?
-                .context("Git omitted a requested commit")?;
-            // Reap and check the single-commit fallback before accepting it.
-            ensure!(
-                fallback.next_commit()?.is_none(),
-                "Git returned extra commits"
-            );
-            Ok(Some(commit))
-        })();
-        self.record_buffer = bytes;
-        result
+        }
     }
+}
+
+fn read_raw_commit(
+    root: &Path,
+    stream: &mut GitStream,
+    bytes: &mut Vec<u8>,
+) -> Result<Option<Commit>> {
+    let Some(terminated) = stream.read_record(b'\n', bytes)? else {
+        return Ok(None);
+    };
+    ensure!(terminated, "Git cat-file ended in an incomplete header");
+    let header = std::str::from_utf8(bytes)?;
+    let mut fields = header.split_whitespace();
+    let id = CommitId::parse(fields.next().context("missing object ID")?)?;
+    ensure!(
+        fields.next() == Some("commit"),
+        "Git returned a non-commit object"
+    );
+    let size: usize = fields.next().context("missing object size")?.parse()?;
+    let parents = fields
+        .map(CommitId::parse)
+        .collect::<Result<Vec<_>>>()?
+        .into_boxed_slice();
+    let reader = stream.stdout.as_mut().unwrap();
+    // A large signature may exceed the raw buffer limit even when the
+    // formatted record fits. Drain it without retaining it, then let the
+    // original bounded parser decide whether that commit is acceptable.
+    if size > MAX_RECORD_BYTES {
+        ensure!(
+            std::io::copy(&mut reader.take(size as u64), &mut std::io::sink())? == size as u64,
+            "Git cat-file ended in an incomplete object"
+        );
+    } else {
+        bytes.resize(size, 0);
+        reader.read_exact(bytes)?;
+    }
+    let mut terminator = [0];
+    reader.read_exact(&mut terminator)?;
+    ensure!(
+        terminator == *b"\n",
+        "Git cat-file omitted its object terminator"
+    );
+    if size <= MAX_RECORD_BYTES
+        && let Ok(commit) = parse_raw_commit(id.clone(), parents, bytes)
+    {
+        return Ok(Some(commit));
+    }
+    let mut fallback = GitStream::spawn(
+        root,
+        &[
+            "log",
+            "-1",
+            "--no-color",
+            "--no-decorate",
+            "--no-patch",
+            LOG_FORMAT,
+            &id.to_hex(),
+        ],
+        stream.cancel.clone(),
+        &[0],
+    )?;
+    let commit = fallback
+        .next_commit()?
+        .context("Git omitted a requested commit")?;
+    // Reap and check the single-commit fallback before accepting it.
+    ensure!(
+        fallback.next_commit()?.is_none(),
+        "Git returned extra commits"
+    );
+    Ok(Some(commit))
 }
 
 fn utf8_encoding(encoding: &[u8]) -> bool {
@@ -825,9 +875,15 @@ mod tests {
     }
 
     fn assert_matches_pretty_log(root: &Path) -> usize {
+        assert_matches_pretty_log_with_readers(root, DEFAULT_HISTORY_READERS)
+    }
+
+    fn assert_matches_pretty_log_with_readers(root: &Path, readers: usize) -> usize {
         let cancel = Cancellation::default();
         let repository = Repository::open(root, &cancel).unwrap();
-        let mut raw = repository.log(cancel.clone()).unwrap();
+        let mut raw = repository
+            .log_with_readers(cancel.clone(), readers)
+            .unwrap();
         let mut pretty = pretty_log(root, repository.head.as_ref().unwrap(), cancel).unwrap();
         let mut count = 0;
         while let Some(expected) = pretty.next_commit().unwrap() {
@@ -837,6 +893,19 @@ mod tests {
         }
         assert!(raw.next_commit().unwrap().is_none());
         count
+    }
+
+    #[test]
+    fn every_reader_count_preserves_full_records_and_partial_final_batches() {
+        let fixture = Fixture::new();
+        fixture.commit("root");
+        fixture.append_history(513, false, "Subject é\n\nBody\n");
+        for readers in [1, 2, 4, 8] {
+            assert_eq!(
+                assert_matches_pretty_log_with_readers(fixture.root(), readers),
+                514
+            );
+        }
     }
 
     #[test]
@@ -879,13 +948,10 @@ mod tests {
         assert_eq!(assert_matches_pretty_log(fixture.root()), cases.len() + 1);
         fixture.git(&["config", "i18n.logOutputEncoding", "ISO-8859-1"]);
         let repository = Repository::open(fixture.root(), &Cancellation::default()).unwrap();
-        assert!(
-            repository
-                .log(Cancellation::default())
-                .unwrap()
-                .traversal
-                .is_none()
-        );
+        assert!(matches!(
+            repository.log(Cancellation::default()).unwrap().source,
+            CommitSource::Pretty(_)
+        ));
         assert_eq!(assert_matches_pretty_log(fixture.root()), cases.len() + 1);
     }
 
@@ -936,12 +1002,12 @@ mod tests {
         fixture.append_history(2000, false, "candidate");
         let cancel = Cancellation::default();
         let repository = Repository::open(fixture.root(), &cancel).unwrap();
-        let mut stream = repository.log(cancel.clone()).unwrap();
+        let mut stream = repository.log_with_readers(cancel.clone(), 1).unwrap();
         assert!(stream.next_commit().unwrap().is_some());
-        let children = [
-            stream.traversal.as_ref().unwrap().child.clone(),
-            stream.reader.child.clone(),
-        ];
+        let CommitSource::Single { reader, traversal } = &stream.source else {
+            panic!("expected direct stream")
+        };
+        let children = [traversal.child.clone(), reader.child.clone()];
         let (sender, receiver) = std::sync::mpsc::channel();
         cancel.store(true, Ordering::Release);
         let worker = thread::spawn(move || {
@@ -987,7 +1053,11 @@ mod tests {
             std::env::var_os("GITK_PROFILE_REPOSITORY").expect("set GITK_PROFILE_REPOSITORY");
         eprintln!(
             "history_stream_parity compared={}",
-            assert_matches_pretty_log(Path::new(&root))
+            assert_matches_pretty_log_with_readers(
+                Path::new(&root),
+                std::env::var("GITK_PROFILE_READERS")
+                    .map_or(DEFAULT_HISTORY_READERS, |value| value.parse().unwrap())
+            )
         );
     }
 

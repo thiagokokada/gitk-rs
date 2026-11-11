@@ -13,7 +13,7 @@ use std::{
     sync::mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError},
     sync::{Arc, Condvar, Mutex, atomic::Ordering},
     thread::{self, JoinHandle},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 pub const PAGE_ROWS: usize = 512;
@@ -36,6 +36,7 @@ pub struct Request {
     /// batches of N. Worker steps and the snapshot mailbox stay bounded either way.
     pub batch: Option<usize>,
     pub graph_columns: usize,
+    pub history_readers: usize,
     pub anchor: Option<usize>,
     pub restore: Option<Restore>,
 }
@@ -84,6 +85,8 @@ pub struct Snapshot {
     pub visible: usize,
     pub loaded: usize,
     pub eof: bool,
+    /// Active worker time for this generation, excluding on-demand idle pauses.
+    pub load_duration: Duration,
     pub filtering: bool,
     pub branch: String,
     pub refs: Arc<Refs>,
@@ -100,6 +103,7 @@ struct SharedState {
     generation: Generation,
     repository: PathBuf,
     graph_columns: usize,
+    history_readers: usize,
     stopped: bool,
 }
 
@@ -125,6 +129,7 @@ impl HistoryEngine {
                 generation: initial.generation,
                 repository: initial.repository.clone(),
                 graph_columns: initial.graph_columns,
+                history_readers: initial.history_readers,
                 request: Some(initial),
                 snapshot: None,
                 cancellation: Cancellation::default(),
@@ -169,6 +174,7 @@ impl HistoryHandle {
             // traversal. Let the worker inspect HEAD before replacing a stream.
             if request.repository != state.repository
                 || request.graph_columns != state.graph_columns
+                || request.history_readers != state.history_readers
             {
                 state.cancellation.store(true, Ordering::Release);
                 state.cancellation = Cancellation::default();
@@ -181,6 +187,7 @@ impl HistoryHandle {
             state.generation = request.generation;
             state.repository = request.repository.clone();
             state.graph_columns = request.graph_columns;
+            state.history_readers = request.history_readers;
             (state.request.replace(request), snapshot)
         };
         drop(old);
@@ -208,6 +215,8 @@ fn run(shared: Arc<Shared>) {
     let mut current: Option<Request> = None;
     let mut work = false;
     let mut failed = false;
+    let mut load_duration = Duration::ZERO;
+    let mut completed = false;
     loop {
         let (cancel, incoming) = {
             let mut state = shared.state.lock().unwrap();
@@ -219,17 +228,21 @@ fn run(shared: Arc<Shared>) {
             }
             (state.cancellation.clone(), state.request.take())
         };
+        let step_started = Instant::now();
         let mut reload = false;
         if let Some(request) = incoming {
-            if current
-                .as_ref()
-                .is_none_or(|previous| previous.generation != request.generation)
-            {
+            if current.as_ref().is_none_or(|previous| {
+                previous.generation != request.generation
+                    || previous.history_readers != request.history_readers
+            }) {
                 reload = true;
+                load_duration = Duration::ZERO;
+                completed = false;
                 if failed
                     || current.as_ref().is_none_or(|previous| {
                         previous.repository != request.repository
                             || previous.graph_columns != request.graph_columns
+                            || previous.history_readers != request.history_readers
                     })
                 {
                     // Git cleanup must happen outside the shared UI mailbox lock.
@@ -274,9 +287,14 @@ fn run(shared: Arc<Shared>) {
                 .then(|| retained.snapshot(request));
             Ok((snapshot, work))
         })();
+        if !completed {
+            load_duration += step_started.elapsed();
+        }
         match result {
             Ok((snapshot, pending)) => {
-                if let Some(snapshot) = snapshot {
+                if let Some(mut snapshot) = snapshot {
+                    snapshot.load_duration = load_duration;
+                    completed |= snapshot.eof && !snapshot.filtering && snapshot.error.is_none();
                     publish(&shared, snapshot);
                 }
                 work = pending;
@@ -288,6 +306,7 @@ fn run(shared: Arc<Shared>) {
                         .map(|s| s.snapshot(request))
                         .unwrap_or_else(|| empty_snapshot(request, None));
                     snapshot.error = Some(format!("{error:#}"));
+                    snapshot.load_duration = load_duration;
                     publish(&shared, snapshot);
                     if let Some(session) = session.as_mut() {
                         session.stream = None;
@@ -309,6 +328,7 @@ fn empty_snapshot(request: &Request, error: Option<String>) -> Snapshot {
         visible: 0,
         loaded: 0,
         eof: false,
+        load_duration: Duration::ZERO,
         filtering: false,
         branch: String::new(),
         refs: Arc::new(Refs::new()),
@@ -582,7 +602,7 @@ impl Session {
         let stream = repository
             .head
             .as_ref()
-            .map(|_| repository.log(cancellation.clone()))
+            .map(|_| repository.log_with_readers(cancellation.clone(), request.history_readers))
             .transpose()?;
         let eof = stream.is_none();
         Ok(Self {
@@ -651,7 +671,8 @@ impl Session {
                 return Ok(false);
             }
             self.reload = Some(LinearReload {
-                stream: repository.log(self.cancellation.clone())?,
+                stream: repository
+                    .log_with_readers(self.cancellation.clone(), request.history_readers)?,
                 repository,
                 old_head,
                 expected,
@@ -1060,6 +1081,7 @@ impl Session {
             visible,
             loaded: self.entries.len(),
             eof: self.eof && self.paths.as_ref().is_none_or(|paths| paths.done),
+            load_duration: Duration::ZERO,
             filtering: self.query_error.is_none()
                 && !self.query.is_empty()
                 && (self.scanned < self.entries.len()
@@ -1177,6 +1199,7 @@ mod tests {
             regex: false,
             batch: Some(1000),
             graph_columns: crate::graph::DEFAULT_GRAPH_LANES,
+            history_readers: crate::git::DEFAULT_HISTORY_READERS,
             anchor: None,
             restore: None,
         }
@@ -1609,6 +1632,11 @@ mod tests {
             .parse()
             .unwrap();
         assert!(count > 64);
+        let readers: usize = std::env::var("GITK_PROFILE_READERS")
+            .unwrap_or_else(|_| crate::git::DEFAULT_HISTORY_READERS.to_string())
+            .parse()
+            .unwrap();
+        assert!((1..=crate::git::MAX_HISTORY_READERS).contains(&readers));
         let request = Request {
             generation: Generation(1),
             id: 1,
@@ -1619,6 +1647,7 @@ mod tests {
             regex: false,
             batch: Some(count),
             graph_columns: crate::graph::DEFAULT_GRAPH_LANES,
+            history_readers: readers,
             anchor: None,
             restore: None,
         };
@@ -1650,7 +1679,8 @@ mod tests {
             + session.matches.capacity() * size_of::<usize>()
             + session.strings.capacity() * (size_of::<Arc<str>>() + 1);
         eprintln!(
-            "history_probe graph_lanes={} loaded={} eof={} elapsed_ms={} records_bytes={records} metadata_bytes={metadata} messages_bytes={messages} graph_bytes={graph} index_bytes={index} accounted_bytes={}",
+            "history_probe readers={} graph_lanes={} loaded={} eof={} elapsed_ms={} records_bytes={records} metadata_bytes={metadata} messages_bytes={messages} graph_bytes={graph} index_bytes={index} accounted_bytes={}",
+            request.history_readers,
             request.graph_columns,
             session.entries.len(),
             session.eof,
@@ -2030,6 +2060,7 @@ mod tests {
             regex: std::env::var("GITK_SEARCH_REGEX").is_ok_and(|value| value == "1"),
             batch: None,
             graph_columns: crate::graph::DEFAULT_GRAPH_LANES,
+            history_readers: crate::git::DEFAULT_HISTORY_READERS,
             anchor: None,
             restore: None,
         };

@@ -86,6 +86,7 @@ fn history_request(fixture: &Fixture) -> Request {
         regex: false,
         batch: Some(7),
         graph_columns: 200,
+        history_readers: gitk_rs::git::DEFAULT_HISTORY_READERS,
         anchor: None,
         restore: None,
     }
@@ -700,4 +701,81 @@ fn regex_mode_changes_refilter_retained_history_and_paths() {
     assert!(recovered.error.is_none(), "{:?}", recovered.error);
     assert_eq!(recovered.visible, 1);
     assert!(Arc::ptr_eq(&retained, &recovered.rows[0]));
+}
+
+#[test]
+fn reader_changes_restart_history_and_completed_timings_stay_fixed() {
+    let fixture = Fixture::new();
+    fixture.commit("root");
+    fixture.append_history(600, false, "candidate");
+    let mut request = history_request(&fixture);
+    request.batch = None;
+    request.history_readers = 1;
+    let engine = HistoryEngine::spawn(request.clone());
+    let handle = engine.handle();
+    let before = wait(|| handle.take_snapshot().filter(|s| s.eof));
+    assert!(before.error.is_none());
+    assert!(before.load_duration > Duration::ZERO);
+    request.id += 1;
+    request.refs_revision += 1;
+    handle.request(request.clone());
+    let same = wait(|| {
+        handle
+            .take_snapshot()
+            .filter(|s| s.request_id == request.id)
+    });
+    assert_eq!(same.load_duration, before.load_duration);
+    assert!(Arc::ptr_eq(&same.rows[0], &before.rows[0]));
+    request.history_readers = 4;
+    request.generation.0 += 1;
+    request.id += 1;
+    handle.request(request.clone());
+    let changed = wait(|| {
+        handle
+            .take_snapshot()
+            .filter(|s| s.generation == request.generation && s.eof)
+    });
+    assert!(changed.error.is_none());
+    assert_eq!(changed.loaded, 601);
+    assert_eq!(changed.rows[0].commit.id, before.rows[0].commit.id);
+    assert!(!Arc::ptr_eq(&changed.rows[0], &before.rows[0]));
+    assert!(changed.load_duration > Duration::ZERO);
+}
+
+#[test]
+fn history_completion_time_excludes_on_demand_idle_pauses() {
+    let fixture = Fixture::new();
+    fixture.commit("root");
+    fixture.append_history(300, false, "candidate");
+    let mut request = history_request(&fixture);
+    request.batch = Some(1);
+    request.range = 0..1;
+    let engine = HistoryEngine::spawn(request.clone());
+    let handle = engine.handle();
+    wait(|| handle.take_snapshot().filter(|s| s.loaded == 65));
+    // A no-op demand request acknowledges the fully paused state.
+    request.id += 1;
+    handle.request(request.clone());
+    let paused = wait(|| {
+        handle
+            .take_snapshot()
+            .filter(|s| s.request_id == request.id)
+    });
+    assert!(!paused.eof);
+    let started = Instant::now();
+    let idle = Duration::from_millis(40);
+    thread::sleep(idle);
+    request.id += 1;
+    request.batch = None;
+    handle.request(request.clone());
+    let finished = wait(|| {
+        handle
+            .take_snapshot()
+            .filter(|s| s.request_id == request.id && s.eof)
+    });
+    let active = finished.load_duration.saturating_sub(paused.load_duration);
+    assert!(
+        started.elapsed().saturating_sub(active) >= idle * 3 / 4,
+        "idle prefetch time was included in completion timing"
+    );
 }
