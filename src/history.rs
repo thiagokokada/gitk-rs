@@ -7,7 +7,7 @@ use crate::{
 };
 use anyhow::{Result, ensure};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     ops::Range,
     path::PathBuf,
     sync::mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError},
@@ -348,7 +348,97 @@ fn empty_snapshot(request: &Request, error: Option<String>) -> Snapshot {
 
 // Only metadata candidates are sent through diff-tree. Both directions are
 // bounded, and cancellation owns the process and all pipe threads.
+// Batches are distributed round-robin and drained in submission order. The
+// session's candidate cap bounds queued work across the entire pool.
 struct DiffSearch {
+    workers: Vec<DiffWorker>,
+    batches: VecDeque<(usize, usize)>,
+    next: usize,
+    closed: bool,
+    done: bool,
+}
+
+impl DiffSearch {
+    fn start(repository: &Repository, query: &CompiledQuery) -> Option<Self> {
+        let count = if query.contents.is_some() {
+            std::env::var("GITK_SEARCH_WORKERS")
+                .ok()
+                .and_then(|value| value.parse::<usize>().ok())
+                .filter(|count| (1..=8).contains(count))
+                .unwrap_or(2)
+        } else {
+            1
+        };
+        Self::start_with_workers(repository, query, count)
+    }
+
+    fn start_with_workers(
+        repository: &Repository,
+        query: &CompiledQuery,
+        count: usize,
+    ) -> Option<Self> {
+        let workers = (0..count)
+            .map(|_| DiffWorker::start(repository, query))
+            .collect::<Option<Vec<_>>>()?;
+        Some(Self {
+            workers,
+            batches: VecDeque::new(),
+            next: 0,
+            closed: false,
+            done: false,
+        })
+    }
+
+    fn try_send(
+        &mut self,
+        batch: Vec<CommitId>,
+    ) -> std::result::Result<(), TrySendError<Vec<CommitId>>> {
+        let count = batch.len();
+        self.workers[self.next]
+            .input
+            .as_ref()
+            .unwrap()
+            .try_send(batch)?;
+        self.batches.push_back((self.next, count));
+        self.next = (self.next + 1) % self.workers.len();
+        Ok(())
+    }
+
+    fn close(&mut self) {
+        self.closed = true;
+        for worker in &mut self.workers {
+            worker.input.take();
+        }
+    }
+
+    fn try_recv(&mut self) -> std::result::Result<Result<(CommitId, bool)>, TryRecvError> {
+        if let Some((index, remaining)) = self.batches.front_mut() {
+            let result = self.workers[*index].receiver.as_ref().unwrap().try_recv()?;
+            *remaining -= 1;
+            if *remaining == 0 {
+                self.batches.pop_front();
+            }
+            return Ok(result);
+        }
+        // Drain terminal errors even when no candidates were submitted.
+        for worker in &mut self.workers {
+            if !worker.done {
+                match worker.receiver.as_ref().unwrap().try_recv() {
+                    Err(TryRecvError::Disconnected) => worker.done = true,
+                    Err(TryRecvError::Empty) => (),
+                    result => return result,
+                }
+            }
+        }
+        if self.workers.iter().all(|worker| worker.done) {
+            Err(TryRecvError::Disconnected)
+        } else {
+            Err(TryRecvError::Empty)
+        }
+    }
+}
+
+struct DiffWorker {
     cancel: Cancellation,
     input: Option<SyncSender<Vec<CommitId>>>,
     receiver: Option<Receiver<Result<(CommitId, bool)>>>,
@@ -356,7 +446,7 @@ struct DiffSearch {
     done: bool,
 }
 
-impl DiffSearch {
+impl DiffWorker {
     fn start(repository: &Repository, query: &CompiledQuery) -> Option<Self> {
         if query.path.is_none() && query.contents.is_none() {
             return None;
@@ -389,7 +479,10 @@ impl DiffSearch {
                 if let Some(pattern) = &prefilter {
                     // --always retains one header per candidate, even on a miss.
                     // Keep all changed paths so path/contents remain commit-level AND.
-                    args.extend(["-G", pattern, "--pickaxe-all"]);
+                    args.extend(["-G", pattern]);
+                    if path.is_some() {
+                        args.push("--pickaxe-all");
+                    }
                 }
                 if contents.is_some() {
                     args.extend([
@@ -493,7 +586,7 @@ impl DiffSearch {
     }
 }
 
-impl Drop for DiffSearch {
+impl Drop for DiffWorker {
     fn drop(&mut self) {
         self.cancel.store(true, Ordering::Release);
         self.input.take();
@@ -818,10 +911,12 @@ impl Session {
         if self.query_error.is_some() {
             return Ok(false);
         }
+        let mut progressed = false;
         if let Some(paths) = &mut self.paths {
             for _ in 0..256 {
-                match paths.receiver.as_ref().unwrap().try_recv() {
+                match paths.try_recv() {
                     Ok(Ok((id, matched))) => {
+                        progressed = true;
                         let ordinal = self
                             .candidates
                             .remove(&id)
@@ -853,11 +948,13 @@ impl Session {
         if let Some(paths) = &mut self.paths {
             if !self.path_pending.is_empty() {
                 let batch = std::mem::take(&mut self.path_pending);
-                match paths.input.as_ref().unwrap().try_send(batch) {
-                    Ok(()) => (),
+                match paths.try_send(batch) {
+                    Ok(()) => progressed = true,
                     Err(TrySendError::Full(batch)) => {
                         self.path_pending = batch;
-                        thread::sleep(Duration::from_millis(5));
+                        if !progressed {
+                            thread::sleep(Duration::from_millis(5));
+                        }
                         return Ok(true);
                     }
                     Err(TrySendError::Disconnected(batch)) => {
@@ -868,7 +965,9 @@ impl Session {
                 }
             }
             if self.candidates.len() >= 4096 {
-                thread::sleep(Duration::from_millis(5));
+                if !progressed {
+                    thread::sleep(Duration::from_millis(5));
+                }
                 return Ok(true);
             }
         }
@@ -881,10 +980,12 @@ impl Session {
                 && let Some(paths) = &mut self.paths
             {
                 // diff-tree can buffer the last decision until stdin closes.
-                paths.input.take();
+                paths.close();
             }
             if !self.candidates.is_empty() || !self.path_pending.is_empty() {
-                thread::sleep(Duration::from_millis(5));
+                if !progressed {
+                    thread::sleep(Duration::from_millis(5));
+                }
                 return Ok(true);
             }
             let mut prefix = self.prefix_search.take().unwrap();
@@ -905,7 +1006,9 @@ impl Session {
             .map(|prefix| prefix.range.clone())
             .unwrap_or(self.scanned..self.entries.len());
         if !self.query.is_empty() && !scan.is_empty() {
-            let end = (scan.start + 1000).min(scan.end);
+            // Small batches feed every worker before the global candidate cap.
+            let chunk = if self.paths.is_some() { 64 } else { 1000 };
+            let end = (scan.start + chunk).min(scan.end);
             for index in scan.start..end {
                 let commit = &self.entries[index].commit;
                 if self.parsed.matches(commit) {
@@ -958,8 +1061,10 @@ impl Session {
             if let Some(paths) = &self.paths {
                 if paths.done {
                     self.paths = DiffSearch::start(&self.repository, &self.parsed);
-                } else if paths.input.is_none() {
-                    thread::sleep(Duration::from_millis(5));
+                } else if paths.closed {
+                    if !progressed {
+                        thread::sleep(Duration::from_millis(5));
+                    }
                     return Ok(true);
                 }
             }
@@ -970,9 +1075,11 @@ impl Session {
             // Close at EOF or an opt-in prefetch pause to flush the last diff.
             // Resuming demand opens a new diff stream for newly loaded candidates.
             if self.eof || visible >= needed {
-                self.paths.as_mut().unwrap().input.take();
+                self.paths.as_mut().unwrap().close();
             }
-            thread::sleep(Duration::from_millis(5));
+            if !progressed {
+                thread::sleep(Duration::from_millis(5));
+            }
             return Ok(true);
         }
         Ok(false)
@@ -1866,7 +1973,7 @@ mod tests {
         // Replacing a running search releases its producer and cancellation token.
         request.query = "path:yml".into();
         session.step(&request).unwrap();
-        let path_cancel = session.paths.as_ref().unwrap().cancel.clone();
+        let path_cancel = session.paths.as_ref().unwrap().workers[0].cancel.clone();
         request.query = "author:fixture".into();
         while session.step(&request).unwrap() {}
         assert!(path_cancel.load(Ordering::Acquire));
@@ -1902,6 +2009,70 @@ mod tests {
             assert!(session.query_error.is_none(), "{:?}", session.query_error);
             assert_eq!(session.visible_count(), expected, "{query}");
             assert!(session.candidates.is_empty());
+        }
+    }
+
+    #[test]
+    fn diff_pool_preserves_submission_order_for_all_worker_counts() {
+        let fixture = Fixture::new();
+        for index in 0..24 {
+            fixture.commit(&format!("needle {index}"));
+        }
+        let repository = Repository::open(fixture.root(), &Cancellation::default()).unwrap();
+        let ids: Vec<_> = fixture
+            .git(&["rev-list", "HEAD"])
+            .lines()
+            .map(|id| CommitId::parse(id).unwrap())
+            .collect();
+        for query in [
+            "contents:needle",
+            "contents:needle path:file.txt",
+            "contents:absent",
+            "contents:needle path:absent",
+        ] {
+            let query = Query::parse(query).unwrap().compile(false).unwrap();
+            for count in [1, 2, 4, 8] {
+                let mut pool = DiffSearch::start_with_workers(&repository, &query, count).unwrap();
+                // Two batches per worker, including an uneven tail.
+                let chunk = ids.len().div_ceil(count * 2);
+                let mut sent = 0;
+                let mut received = Vec::new();
+                let deadline = Instant::now() + Duration::from_secs(10);
+                while !pool.done {
+                    assert!(
+                        Instant::now() < deadline,
+                        "pool stalled with {count} workers"
+                    );
+                    if sent < ids.len() {
+                        let end = (sent + chunk).min(ids.len());
+                        match pool.try_send(ids[sent..end].to_vec()) {
+                            Ok(()) => sent = end,
+                            Err(TrySendError::Full(_)) => (),
+                            Err(error) => panic!("{error}"),
+                        }
+                    } else {
+                        pool.close();
+                    }
+                    match pool.try_recv() {
+                        Ok(result) => received.push(result.unwrap()),
+                        Err(TryRecvError::Disconnected) => pool.done = true,
+                        Err(TryRecvError::Empty) => thread::sleep(Duration::from_millis(1)),
+                    }
+                }
+                assert_eq!(
+                    received
+                        .iter()
+                        .map(|(id, _)| id.clone())
+                        .collect::<Vec<_>>(),
+                    ids
+                );
+                let expected = query.contents.as_ref().unwrap().is_match("needle")
+                    && query
+                        .path
+                        .as_ref()
+                        .is_none_or(|path| path.is_match("file.txt"));
+                assert!(received.iter().all(|(_, matched)| *matched == expected));
+            }
         }
     }
 
@@ -1954,10 +2125,21 @@ mod tests {
         }
         request.query = "contents:Needle".into();
         session.step(&request).unwrap();
-        let cancel = session.paths.as_ref().unwrap().cancel.clone();
+        let cancellations: Vec<_> = session
+            .paths
+            .as_ref()
+            .unwrap()
+            .workers
+            .iter()
+            .map(|worker| worker.cancel.clone())
+            .collect();
         request.query = "message:introduce".into();
         while session.step(&request).unwrap() {}
-        assert!(cancel.load(Ordering::Acquire));
+        assert!(
+            cancellations
+                .iter()
+                .all(|cancel| cancel.load(Ordering::Acquire))
+        );
         assert_eq!(session.visible_count(), 1);
     }
 
@@ -2083,6 +2265,9 @@ mod tests {
             anchor: None,
             restore: None,
         };
+        let limit = std::env::var("GITK_SEARCH_COMMITS")
+            .ok()
+            .map(|v| v.parse::<usize>().unwrap());
         let start = Instant::now();
         let mut session = Session::open(&request, Cancellation::default()).unwrap();
         eprintln!(
@@ -2094,6 +2279,10 @@ mod tests {
         );
         let mut first = false;
         while session.step(&request).unwrap() {
+            if limit.is_some_and(|limit| session.entries.len() >= limit) {
+                session.stream.take();
+                session.eof = true;
+            }
             assert!(session.query_error.is_none(), "{:?}", session.query_error);
             if !first && session.visible_count() > 0 {
                 eprintln!(
@@ -2117,6 +2306,17 @@ mod tests {
         );
         #[cfg(target_os = "linux")]
         report_search_rss("complete", session.entries.len());
+        if let Ok(output) = std::env::var("GITK_SEARCH_RESULTS") {
+            std::fs::write(
+                output,
+                session
+                    .matches
+                    .iter()
+                    .map(|i| session.entries[*i].commit.id.to_hex() + "\n")
+                    .collect::<String>(),
+            )
+            .unwrap();
+        }
         if let Ok(query) = std::env::var("GITK_SEARCH_REFINE") {
             request.query = query;
             let start = Instant::now();
