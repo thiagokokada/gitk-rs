@@ -383,7 +383,11 @@ fn force_reload_preserves_local_selection_and_refreshes_its_diff(cx: &mut TestAp
         view.select_local(LocalChangeKind::Unstaged, cx)
     });
     until(cx, |cx| {
-        cx.update(|_, cx| app.view.read(cx).diff.read(cx).has_loaded_selection())
+        cx.update(|_, cx| {
+            let view = app.view.read(cx);
+            view.diff.read(cx).has_loaded_selection()
+                && view.snapshot.as_ref().is_some_and(|s| s.eof)
+        })
     });
     app.view.update(cx, |view, cx| {
         view.scroll.scroll_to_item_strict(10, ScrollStrategy::Top);
