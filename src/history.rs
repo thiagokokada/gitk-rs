@@ -438,6 +438,18 @@ impl DiffSearch {
     }
 }
 
+impl Drop for DiffSearch {
+    fn drop(&mut self) {
+        // Signal the entire pool before joining any worker, so cancellation
+        // latency does not accumulate one process-monitor wait per worker.
+        for worker in &mut self.workers {
+            worker.cancel.store(true, Ordering::Release);
+            worker.input.take();
+            worker.receiver.take();
+        }
+    }
+}
+
 struct DiffWorker {
     cancel: Cancellation,
     input: Option<SyncSender<Vec<CommitId>>>,
@@ -957,10 +969,11 @@ impl Session {
                         }
                         return Ok(true);
                     }
-                    Err(TrySendError::Disconnected(batch)) => {
-                        // Drain the worker's error before reporting a closed pipe.
-                        self.path_pending = batch;
-                        return Ok(true);
+                    Err(TrySendError::Disconnected(_)) => {
+                        // Another worker may still be waiting for more input. Do
+                        // not wait for ordered draining to reach a failed worker.
+                        self.query_error = Some("Diff search failed: worker input closed".into());
+                        return Ok(false);
                     }
                 }
             }
@@ -1007,7 +1020,11 @@ impl Session {
             .unwrap_or(self.scanned..self.entries.len());
         if !self.query.is_empty() && !scan.is_empty() {
             // Small batches feed every worker before the global candidate cap.
-            let chunk = if self.paths.is_some() { 64 } else { 1000 };
+            let chunk = if self.parsed.contents.is_some() {
+                64
+            } else {
+                1000
+            };
             let end = (scan.start + chunk).min(scan.end);
             for index in scan.start..end {
                 let commit = &self.entries[index].commit;
@@ -2010,6 +2027,38 @@ mod tests {
             assert_eq!(session.visible_count(), expected, "{query}");
             assert!(session.candidates.is_empty());
         }
+    }
+
+    #[test]
+    fn failed_pool_input_does_not_wait_for_an_earlier_buffered_worker() {
+        let fixture = Fixture::new();
+        fixture.commit("needle");
+        let mut request = request(&fixture);
+        request.query = "contents:needle".into();
+        let mut session = Session::open(&request, Cancellation::default()).unwrap();
+        session.step(&request).unwrap();
+        session.paths = DiffSearch::start_with_workers(&session.repository, &session.parsed, 2);
+        let paths = session.paths.as_mut().unwrap();
+        // The earlier worker cannot finish this candidate until more input or EOF.
+        assert!(
+            !session.path_pending.is_empty(),
+            "expected pending candidate"
+        );
+        paths.try_send(session.path_pending.clone()).unwrap();
+        paths.workers[1].cancel.store(true, Ordering::Release);
+        paths.workers[1].worker.take().unwrap().join().unwrap();
+        assert!(matches!(
+            paths.try_send(session.path_pending.clone()),
+            Err(TrySendError::Disconnected(_))
+        ));
+        assert!(!session.step(&request).unwrap());
+        assert!(
+            session
+                .query_error
+                .as_ref()
+                .unwrap()
+                .contains("worker input closed")
+        );
     }
 
     #[test]
