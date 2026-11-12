@@ -72,5 +72,10 @@ when you know them to reduce the commits whose diffs need searching. A `path:`
 filter narrows results but currently does not skip generating unrelated
 candidate diffs.
 
-See [content search performance](contents-search-performance.md) for worker-pool
-configuration and reproducible measurements.
+The Git workers setting in Preferences, or `--git-workers N`, controls both
+history object readers and content-search workers (1-8, default 4). Path-only
+searches use one diff worker. Content-search candidates and results are bounded
+and processed in history order; changing the setting restarts history loading.
+
+See [content search performance](contents-search-performance.md) for
+architecture and measurements.

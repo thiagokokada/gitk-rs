@@ -1,7 +1,7 @@
 //! Saved application defaults, separate from repository/history data.
 use crate::{
     cli::{Config, Theme},
-    git::MAX_HISTORY_READERS,
+    git::MAX_GIT_WORKERS,
     graph::MAX_GRAPH_LANES,
 };
 use anyhow::{Context, Result, ensure};
@@ -20,7 +20,7 @@ pub struct Preferences {
     pub theme: Theme,
     pub batch: Option<usize>,
     pub graph_columns: usize,
-    pub history_readers: usize,
+    pub git_workers: usize,
     pub text_graph: bool,
     pub syntax: bool,
     pub watch: bool,
@@ -35,7 +35,7 @@ impl Default for Preferences {
             theme: config.theme,
             batch: config.batch,
             graph_columns: config.graph_columns,
-            history_readers: config.history_readers,
+            git_workers: config.git_workers,
             text_graph: config.text_graph,
             syntax: config.syntax,
             watch: config.watch,
@@ -48,7 +48,7 @@ impl Preferences {
             theme: config.theme,
             batch: config.batch,
             graph_columns: config.graph_columns,
-            history_readers: config.history_readers,
+            git_workers: config.git_workers,
             text_graph: config.text_graph,
             syntax: config.syntax,
             watch: config.watch,
@@ -69,8 +69,8 @@ impl Preferences {
             "graph columns must be between 1 and {MAX_GRAPH_LANES}"
         );
         ensure!(
-            (1..=MAX_HISTORY_READERS).contains(&self.history_readers),
-            "history readers must be between 1 and {MAX_HISTORY_READERS}"
+            (1..=MAX_GIT_WORKERS).contains(&self.git_workers),
+            "Git workers must be between 1 and {MAX_GIT_WORKERS}"
         );
         ensure!(
             (8.0..=24.0).contains(&self.font_size),
@@ -186,7 +186,7 @@ mod tests {
             theme: Theme::Light,
             batch: Some(73),
             graph_columns: 1024,
-            history_readers: 8,
+            git_workers: 8,
             text_graph: true,
             syntax: false,
             watch: false,
@@ -214,9 +214,9 @@ mod tests {
             b"font_size = 'large'",
             b"ui_font = ''",
             b"batch = 0",
-            b"history_readers = 0",
-            b"history_readers = 65",
-            b"history_readers = -1",
+            b"git_workers = 0",
+            b"git_workers = 9",
+            b"git_workers = -1",
             b"batch = -1",
             b"graph_columns = 0",
             b"graph_columns = 1025",

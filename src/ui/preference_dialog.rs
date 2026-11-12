@@ -97,17 +97,14 @@ impl HistoryWindow {
                             .size_full(),
                     ),
             )
-            .child(format!(
-                "Git object readers (1-{})",
-                gitk_rs::git::MAX_HISTORY_READERS
-            ))
+            .child(format!("Git workers (1-{})", gitk_rs::git::MAX_GIT_WORKERS))
             .child(
                 div()
-                    .id("history-readers-input")
+                    .id("git-workers-input")
                     .test_support()
                     .h_8()
                     .flex_shrink_0()
-                    .child(Input::new(&self.history_readers_input).size_full()),
+                    .child(Input::new(&self.git_workers_input).size_full()),
             )
             .child(format!("Logical graph columns (1–{MAX_GRAPH_LANES})"))
             .child(
@@ -151,12 +148,7 @@ impl HistoryWindow {
                 .value()
                 .parse()
                 .unwrap_or(f32::NAN),
-            history_readers: self
-                .history_readers_input
-                .read(cx)
-                .value()
-                .parse()
-                .unwrap_or(0),
+            git_workers: self.git_workers_input.read(cx).value().parse().unwrap_or(0),
             graph_columns: self
                 .graph_columns_input
                 .read(cx)
@@ -207,8 +199,8 @@ impl HistoryWindow {
         self.graph_columns_input.update(cx, |input, cx| {
             input.set_value(self.config.graph_columns.to_string(), window, cx)
         });
-        self.history_readers_input.update(cx, |input, cx| {
-            input.set_value(self.config.history_readers.to_string(), window, cx)
+        self.git_workers_input.update(cx, |input, cx| {
+            input.set_value(self.config.git_workers.to_string(), window, cx)
         });
         self.batch_input.update(cx, |input, cx| {
             input.set_value(self.config.batch.unwrap_or(1000).to_string(), window, cx)

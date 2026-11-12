@@ -592,7 +592,7 @@ impl HistoryWindow {
         self.config.apply_preferences(&preferences);
         self.request.batch = self.config.batch;
         self.request.source.graph_columns = self.config.graph_columns;
-        self.request.source.history_readers = self.config.history_readers;
+        self.request.source.git_workers = self.config.git_workers;
         if previous.watch != self.config.watch {
             self.workspace_generation.0 += 1;
             self.refresh_workspace();

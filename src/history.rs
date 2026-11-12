@@ -33,7 +33,7 @@ pub struct ReloadGeneration(pub u64);
 pub struct HistorySource {
     pub repository: PathBuf,
     pub graph_columns: usize,
-    pub history_readers: usize,
+    pub git_workers: usize,
     pub reload_generation: ReloadGeneration,
 }
 
@@ -360,17 +360,12 @@ struct DiffSearch {
 }
 
 impl DiffSearch {
-    fn start(repository: &Repository, query: &CompiledQuery) -> Option<Self> {
-        let count = if query.contents.is_some() {
-            std::env::var("GITK_SEARCH_WORKERS")
-                .ok()
-                .and_then(|value| value.parse::<usize>().ok())
-                .filter(|count| (1..=8).contains(count))
-                .unwrap_or(4)
-        } else {
-            1
-        };
-        Self::start_with_workers(repository, query, count)
+    fn start(repository: &Repository, query: &CompiledQuery, workers: usize) -> Option<Self> {
+        Self::start_with_workers(
+            repository,
+            query,
+            if query.contents.is_some() { workers } else { 1 },
+        )
     }
 
     fn start_with_workers(
@@ -703,6 +698,7 @@ struct PrefixSearch {
 
 struct Session {
     repository: Repository,
+    git_workers: usize,
     stream: Option<CommitStream>,
     cancellation: Cancellation,
     entries: Vec<Arc<Entry>>,
@@ -736,13 +732,12 @@ impl Session {
         let stream = repository
             .head
             .as_ref()
-            .map(|_| {
-                repository.log_with_readers(cancellation.clone(), request.source.history_readers)
-            })
+            .map(|_| repository.log_with_readers(cancellation.clone(), request.source.git_workers))
             .transpose()?;
         let eof = stream.is_none();
         Ok(Self {
             repository,
+            git_workers: request.source.git_workers,
             stream,
             cancellation,
             entries: Vec::new(),
@@ -808,7 +803,7 @@ impl Session {
             }
             self.reload = Some(LinearReload {
                 stream: repository
-                    .log_with_readers(self.cancellation.clone(), request.source.history_readers)?,
+                    .log_with_readers(self.cancellation.clone(), request.source.git_workers)?,
                 repository,
                 old_head,
                 expected,
@@ -866,7 +861,7 @@ impl Session {
             // This avoids both a delta-sized candidate queue and repeated
             // insertion of prefix matches at the front of a large suffix.
             self.paths = None;
-            self.paths = DiffSearch::start(&self.repository, &self.parsed);
+            self.paths = DiffSearch::start(&self.repository, &self.parsed, self.git_workers);
             let mut suffix_candidates: Vec<_> = self.candidates.drain().collect();
             suffix_candidates.sort_unstable_by_key(|(_, ordinal)| *ordinal);
             self.path_pending.clear();
@@ -936,7 +931,7 @@ impl Session {
                 .and_then(|query| query.compile(request.regex))
             {
                 Ok(parsed) => {
-                    self.paths = DiffSearch::start(&self.repository, &parsed);
+                    self.paths = DiffSearch::start(&self.repository, &parsed, self.git_workers);
                     self.parsed = parsed;
                 }
                 Err(error) => self.query_error = Some(error.to_string()),
@@ -1027,7 +1022,7 @@ impl Session {
             }
             let mut prefix = self.prefix_search.take().unwrap();
             self.paths = None;
-            self.paths = DiffSearch::start(&self.repository, &self.parsed);
+            self.paths = DiffSearch::start(&self.repository, &self.parsed, self.git_workers);
             self.matches.append(&mut prefix.suffix_matches);
             for (id, ordinal) in prefix.suffix_candidates {
                 self.path_pending.push(id.clone());
@@ -1095,7 +1090,8 @@ impl Session {
         if !self.eof && visible < needed {
             if let Some(paths) = &self.paths {
                 if paths.done {
-                    self.paths = DiffSearch::start(&self.repository, &self.parsed);
+                    self.paths =
+                        DiffSearch::start(&self.repository, &self.parsed, self.git_workers);
                 } else if paths.closed {
                     if !progressed {
                         thread::sleep(Duration::from_millis(5));
@@ -1345,7 +1341,7 @@ mod tests {
             source: HistorySource {
                 repository: fixture.root().to_owned(),
                 graph_columns: crate::graph::DEFAULT_GRAPH_LANES,
-                history_readers: crate::git::DEFAULT_HISTORY_READERS,
+                git_workers: crate::git::DEFAULT_GIT_WORKERS,
                 reload_generation: ReloadGeneration::default(),
             },
             generation: Generation(1),
@@ -1788,15 +1784,15 @@ mod tests {
             .unwrap();
         assert!(count > 64);
         let readers: usize = std::env::var("GITK_PROFILE_READERS")
-            .unwrap_or_else(|_| crate::git::DEFAULT_HISTORY_READERS.to_string())
+            .unwrap_or_else(|_| crate::git::DEFAULT_GIT_WORKERS.to_string())
             .parse()
             .unwrap();
-        assert!((1..=crate::git::MAX_HISTORY_READERS).contains(&readers));
+        assert!((1..=crate::git::MAX_GIT_WORKERS).contains(&readers));
         let request = Request {
             source: HistorySource {
                 repository: repository.into(),
                 graph_columns: crate::graph::DEFAULT_GRAPH_LANES,
-                history_readers: readers,
+                git_workers: readers,
                 reload_generation: ReloadGeneration::default(),
             },
             generation: Generation(1),
@@ -1838,7 +1834,7 @@ mod tests {
             + session.strings.capacity() * (size_of::<Arc<str>>() + 1);
         eprintln!(
             "history_probe readers={} graph_lanes={} loaded={} eof={} elapsed_ms={} records_bytes={records} metadata_bytes={metadata} messages_bytes={messages} graph_bytes={graph} index_bytes={index} accounted_bytes={}",
-            request.source.history_readers,
+            request.source.git_workers,
             request.source.graph_columns,
             session.entries.len(),
             session.eof,
@@ -2057,10 +2053,10 @@ mod tests {
             request.query = "contents:[0-9]".into();
             request.regex = true;
             request.batch = None;
+            request.source.git_workers = count;
             let mut session = Session::open(&request, Cancellation::default()).unwrap();
             session.step(&request).unwrap();
-            session.paths =
-                DiffSearch::start_with_workers(&session.repository, &session.parsed, count);
+            assert_eq!(session.paths.as_ref().unwrap().workers.len(), count);
             let deadline = Instant::now() + Duration::from_secs(30);
             while session.step(&request).unwrap() {
                 assert!(
@@ -2347,7 +2343,7 @@ mod tests {
             source: HistorySource {
                 repository: repository.into(),
                 graph_columns: crate::graph::DEFAULT_GRAPH_LANES,
-                history_readers: crate::git::DEFAULT_HISTORY_READERS,
+                git_workers: crate::git::DEFAULT_GIT_WORKERS,
                 reload_generation: ReloadGeneration::default(),
             },
             generation: Generation(1),
@@ -2360,9 +2356,6 @@ mod tests {
             anchor: None,
             restore: None,
         };
-        let limit = std::env::var("GITK_SEARCH_COMMITS")
-            .ok()
-            .map(|v| v.parse::<usize>().unwrap());
         let start = Instant::now();
         let mut session = Session::open(&request, Cancellation::default()).unwrap();
         eprintln!(
@@ -2374,10 +2367,6 @@ mod tests {
         );
         let mut first = false;
         while session.step(&request).unwrap() {
-            if limit.is_some_and(|limit| session.entries.len() >= limit) {
-                session.stream.take();
-                session.eof = true;
-            }
             assert!(session.query_error.is_none(), "{:?}", session.query_error);
             if !first && session.visible_count() > 0 {
                 eprintln!(
@@ -2401,17 +2390,6 @@ mod tests {
         );
         #[cfg(target_os = "linux")]
         report_search_rss("complete", session.entries.len());
-        if let Ok(output) = std::env::var("GITK_SEARCH_RESULTS") {
-            std::fs::write(
-                output,
-                session
-                    .matches
-                    .iter()
-                    .map(|i| session.entries[*i].commit.id.to_hex() + "\n")
-                    .collect::<String>(),
-            )
-            .unwrap();
-        }
         if let Ok(query) = std::env::var("GITK_SEARCH_REFINE") {
             request.query = query;
             let start = Instant::now();

@@ -75,7 +75,7 @@ milestone without waiting for confirmation. Stop only when user input is actuall
 - `GITK_PROFILE_REPOSITORY`: required repository path; the probe only reads it.
 - `GITK_PROFILE_COMMITS`: prefetch target, defaults to 100000; must be an integer
   greater than 64 that fits usize. Stops earlier if Git reaches EOF.
-- `GITK_PROFILE_READERS`: reader count, defaults to 2; integer from 1 to 64.
+- `GITK_PROFILE_READERS`: reader count, defaults to 4; integer from 1 to 8.
 - Run explicitly; this test is ignored by ordinary test runs:
 
 ```sh
