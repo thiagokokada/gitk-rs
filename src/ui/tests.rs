@@ -2943,3 +2943,63 @@ fn regex_toggle_refilters_reports_errors_and_restores_saved_state(cx: &mut TestA
     }
     assert!(!options::load_state_from(&path).unwrap().search.regex);
 }
+
+#[gpui_kit::test]
+fn committing_selected_staged_changes_selects_the_new_head(cx: &mut TestAppContext) {
+    committing_selected_local_changes_selects_the_new_head(true, cx);
+}
+
+#[gpui_kit::test]
+fn committing_selected_unstaged_changes_selects_the_new_head(cx: &mut TestAppContext) {
+    committing_selected_local_changes_selects_the_new_head(false, cx);
+}
+
+fn committing_selected_local_changes_selects_the_new_head(staged: bool, cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    fixture.commit("base");
+    fixture.append_history(40, false, "candidate");
+    std::fs::write(fixture.root().join("file.txt"), "edited\n").unwrap();
+    if staged {
+        fixture.git(&["add", "--", "file.txt"]);
+    }
+    let (app, cx) = open(&fixture, cx);
+    let kind = if staged {
+        LocalChangeKind::Staged
+    } else {
+        LocalChangeKind::Unstaged
+    };
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            let view = app.view.read(cx);
+            view.history_state.local_rows.contains(&kind)
+                && view.history_state.snapshot.as_ref().is_some_and(|s| s.eof)
+        })
+    });
+    cx.simulate_keystrokes("home");
+    assert_eq!(
+        cx.update(|_, cx| app.view.read(cx).history_state.local_selection),
+        Some(kind)
+    );
+    app.view.update(cx, |view, cx| {
+        view.scroll.scroll_to_item_strict(10, ScrollStrategy::Top);
+        cx.notify();
+    });
+    until(cx, |cx| {
+        cx.update(|_, cx| app.view.read(cx).history_state.viewport.start == 10)
+    });
+    fixture.git(&["commit", "--quiet", "-am", "new tip"]);
+    let head = fixture.git(&["rev-parse", "HEAD"]);
+    app.view.update(cx, |view, _| view.refresh_workspace());
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            let view = app.view.read(cx);
+            view.history_state
+                .selected
+                .as_ref()
+                .is_some_and(|(index, entry)| *index == 0 && entry.commit.id.to_hex() == head)
+                && view.history_state.viewport.start == 0
+                && view.history_state.local_rows.is_empty()
+                && view.diff.read(cx).has_loaded_selection()
+        })
+    });
+}

@@ -597,7 +597,7 @@ impl HistoryWindow {
         if let Some(top) = update.top {
             self.scroll.scroll_to_item_strict(top, ScrollStrategy::Top);
         }
-        if head_changed {
+        if head_changed || update.reload {
             self.reload(cx);
         } else if refs_changed {
             self.history_state.request.refs_revision += 1;
@@ -710,6 +710,9 @@ impl HistoryWindow {
         }
         self.detail = "Loading commits…".into();
         self.history.request(update.request);
+        if let Some(top) = update.top {
+            self.scroll.scroll_to_item_strict(top, ScrollStrategy::Top);
+        }
         self.refresh_workspace();
         cx.notify();
     }

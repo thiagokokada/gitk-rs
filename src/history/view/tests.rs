@@ -387,3 +387,112 @@ fn explicit_selection_updates_reload_bookmarks_and_repository_reset_drops_them()
     assert_eq!(state.pending_selection, Some(0));
     assert!(state.snapshot.is_none());
 }
+
+#[test]
+fn committing_local_changes_follows_the_new_first_commit_after_a_delayed_head_refresh() {
+    for staged in [false, true] {
+        let mut state = loaded();
+        state.update_local_rows(&LocalStatus {
+            staged,
+            unstaged: !staged,
+            ..Default::default()
+        });
+        state.select_row(0).unwrap();
+        state.viewport = 6..11;
+        let old_head = state.cached(1).unwrap().commit.id.clone();
+        assert!(state.update_local_rows(&LocalStatus::default()).reload);
+        let reload = state.reload(PathBuf::from("repository"), false);
+        assert!(reload.request.restore.is_none());
+        assert_eq!(reload.top, Some(0));
+        assert_eq!(state.viewport, 0..5);
+        // Status can finish before HEAD changes. The first reload may still
+        // contain the old HEAD; the next HEAD refresh must not bookmark it.
+        let snapshot = page(&state, 0, 10, 10);
+        state.consume_snapshot(snapshot).unwrap();
+        assert_eq!(state.selected.as_ref().unwrap().1.commit.id, old_head);
+        let reload = state.reload(PathBuf::from("repository"), false);
+        assert!(reload.request.restore.is_none());
+        assert_eq!(reload.request.range.start, 0);
+        let mut snapshot = page(&state, 0, 11, 11);
+        let new_head = CommitId::parse(&"f".repeat(40)).unwrap();
+        Arc::make_mut(&mut snapshot.rows[0]).commit.id = new_head.clone();
+        state.consume_snapshot(snapshot).unwrap();
+        let selected = state.selected.as_ref().unwrap();
+        assert_eq!(selected.0, 0);
+        assert_eq!(selected.1.commit.id, new_head);
+    }
+}
+
+#[test]
+fn a_local_row_disappearing_during_head_restoration_replaces_the_old_bookmarks() {
+    let mut state = loaded();
+    state.update_local_rows(&LocalStatus {
+        staged: true,
+        ..Default::default()
+    });
+    state.select_row(0).unwrap();
+    state.viewport = 6..11;
+    state.reload(PathBuf::from("repository"), false);
+    assert!(state.request.restore.is_some());
+    let obsolete = page(&state, 5, 5, 11);
+    assert!(state.update_local_rows(&LocalStatus::default()).reload);
+    let reload = state.reload(PathBuf::from("repository"), false);
+    assert!(reload.request.restore.is_none());
+    assert_eq!(reload.top, Some(0));
+    assert!(state.consume_snapshot(obsolete).is_none());
+    let snapshot = page(&state, 0, 11, 11);
+    let head = snapshot.rows[0].commit.id.clone();
+    state.consume_snapshot(snapshot).unwrap();
+    assert_eq!(state.selected.as_ref().unwrap().1.commit.id, head);
+}
+
+#[test]
+fn explicitly_selecting_a_commit_stops_following_the_top_after_local_changes_disappear() {
+    let mut state = loaded();
+    state.update_local_rows(&LocalStatus {
+        unstaged: true,
+        ..Default::default()
+    });
+    state.select_row(0).unwrap();
+    state.update_local_rows(&LocalStatus::default());
+    state.reload(PathBuf::from("repository"), false);
+    let snapshot = page(&state, 0, 11, 11);
+    state.consume_snapshot(snapshot).unwrap();
+    state.select_row(4).unwrap();
+    state.viewport = 6..11;
+    let selected = state.cached(4).unwrap().commit.id.clone();
+    let top = state.cached(6).unwrap().commit.id.clone();
+    let reload = state.reload(PathBuf::from("repository"), false);
+    assert_eq!(reload.top, None);
+    assert_eq!(
+        reload.request.restore.unwrap(),
+        Restore {
+            selected: Some(selected),
+            top: Some(top)
+        }
+    );
+}
+
+#[test]
+fn committing_the_first_staged_changes_does_not_select_a_remaining_local_row() {
+    let mut state = state();
+    let snapshot = page(&state, 0, 0, 0);
+    state.consume_snapshot(snapshot).unwrap();
+    state.update_local_rows(&LocalStatus {
+        staged: true,
+        unstaged: true,
+        ..Default::default()
+    });
+    state.select_row(1).unwrap();
+    let update = state.update_local_rows(&LocalStatus {
+        unstaged: true,
+        ..Default::default()
+    });
+    assert!(update.reload);
+    assert!(state.local_selection.is_none());
+    state.reload(PathBuf::from("repository"), false);
+    let snapshot = page(&state, 0, 1, 1);
+    state.consume_snapshot(snapshot).unwrap();
+    assert_eq!(state.selected.as_ref().unwrap().0, 1);
+    assert!(state.local_selection.is_none());
+}

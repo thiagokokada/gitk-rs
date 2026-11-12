@@ -41,12 +41,14 @@ pub struct SnapshotUpdate {
 pub struct LocalRowsUpdate {
     pub selection: Option<Selection>,
     pub top: Option<usize>,
+    pub reload: bool,
 }
 
 pub struct ReloadUpdate {
     pub clear_diff: bool,
     pub selection: Option<Selection>,
     pub request: Request,
+    pub top: Option<usize>,
 }
 
 pub struct HistoryViewState {
@@ -59,6 +61,9 @@ pub struct HistoryViewState {
     pub reload_selection: Option<CommitId>,
     pub preserve_filter_selection: bool,
     pub viewport: Range<usize>,
+    // A vanished local row should lead to the newest commit, not bookmark the
+    // old HEAD while status and history are being reconciled independently.
+    follow_history_top: bool,
 }
 
 impl HistoryViewState {
@@ -73,6 +78,7 @@ impl HistoryViewState {
             reload_selection: None,
             preserve_filter_selection: false,
             viewport: 0..10,
+            follow_history_top: false,
         }
     }
 
@@ -83,6 +89,7 @@ impl HistoryViewState {
     }
 
     pub fn begin_filter(&mut self, query: String) {
+        self.follow_history_top = false;
         self.request.query = query;
         self.request.range = 0..128;
         self.pending_selection = None;
@@ -190,21 +197,20 @@ impl HistoryViewState {
             top
         });
         let mut selection = None;
+        let mut reload = false;
         if let Some(kind) = self.local_selection {
             if self.local_rows.contains(&kind) {
                 selection = Some(Selection::Local(kind));
             } else {
                 self.local_selection = None;
-                let index = self.local_rows.len();
-                if let Some(entry) = self.cached(index) {
-                    self.select_commit(index, entry.clone());
-                    selection = Some(Selection::Commit(entry));
-                } else {
-                    self.pending_selection = Some(index);
-                }
+                self.selected = None;
+                self.pending_selection = Some(self.local_rows.len());
+                self.follow_history_top = true;
+                reload = true;
             }
         }
-        if self.snapshot.as_ref().is_some_and(|s| s.visible == 0)
+        if !reload
+            && self.snapshot.as_ref().is_some_and(|s| s.visible == 0)
             && self.selected.is_none()
             && self.local_selection.is_none()
             && let Some(&kind) = self.local_rows.first()
@@ -212,7 +218,11 @@ impl HistoryViewState {
             self.select_local(kind);
             selection = Some(Selection::Local(kind));
         }
-        LocalRowsUpdate { selection, top }
+        LocalRowsUpdate {
+            selection,
+            top,
+            reload,
+        }
     }
 
     fn select_local(&mut self, kind: LocalChangeKind) {
@@ -232,6 +242,7 @@ impl HistoryViewState {
         if index >= count {
             return None;
         }
+        self.follow_history_top = false;
         if let Some(&kind) = self.local_rows.get(index) {
             self.select_local(kind);
             Some(RowSelection::Ready(Selection::Local(kind)))
@@ -325,6 +336,14 @@ impl HistoryViewState {
     }
 
     pub fn reload(&mut self, repository: PathBuf, force: bool) -> ReloadUpdate {
+        let scroll_top = (self.follow_history_top && self.local_selection.is_none()).then(|| {
+            self.selected = None;
+            self.snapshot = None;
+            self.request.restore = None;
+            self.reload_selection = None;
+            self.set_top(0);
+            0
+        });
         if force {
             self.request.source.reload_generation.0 += 1;
         }
@@ -375,10 +394,12 @@ impl HistoryViewState {
             clear_diff,
             selection,
             request,
+            top: scroll_top,
         }
     }
 
     pub fn reset_repository(&mut self) {
+        self.follow_history_top = false;
         self.local_rows.clear();
         self.selected = None;
         self.local_selection = None;
