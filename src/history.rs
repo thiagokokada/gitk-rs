@@ -1,5 +1,7 @@
 //! Loaded entries live once in memory. The GUI receives only nearby Arc
 //! references; neither history nor filter results persist on disk.
+pub mod view;
+
 use crate::{
     git::{Cancellation, Commit, CommitId, CommitStream, GitStream, Repository, run_bytes},
     graph::{GraphBuilder, GraphRow},

@@ -48,6 +48,14 @@ Selection and the top visible commit are bookmarked by commit ID, then restored
 against the reconciled history. Generation and request IDs reject obsolete
 snapshots even when a Git stream survives a UI reload.
 
+`history::view::HistoryViewState` owns the displayed page, selection, pending
+selection, local rows, viewport, and reload bookmarks. Its transitions accept
+worker snapshots and return diff-selection, scroll, and history-request effects
+without invoking Git or GPUI. Bookmark indices are updated before the window
+applies deferred scrolling, so consecutive reloads use the reconciled viewport.
+The window retains focus handling, graph painting, and execution of those
+effects.
+
 A reload that supersedes unfinished prefix filtering restarts the search over
 retained commits. Changing the query also replaces unfinished search work.
 

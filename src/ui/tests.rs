@@ -145,6 +145,7 @@ pub(super) fn until(
 pub(super) fn selected(view: &Entity<HistoryWindow>, cx: &mut VisualTestContext) -> Option<String> {
     cx.update(|_, cx| {
         view.read(cx)
+            .history_state
             .selected
             .as_ref()
             .map(|(_, entry)| entry.commit.id.to_hex())
@@ -214,10 +215,24 @@ fn default_streaming_loads_history_and_keeps_navigation_and_search_working(
     let tip = fixture.git(&["rev-parse", "HEAD"]);
     let (app, cx) = open_with_batch(&fixture, Config::default().batch, cx);
     until(cx, |cx| {
-        cx.update(|_, cx| app.view.read(cx).snapshot.as_ref().is_some_and(|s| s.eof))
+        cx.update(|_, cx| {
+            app.view
+                .read(cx)
+                .history_state
+                .snapshot
+                .as_ref()
+                .is_some_and(|s| s.eof)
+        })
     });
     assert_eq!(
-        cx.update(|_, cx| app.view.read(cx).snapshot.as_ref().unwrap().loaded),
+        cx.update(|_, cx| app
+            .view
+            .read(cx)
+            .history_state
+            .snapshot
+            .as_ref()
+            .unwrap()
+            .loaded),
         2500
     );
     assert_eq!(selected(&app.view, cx).as_deref(), Some(tip.as_str()));
@@ -231,6 +246,7 @@ fn default_streaming_loads_history_and_keeps_navigation_and_search_working(
         cx.update(|_, cx| {
             app.view
                 .read(cx)
+                .history_state
                 .snapshot
                 .as_ref()
                 .is_some_and(|s| s.visible == 1 && s.rows[0].commit.summary() == "commit 1234")
@@ -246,6 +262,7 @@ fn history_pages_settle_after_scrolling_beyond_the_first_page(cx: &mut TestAppCo
         cx.update(|_, cx| {
             app.view
                 .read(cx)
+                .history_state
                 .snapshot
                 .as_ref()
                 .is_some_and(|s| s.loaded == 1000)
@@ -258,7 +275,7 @@ fn history_pages_settle_after_scrolling_beyond_the_first_page(cx: &mut TestAppCo
         gpui_kit::Modifiers::default(),
     );
     until(cx, |cx| {
-        cx.update(|_, cx| app.view.read(cx).viewport.start > 500)
+        cx.update(|_, cx| app.view.read(cx).history_state.viewport.start > 500)
     });
     for index in [800, 1600, 100] {
         app.view.update(cx, |view, cx| {
@@ -269,22 +286,25 @@ fn history_pages_settle_after_scrolling_beyond_the_first_page(cx: &mut TestAppCo
         until(cx, |cx| {
             cx.update(|_, cx| {
                 let view = app.view.read(cx);
-                view.viewport.contains(&index)
-                    && view.snapshot.as_ref().is_some_and(|s| {
-                        s.request_id == view.request.id
-                            && s.start <= view.viewport.start
-                            && s.start + s.rows.len() >= view.viewport.end
+                view.history_state.viewport.contains(&index)
+                    && view.history_state.snapshot.as_ref().is_some_and(|s| {
+                        s.request_id == view.history_state.request.id
+                            && s.start <= view.history_state.viewport.start
+                            && s.start + s.rows.len() >= view.history_state.viewport.end
                     })
             })
         });
-        let request = cx.update(|_, cx| app.view.read(cx).request.id);
+        let request = cx.update(|_, cx| app.view.read(cx).history_state.request.id);
         for _ in 0..12 {
             cx.background_executor
                 .advance_clock(Duration::from_millis(20));
             cx.run_until_parked();
             cx.refresh().unwrap();
             cx.run_until_parked();
-            assert_eq!(cx.update(|_, cx| app.view.read(cx).request.id), request);
+            assert_eq!(
+                cx.update(|_, cx| app.view.read(cx).history_state.request.id),
+                request
+            );
         }
     }
 }
@@ -294,29 +314,40 @@ fn unchanged_head_reload_retains_rows_and_selection(cx: &mut TestAppContext) {
     let fixture = history_fixture(20);
     let (app, cx) = open(&fixture, cx);
     until(cx, |cx| {
-        cx.update(|_, cx| app.view.read(cx).snapshot.as_ref().is_some_and(|s| s.eof))
+        cx.update(|_, cx| {
+            app.view
+                .read(cx)
+                .history_state
+                .snapshot
+                .as_ref()
+                .is_some_and(|s| s.eof)
+        })
     });
     app.view
         .update_in(cx, |view, window, cx| view.select(8, window, cx));
     let (before, generation) = cx.update(|_, cx| {
         let view = app.view.read(cx);
-        (view.cached(8).unwrap(), view.request.generation)
+        (
+            view.cached(8).unwrap(),
+            view.history_state.request.generation,
+        )
     });
     cx.simulate_keystrokes("f5");
     until(cx, |cx| {
         cx.update(|_, cx| {
             let view = app.view.read(cx);
-            view.snapshot
+            view.history_state
+                .snapshot
                 .as_ref()
                 .is_some_and(|s| s.generation != generation)
-                && view.reload_selection.is_none()
+                && view.history_state.reload_selection.is_none()
         })
     });
     cx.update(|_, cx| {
         let view = app.view.read(cx);
         assert!(Arc::ptr_eq(&before, &view.cached(8).unwrap()));
         assert_eq!(
-            view.selected.as_ref().unwrap().1.commit.id,
+            view.history_state.selected.as_ref().unwrap().1.commit.id,
             before.commit.id
         );
     });
@@ -327,7 +358,14 @@ fn shift_f5_rebuilds_history_and_diff_while_preserving_selection(cx: &mut TestAp
     let fixture = history_fixture(20);
     let (app, cx) = open(&fixture, cx);
     until(cx, |cx| {
-        cx.update(|_, cx| app.view.read(cx).snapshot.as_ref().is_some_and(|s| s.eof))
+        cx.update(|_, cx| {
+            app.view
+                .read(cx)
+                .history_state
+                .snapshot
+                .as_ref()
+                .is_some_and(|s| s.eof)
+        })
     });
     app.view
         .update_in(cx, |view, window, cx| view.select(8, window, cx));
@@ -335,7 +373,7 @@ fn shift_f5_rebuilds_history_and_diff_while_preserving_selection(cx: &mut TestAp
         let view = app.view.read(cx);
         (
             view.cached(8).unwrap(),
-            view.request.source.reload_generation,
+            view.history_state.request.source.reload_generation,
             view.diff.read(cx).selection_id(),
         )
     });
@@ -344,11 +382,13 @@ fn shift_f5_rebuilds_history_and_diff_while_preserving_selection(cx: &mut TestAp
     until(cx, |cx| {
         cx.update(|_, cx| {
             let view = app.view.read(cx);
-            view.snapshot
+            view.history_state
+                .snapshot
                 .as_ref()
                 .is_some_and(|s| s.source.reload_generation != reload && s.eof)
-                && view.reload_selection.is_none()
+                && view.history_state.reload_selection.is_none()
                 && view
+                    .history_state
                     .selected
                     .as_ref()
                     .is_some_and(|s| s.1.commit.id == before.commit.id)
@@ -359,7 +399,10 @@ fn shift_f5_rebuilds_history_and_diff_while_preserving_selection(cx: &mut TestAp
         let view = app.view.read(cx);
         assert!(!Arc::ptr_eq(&before, &view.cached(8).unwrap()));
         assert_ne!(view.diff.read(cx).selection_id(), diff_selection);
-        assert_eq!(view.request.source.reload_generation.0, reload.0 + 2);
+        assert_eq!(
+            view.history_state.request.source.reload_generation.0,
+            reload.0 + 2
+        );
     });
 }
 
@@ -375,18 +418,17 @@ fn force_reload_preserves_local_selection_and_refreshes_its_diff(cx: &mut TestAp
         cx.update(|_, cx| {
             app.view
                 .read(cx)
+                .history_state
                 .local_rows
                 .contains(&LocalChangeKind::Unstaged)
         })
     });
-    app.view.update(cx, |view, cx| {
-        view.select_local(LocalChangeKind::Unstaged, cx)
-    });
+    cx.simulate_keystrokes("home");
     until(cx, |cx| {
         cx.update(|_, cx| {
             let view = app.view.read(cx);
             view.diff.read(cx).has_loaded_selection()
-                && view.snapshot.as_ref().is_some_and(|s| s.eof)
+                && view.history_state.snapshot.as_ref().is_some_and(|s| s.eof)
         })
     });
     app.view.update(cx, |view, cx| {
@@ -394,20 +436,21 @@ fn force_reload_preserves_local_selection_and_refreshes_its_diff(cx: &mut TestAp
         cx.notify();
     });
     until(cx, |cx| {
-        cx.update(|_, cx| app.view.read(cx).viewport.start == 10)
+        cx.update(|_, cx| app.view.read(cx).history_state.viewport.start == 10)
     });
     let before = cx.update(|_, cx| app.view.read(cx).diff.read(cx).selection_id());
     cx.simulate_keystrokes("shift-f5");
     until(cx, |cx| {
         cx.update(|_, cx| {
             let view = app.view.read(cx);
-            view.snapshot.as_ref().is_some_and(|s| s.eof)
+            view.history_state.snapshot.as_ref().is_some_and(|s| s.eof)
                 && view.diff.read(cx).has_loaded_selection()
                 && view.diff.read(cx).selection_id() != before
         })
     });
     assert!(
-        cx.update(|_, cx| app.view.read(cx).local_selection == Some(LocalChangeKind::Unstaged))
+        cx.update(|_, cx| app.view.read(cx).history_state.local_selection
+            == Some(LocalChangeKind::Unstaged))
     );
 }
 
@@ -423,7 +466,7 @@ fn consecutive_reload_before_layout_preserves_the_restored_top_commit(cx: &mut T
         cx.notify();
     });
     until(cx, |cx| {
-        cx.update(|_, cx| app.view.read(cx).viewport.start == 50)
+        cx.update(|_, cx| app.view.read(cx).history_state.viewport.start == 50)
     });
     let top = cx.update(|_, cx| app.view.read(cx).cached(50).unwrap().commit.id.clone());
     fixture.append_history(600, false, "new tip");
@@ -434,7 +477,7 @@ fn consecutive_reload_before_layout_preserves_the_restored_top_commit(cx: &mut T
     loop {
         if app.view.update(cx, |view, cx| {
             view.consume_snapshot(cx);
-            view.request.restore.is_none()
+            view.history_state.request.restore.is_none()
         }) {
             break;
         }
@@ -443,7 +486,10 @@ fn consecutive_reload_before_layout_preserves_the_restored_top_commit(cx: &mut T
     }
     app.view.update(cx, |view, cx| {
         view.reload(cx);
-        assert_eq!(view.request.restore.as_ref().unwrap().top, Some(top));
+        assert_eq!(
+            view.history_state.request.restore.as_ref().unwrap().top,
+            Some(top)
+        );
     });
 }
 
@@ -455,6 +501,7 @@ fn deep_reload_keeps_selected_commit_and_top_visible_commit(cx: &mut TestAppCont
         cx.update(|_, cx| {
             app.view
                 .read(cx)
+                .history_state
                 .snapshot
                 .as_ref()
                 .is_some_and(|s| s.loaded >= 1000)
@@ -468,6 +515,7 @@ fn deep_reload_keeps_selected_commit_and_top_visible_commit(cx: &mut TestAppCont
         cx.update(|_, cx| {
             app.view
                 .read(cx)
+                .history_state
                 .snapshot
                 .as_ref()
                 .is_some_and(|s| s.loaded >= 2000)
@@ -486,6 +534,7 @@ fn deep_reload_keeps_selected_commit_and_top_visible_commit(cx: &mut TestAppCont
     let author = cx.update(|_, cx| {
         app.view
             .read(cx)
+            .history_state
             .selected
             .as_ref()
             .unwrap()
@@ -501,7 +550,8 @@ fn deep_reload_keeps_selected_commit_and_top_visible_commit(cx: &mut TestAppCont
     });
     until(cx, |cx| {
         cx.update(|_, cx| {
-            app.view.read(cx).viewport.start == 1800 && app.view.read(cx).cached(1800).is_some()
+            app.view.read(cx).history_state.viewport.start == 1800
+                && app.view.read(cx).cached(1800).is_some()
         })
     });
     let top = cx.update(|_, cx| app.view.read(cx).cached(1800).unwrap().commit.id.clone());
@@ -511,13 +561,14 @@ fn deep_reload_keeps_selected_commit_and_top_visible_commit(cx: &mut TestAppCont
     until(cx, |cx| {
         cx.update(|_, cx| {
             let view = app.view.read(cx);
-            view.reload_selection.is_none()
+            view.history_state.reload_selection.is_none()
                 && view
+                    .history_state
                     .snapshot
                     .as_ref()
-                    .is_some_and(|s| s.generation == view.request.generation)
+                    .is_some_and(|s| s.generation == view.history_state.request.generation)
                 && view
-                    .cached(view.viewport.start)
+                    .cached(view.history_state.viewport.start)
                     .is_some_and(|entry| entry.commit.id == top)
         })
     });
@@ -527,6 +578,7 @@ fn deep_reload_keeps_selected_commit_and_top_visible_commit(cx: &mut TestAppCont
             &author,
             &app.view
                 .read(cx)
+                .history_state
                 .selected
                 .as_ref()
                 .unwrap()
@@ -539,7 +591,7 @@ fn deep_reload_keeps_selected_commit_and_top_visible_commit(cx: &mut TestAppCont
     assert_eq!(
         cx.update(|_, cx| {
             let view = app.view.read(cx);
-            view.cached(view.viewport.start)
+            view.cached(view.history_state.viewport.start)
                 .map(|e| e.commit.id.clone())
         }),
         Some(top.clone())
@@ -557,11 +609,15 @@ fn deep_reload_keeps_selected_commit_and_top_visible_commit(cx: &mut TestAppCont
     until(cx, |cx| {
         cx.update(|_, cx| {
             let view = app.view.read(cx);
-            view.reload_selection.is_none()
+            view.history_state.reload_selection.is_none()
                 && view.workspace_snapshot.is_some()
-                && view.snapshot.as_ref().is_some_and(|s| s.branch == "side")
                 && view
-                    .cached(view.viewport.start)
+                    .history_state
+                    .snapshot
+                    .as_ref()
+                    .is_some_and(|s| s.branch == "side")
+                && view
+                    .cached(view.history_state.viewport.start)
                     .is_some_and(|entry| entry.commit.id == top)
         })
     });
@@ -569,15 +625,23 @@ fn deep_reload_keeps_selected_commit_and_top_visible_commit(cx: &mut TestAppCont
     assert_eq!(
         cx.update(|_, cx| {
             let view = app.view.read(cx);
-            view.cached(view.viewport.start).unwrap().commit.id.clone()
+            view.cached(view.history_state.viewport.start)
+                .unwrap()
+                .commit
+                .id
+                .clone()
         }),
         top
     );
     let top = cx.update(|_, cx| {
         let view = app.view.read(cx);
-        view.cached(view.viewport.start).unwrap().commit.id.clone()
+        view.cached(view.history_state.viewport.start)
+            .unwrap()
+            .commit
+            .id
+            .clone()
     });
-    let generation = cx.update(|_, cx| app.view.read(cx).request.generation);
+    let generation = cx.update(|_, cx| app.view.read(cx).history_state.request.generation);
     let revision = cx.update(|_, cx| {
         app.view
             .read(cx)
@@ -605,10 +669,10 @@ fn deep_reload_keeps_selected_commit_and_top_visible_commit(cx: &mut TestAppCont
     until(cx, |cx| {
         cx.update(|_, cx| {
             let view = app.view.read(cx);
-            view.request.generation != generation
-                && view.reload_selection.is_none()
+            view.history_state.request.generation != generation
+                && view.history_state.reload_selection.is_none()
                 && view
-                    .cached(view.viewport.start)
+                    .cached(view.history_state.viewport.start)
                     .is_some_and(|entry| entry.commit.id == top)
         })
     });
@@ -618,6 +682,7 @@ fn deep_reload_keeps_selected_commit_and_top_visible_commit(cx: &mut TestAppCont
             &author,
             &app.view
                 .read(cx)
+                .history_state
                 .selected
                 .as_ref()
                 .unwrap()
@@ -630,7 +695,11 @@ fn deep_reload_keeps_selected_commit_and_top_visible_commit(cx: &mut TestAppCont
     assert_eq!(
         cx.update(|_, cx| {
             let view = app.view.read(cx);
-            view.cached(view.viewport.start).unwrap().commit.id.clone()
+            view.cached(view.history_state.viewport.start)
+                .unwrap()
+                .commit
+                .id
+                .clone()
         }),
         top
     );
@@ -644,6 +713,7 @@ fn filtering_and_new_local_rows_preserve_commit_identity(cx: &mut TestAppContext
         cx.update(|_, cx| {
             app.view
                 .read(cx)
+                .history_state
                 .snapshot
                 .as_ref()
                 .is_some_and(|s| s.loaded >= 1000)
@@ -664,25 +734,37 @@ fn filtering_and_new_local_rows_preserve_commit_identity(cx: &mut TestAppContext
     until(cx, |cx| {
         cx.update(|_, cx| {
             let view = app.view.read(cx);
-            !view.preserve_filter_selection
-                && view.snapshot.as_ref().is_some_and(|s| s.visible < 200)
+            !view.history_state.preserve_filter_selection
+                && view
+                    .history_state
+                    .snapshot
+                    .as_ref()
+                    .is_some_and(|s| s.visible < 200)
         })
     });
     assert_eq!(selected(&app.view, cx).as_deref(), Some(chosen.as_str()));
     cx.simulate_keystrokes("escape");
     let top = cx.update(|_, cx| {
         let view = app.view.read(cx);
-        view.cached(view.viewport.start).unwrap().commit.id.clone()
+        view.cached(view.history_state.viewport.start)
+            .unwrap()
+            .commit
+            .id
+            .clone()
     });
     std::fs::write(fixture.root().join("untracked"), "local").unwrap();
     app.view.update(cx, |view, _| view.refresh_workspace());
     until(cx, |cx| {
-        cx.update(|_, cx| app.view.read(cx).local_rows.len() == 1)
+        cx.update(|_, cx| app.view.read(cx).history_state.local_rows.len() == 1)
     });
     assert_eq!(
         cx.update(|_, cx| {
             let view = app.view.read(cx);
-            view.cached(view.viewport.start).unwrap().commit.id.clone()
+            view.cached(view.history_state.viewport.start)
+                .unwrap()
+                .commit
+                .id
+                .clone()
         }),
         top
     );
@@ -690,9 +772,10 @@ fn filtering_and_new_local_rows_preserve_commit_identity(cx: &mut TestAppContext
     until(cx, |cx| {
         cx.update(|_, cx| {
             let view = app.view.read(cx);
-            view.request.query.is_empty()
-                && !view.preserve_filter_selection
+            view.history_state.request.query.is_empty()
+                && !view.history_state.preserve_filter_selection
                 && view
+                    .history_state
                     .selected
                     .as_ref()
                     .is_some_and(|s| view.cached(s.0).is_some())
@@ -701,7 +784,7 @@ fn filtering_and_new_local_rows_preserve_commit_identity(cx: &mut TestAppContext
     assert_eq!(selected(&app.view, cx).as_deref(), Some(chosen.as_str()));
     cx.update(|_, cx| {
         let view = app.view.read(cx);
-        let selected = view.selected.as_ref().unwrap();
+        let selected = view.history_state.selected.as_ref().unwrap();
         assert_eq!(selected.0, selected.1.ordinal + 1);
     });
 }
@@ -794,14 +877,14 @@ fn preferences_toggle_watching_and_refresh_history(cx: &mut TestAppContext) {
                 let view = app.view.read(cx);
                 view.config.watch == enabled
                     && !view.preferences_save_pending
-                    && view.reload_selection.is_none()
+                    && view.history_state.reload_selection.is_none()
             })
         });
         assert_eq!(selected(&app.view, cx).as_deref(), Some(head.as_str()));
         if enabled {
             std::fs::write(fixture.root().join("file.txt"), "changed").unwrap();
             until(cx, |cx| {
-                cx.update(|_, cx| !app.view.read(cx).local_rows.is_empty())
+                cx.update(|_, cx| !app.view.read(cx).history_state.local_rows.is_empty())
             });
         }
     }
@@ -822,6 +905,7 @@ fn keyboard_navigation_and_filter_focus(cx: &mut TestAppContext) {
         cx.update(|_, cx| {
             app.view
                 .read(cx)
+                .history_state
                 .snapshot
                 .as_ref()
                 .is_some_and(|s| s.visible == 1)
@@ -837,6 +921,7 @@ fn keyboard_navigation_and_filter_focus(cx: &mut TestAppContext) {
         cx.update(|_, cx| {
             app.view
                 .read(cx)
+                .history_state
                 .snapshot
                 .as_ref()
                 .is_some_and(|s| s.visible == 2)
@@ -858,8 +943,9 @@ fn navigation_excludes_loading_row_while_filtering(cx: &mut TestAppContext) {
     until(cx, |cx| {
         cx.update(|_, cx| {
             let view = app.view.read(cx);
-            view.request.query == "match"
+            view.history_state.request.query == "match"
                 && view
+                    .history_state
                     .snapshot
                     .as_ref()
                     .is_some_and(|s| s.visible == 3 && !s.filtering)
@@ -869,7 +955,7 @@ fn navigation_excludes_loading_row_while_filtering(cx: &mut TestAppContext) {
         app.view.update(cx, |view, cx| {
             // Hold a deterministic partial-search snapshot while exercising
             // input; worker polling uses a test-clock timer that stays paused.
-            let snapshot = view.snapshot.as_mut().unwrap();
+            let snapshot = view.history_state.snapshot.as_mut().unwrap();
             snapshot.eof = false;
             snapshot.filtering = true;
             view.select(2, window, cx);
@@ -877,7 +963,7 @@ fn navigation_excludes_loading_row_while_filtering(cx: &mut TestAppContext) {
     });
     cx.simulate_keystrokes("/ alt-j alt-j");
     assert_eq!(selected(&app.view, cx).as_deref(), Some(oldest.as_str()));
-    assert!(cx.update(|_, cx| app.view.read(cx).pending_selection.is_none()));
+    assert!(cx.update(|_, cx| app.view.read(cx).history_state.pending_selection.is_none()));
     cx.simulate_keystrokes("alt-k");
     assert_eq!(selected(&app.view, cx).as_deref(), Some(middle.as_str()));
     cx.simulate_keystrokes("alt-j");
@@ -893,7 +979,7 @@ fn navigation_excludes_loading_row_while_filtering(cx: &mut TestAppContext) {
     // Plain arrows share the same boundary, and both directions stay usable.
     cx.simulate_keystrokes("escape down down");
     assert_eq!(selected(&app.view, cx).as_deref(), Some(oldest.as_str()));
-    assert!(cx.update(|_, cx| app.view.read(cx).pending_selection.is_none()));
+    assert!(cx.update(|_, cx| app.view.read(cx).history_state.pending_selection.is_none()));
     cx.simulate_keystrokes("up");
     assert_eq!(selected(&app.view, cx).as_deref(), Some(middle.as_str()));
     cx.simulate_keystrokes("down");
@@ -901,18 +987,18 @@ fn navigation_excludes_loading_row_while_filtering(cx: &mut TestAppContext) {
     cx.update(|window, cx| {
         app.view.update(cx, |view, cx| {
             view.select(3, window, cx);
-            assert!(view.pending_selection.is_none());
-            let snapshot = view.snapshot.as_mut().unwrap();
+            assert!(view.history_state.pending_selection.is_none());
+            let snapshot = view.history_state.snapshot.as_mut().unwrap();
             snapshot.visible = 0;
             snapshot.rows.clear();
-            view.selected = None;
+            view.history_state.selected = None;
         });
     });
     // With no results yet, the loading indicator is the only row on screen.
     cx.simulate_keystrokes("alt-j alt-k down up home end");
     assert!(cx.update(|_, cx| {
         let view = app.view.read(cx);
-        view.pending_selection.is_none() && view.selected.is_none()
+        view.history_state.pending_selection.is_none() && view.history_state.selected.is_none()
     }));
 }
 
@@ -927,13 +1013,13 @@ fn enter_applies_pending_filter_and_returns_focus_to_history(cx: &mut TestAppCon
     cx.simulate_keystrokes("/");
     cx.simulate_input("needle");
     assert_eq!(
-        cx.update(|_, cx| app.view.read(cx).request.query.clone()),
+        cx.update(|_, cx| app.view.read(cx).history_state.request.query.clone()),
         ""
     );
     cx.simulate_keystrokes("enter");
     cx.update(|window, cx| {
         let view = app.view.read(cx);
-        assert_eq!(view.request.query, "needle");
+        assert_eq!(view.history_state.request.query, "needle");
         assert!(view.filter_task.is_none());
         assert!(view.focus.is_focused(window));
         assert!(!view.filter.read(cx).focus_handle(cx).is_focused(window));
@@ -941,11 +1027,14 @@ fn enter_applies_pending_filter_and_returns_focus_to_history(cx: &mut TestAppCon
     until(cx, |cx| {
         cx.update(|_, cx| {
             let view = app.view.read(cx);
-            view.snapshot.as_ref().is_some_and(|snapshot| {
-                snapshot.request_id == view.request.id
-                    && snapshot.visible == 2
-                    && !snapshot.filtering
-            })
+            view.history_state
+                .snapshot
+                .as_ref()
+                .is_some_and(|snapshot| {
+                    snapshot.request_id == view.history_state.request.id
+                        && snapshot.visible == 2
+                        && !snapshot.filtering
+                })
         })
     });
     cx.simulate_keystrokes("home j");
@@ -958,7 +1047,7 @@ fn enter_applies_pending_filter_and_returns_focus_to_history(cx: &mut TestAppCon
     cx.simulate_keystrokes("/ ctrl-a ctrl-k enter");
     cx.update(|window, cx| {
         let view = app.view.read(cx);
-        assert!(view.request.query.is_empty());
+        assert!(view.history_state.request.query.is_empty());
         assert!(view.filter_task.is_none());
         assert!(view.focus.is_focused(window));
     });
@@ -1014,8 +1103,11 @@ fn branch_protection_and_selected_ancestor_survive_switch(cx: &mut TestAppContex
         cx.update(|_, cx| {
             let v = app.view.read(cx);
             v.dialog.is_none()
-                && v.snapshot.as_ref().is_some_and(|s| s.branch == "side")
-                && v.reload_selection.is_none()
+                && v.history_state
+                    .snapshot
+                    .as_ref()
+                    .is_some_and(|s| s.branch == "side")
+                && v.history_state.reload_selection.is_none()
         })
     });
     assert_eq!(selected(&app.view, cx).as_deref(), Some(ancestor.as_str()));
@@ -1035,21 +1127,21 @@ fn end_of_history_notice_expires_without_changing_eof_or_repeating(cx: &mut Test
         cx.update(|_, cx| app.view.read(cx).status_text().contains("end of history"))
     });
     app.view.update(cx, |view, _| {
-        let original = view.snapshot.as_ref().unwrap().load_duration;
+        let original = view.history_state.snapshot.as_ref().unwrap().load_duration;
         for (duration, expected) in [
             (Duration::ZERO, "0.00"),
             (Duration::from_secs(2), "2.00"),
             (Duration::from_millis(12346), "12.35"),
         ] {
-            view.snapshot.as_mut().unwrap().load_duration = duration;
+            view.history_state.snapshot.as_mut().unwrap().load_duration = duration;
             assert!(
                 view.status_text()
                     .contains(&format!("end of history ({expected} s)"))
             );
         }
-        view.snapshot.as_mut().unwrap().load_duration = original;
+        view.history_state.snapshot.as_mut().unwrap().load_duration = original;
     });
-    let generation = cx.update(|_, cx| app.view.read(cx).request.generation);
+    let generation = cx.update(|_, cx| app.view.read(cx).history_state.request.generation);
     cx.background_executor.advance_clock(Duration::from_secs(2));
     cx.run_until_parked();
     cx.simulate_keystrokes("f5");
@@ -1066,7 +1158,7 @@ fn end_of_history_notice_expires_without_changing_eof_or_repeating(cx: &mut Test
     cx.background_executor.advance_clock(Duration::from_secs(3));
     cx.run_until_parked();
     app.view.update(cx, |view, _| {
-        assert!(view.snapshot.as_ref().unwrap().eof);
+        assert!(view.history_state.snapshot.as_ref().unwrap().eof);
         assert!(!view.status_text().contains("end of history"));
         assert!(!view.status_text().contains("more available"));
         view.submit();
@@ -1074,9 +1166,10 @@ fn end_of_history_notice_expires_without_changing_eof_or_repeating(cx: &mut Test
     until(cx, |cx| {
         cx.update(|_, cx| {
             let view = app.view.read(cx);
-            view.snapshot
+            view.history_state
+                .snapshot
                 .as_ref()
-                .is_some_and(|s| s.request_id == view.request.id)
+                .is_some_and(|s| s.request_id == view.history_state.request.id)
         })
     });
     assert!(cx.update(|_, cx| !app.view.read(cx).status_text().contains("end of history")));
@@ -1169,7 +1262,7 @@ fn workspace_changes_before_layout_preserve_the_top_commit(cx: &mut TestAppConte
         cx.notify();
     });
     until(cx, |cx| {
-        cx.update(|_, cx| app.view.read(cx).viewport.start == 50)
+        cx.update(|_, cx| app.view.read(cx).history_state.viewport.start == 50)
     });
     let top = cx.update(|_, cx| app.view.read(cx).cached(50).unwrap().commit.id.clone());
     let chosen = selected(&app.view, cx).unwrap();
@@ -1179,9 +1272,15 @@ fn workspace_changes_before_layout_preserve_the_top_commit(cx: &mut TestAppConte
     loop {
         if app.view.update(cx, |view, cx| {
             view.consume_workspace(cx);
-            if view.local_rows.len() == 1 {
+            if view.history_state.local_rows.len() == 1 {
                 // Assert before this update returns and GPUI can run layout.
-                assert_eq!(view.cached(view.viewport.start).unwrap().commit.id, top);
+                assert_eq!(
+                    view.cached(view.history_state.viewport.start)
+                        .unwrap()
+                        .commit
+                        .id,
+                    top
+                );
                 true
             } else {
                 false
@@ -1199,18 +1298,22 @@ fn workspace_changes_before_layout_preserve_the_top_commit(cx: &mut TestAppConte
     assert_eq!(
         cx.update(|_, cx| {
             let view = app.view.read(cx);
-            view.cached(view.viewport.start).unwrap().commit.id.clone()
+            view.cached(view.history_state.viewport.start)
+                .unwrap()
+                .commit
+                .id
+                .clone()
         }),
         top
     );
-    let generation = cx.update(|_, cx| app.view.read(cx).request.generation);
+    let generation = cx.update(|_, cx| app.view.read(cx).history_state.request.generation);
     fixture.commit("committed transient row");
     app.view.update(cx, |view, _| view.refresh_workspace());
     let deadline = Instant::now() + Duration::from_secs(15);
     loop {
         if app.view.update(cx, |view, cx| {
             view.consume_workspace(cx);
-            view.request.generation != generation
+            view.history_state.request.generation != generation
         }) {
             break;
         }
@@ -1223,9 +1326,9 @@ fn workspace_changes_before_layout_preserve_the_top_commit(cx: &mut TestAppConte
     until(cx, |cx| {
         cx.update(|_, cx| {
             let view = app.view.read(cx);
-            view.reload_selection.is_none()
+            view.history_state.reload_selection.is_none()
                 && view
-                    .cached(view.viewport.start)
+                    .cached(view.history_state.viewport.start)
                     .is_some_and(|entry| entry.commit.id == top)
         })
     });
@@ -1306,10 +1409,11 @@ fn command_aliases_copy_commits_and_page_history(cx: &mut TestAppContext) {
         cx.update(|_, cx| {
             app.view
                 .read(cx)
+                .history_state
                 .snapshot
                 .as_ref()
                 .is_some_and(|s| s.loaded == 300)
-                && app.view.read(cx).selected.is_some()
+                && app.view.read(cx).history_state.selected.is_some()
         })
     });
     for modifier in ["ctrl", "cmd"] {
@@ -1327,12 +1431,12 @@ fn command_aliases_copy_commits_and_page_history(cx: &mut TestAppContext) {
         );
         cx.simulate_keystrokes(&format!("{modifier}-pagedown"));
         until(cx, |cx| {
-            cx.update(|_, cx| app.view.read(cx).viewport.start > 0)
+            cx.update(|_, cx| app.view.read(cx).history_state.viewport.start > 0)
         });
         assert_eq!(selected(&app.view, cx).as_deref(), Some(commit.as_str()));
         cx.simulate_keystrokes(&format!("{modifier}-pageup"));
         until(cx, |cx| {
-            cx.update(|_, cx| app.view.read(cx).viewport.start == 0)
+            cx.update(|_, cx| app.view.read(cx).history_state.viewport.start == 0)
         });
     }
 }
@@ -1437,6 +1541,7 @@ fn vim_history_jumps_and_help_respect_focus(cx: &mut TestAppContext) {
         cx.update(|_, cx| {
             app.view
                 .read(cx)
+                .history_state
                 .snapshot
                 .as_ref()
                 .is_some_and(|s| s.visible == 3)
@@ -1457,6 +1562,7 @@ fn dialog_scrollbars_and_wheel_events_are_isolated_from_history(cx: &mut TestApp
         cx.update(|_, cx| {
             app.view
                 .read(cx)
+                .history_state
                 .snapshot
                 .as_ref()
                 .is_some_and(|s| s.loaded == 200)
@@ -1471,7 +1577,7 @@ fn dialog_scrollbars_and_wheel_events_are_isolated_from_history(cx: &mut TestApp
             cx.notify();
         });
         until(cx, |cx| {
-            cx.update(|_, cx| app.view.read(cx).viewport.start == 40)
+            cx.update(|_, cx| app.view.read(cx).history_state.viewport.start == 40)
         });
         let history_offset =
             cx.update(|_, cx| app.view.read(cx).scroll.0.borrow().base_handle.offset());
@@ -1705,12 +1811,16 @@ fn alt_list_navigation_preserves_filter_focus_and_emacs_editing(cx: &mut TestApp
     until(cx, |cx| {
         cx.update(|_, cx| {
             let view = app.view.read(cx);
-            view.request.query == "match"
-                && view.snapshot.as_ref().is_some_and(|snapshot| {
-                    !snapshot.filtering
-                        && snapshot.generation == view.request.generation
-                        && snapshot.request_id == view.request.id
-                })
+            view.history_state.request.query == "match"
+                && view
+                    .history_state
+                    .snapshot
+                    .as_ref()
+                    .is_some_and(|snapshot| {
+                        !snapshot.filtering
+                            && snapshot.generation == view.history_state.request.generation
+                            && snapshot.request_id == view.history_state.request.id
+                    })
         })
     });
     cx.simulate_keystrokes(down);
@@ -1843,7 +1953,7 @@ fn application_preferences_replace_flags_apply_and_persist(cx: &mut TestAppConte
         view.config = config;
         view.preferences_path = Some(path.clone());
     });
-    let generation = cx.update(|_, cx| app.view.read(cx).request.generation);
+    let generation = cx.update(|_, cx| app.view.read(cx).history_state.request.generation);
     cx.simulate_keystrokes("ctrl-,");
     for id in [
         "light-theme-setting",
@@ -1869,7 +1979,7 @@ fn application_preferences_replace_flags_apply_and_persist(cx: &mut TestAppConte
         matches!(view.dialog, Some(DialogKind::Preferences))
             && view.operation_message.contains("graph columns")
             && view.config.graph_columns == 128
-            && view.request.generation == generation
+            && view.history_state.request.generation == generation
     }));
     assert!(!path.exists());
     scroll_preferences_to("graph-columns-input", cx);
@@ -1885,7 +1995,7 @@ fn application_preferences_replace_flags_apply_and_persist(cx: &mut TestAppConte
         let view = app.view.read(cx);
         view.operation_message.contains("Git workers")
             && view.config.git_workers == 4
-            && view.request.generation == generation
+            && view.history_state.request.generation == generation
     }));
     cx.update(|window, cx| window.click("git-workers-input", cx));
     cx.simulate_keystrokes("ctrl-a ctrl-k");
@@ -1907,10 +2017,10 @@ fn application_preferences_replace_flags_apply_and_persist(cx: &mut TestAppConte
         let view = app.view.read(cx);
         assert_eq!(view.preferences, saved);
         assert_eq!(saved.with_config(&view.config), saved);
-        assert_eq!(view.request.batch, Some(73));
-        assert_eq!(view.request.source.graph_columns, 512);
-        assert_eq!(view.request.source.git_workers, 2);
-        assert!(view.request.generation.0 > generation.0);
+        assert_eq!(view.history_state.request.batch, Some(73));
+        assert_eq!(view.history_state.request.source.graph_columns, 512);
+        assert_eq!(view.history_state.request.source.git_workers, 2);
+        assert!(view.history_state.request.generation.0 > generation.0);
     });
     let restarted = gitk_rs::cli::parse_with_preferences([], &saved).unwrap();
     assert_eq!(saved.with_config(&restarted), saved);
@@ -1923,7 +2033,7 @@ fn application_preferences_replace_flags_apply_and_persist(cx: &mut TestAppConte
         cx.update(|_, cx| !app.view.read(cx).preferences_save_pending)
     });
     assert_eq!(Preferences::load_from(&path).unwrap().batch, None);
-    assert!(cx.update(|_, cx| app.view.read(cx).request.batch.is_none()));
+    assert!(cx.update(|_, cx| app.view.read(cx).history_state.request.batch.is_none()));
 }
 
 #[gpui_kit::test]
@@ -1940,7 +2050,7 @@ fn application_preferences_cancel_invalid_values_and_report_save_failure(cx: &mu
     let bytes = std::fs::read(&path).unwrap();
     app.view
         .update(cx, |view, _| view.preferences_path = Some(path.clone()));
-    let generation = cx.update(|_, cx| app.view.read(cx).request.generation);
+    let generation = cx.update(|_, cx| app.view.read(cx).history_state.request.generation);
     cx.simulate_keystrokes("ctrl-,");
     scroll_preferences_to("syntax-setting", cx);
     cx.update(|window, cx| window.click("syntax-setting", cx));
@@ -1954,7 +2064,7 @@ fn application_preferences_cancel_invalid_values_and_report_save_failure(cx: &mu
         assert!(view.operation_message.contains("batch size"));
         assert!(view.config.syntax);
         assert_eq!(view.preferences, original);
-        assert_eq!(view.request.generation, generation);
+        assert_eq!(view.history_state.request.generation, generation);
     });
     assert_eq!(std::fs::read(&path).unwrap(), bytes);
     cx.simulate_keystrokes("escape ctrl-,");
@@ -2285,6 +2395,7 @@ fn shortcuts_keyboard_scrolls_lines_pages_and_boundaries_without_moving_history(
         cx.update(|_, cx| {
             app.view
                 .read(cx)
+                .history_state
                 .snapshot
                 .as_ref()
                 .is_some_and(|s| s.loaded == 200)
@@ -2295,7 +2406,7 @@ fn shortcuts_keyboard_scrolls_lines_pages_and_boundaries_without_moving_history(
         cx.notify();
     });
     until(cx, |cx| {
-        cx.update(|_, cx| app.view.read(cx).viewport.start == 40)
+        cx.update(|_, cx| app.view.read(cx).history_state.viewport.start == 40)
     });
     let history = cx.update(|_, cx| app.view.read(cx).scroll.0.borrow().base_handle.offset());
     let commit = selected(&app.view, cx);
@@ -2359,14 +2470,15 @@ fn graph_paints_a_folded_column_at_the_maximum_lane_limit(cx: &mut TestAppContex
     until(cx, |cx| {
         cx.update(|_, cx| {
             let view = app.view.read(cx);
-            view.snapshot
+            view.history_state
+                .snapshot
                 .as_ref()
-                .is_some_and(|s| s.eof && s.request_id == view.request.id)
+                .is_some_and(|s| s.eof && s.request_id == view.history_state.request.id)
         })
     });
     let last = MAX_GRAPH_LANES as u16 - 1;
     app.view.update(cx, |view, cx| {
-        let snapshot = view.snapshot.as_mut().unwrap();
+        let snapshot = view.history_state.snapshot.as_mut().unwrap();
         let entry = &snapshot.rows[0];
         let graph = GraphRow {
             node: Some(0),
@@ -2515,7 +2627,7 @@ fn resized_columns_and_panes_are_saved_and_restored(cx: &mut TestAppContext) {
     let saved = {
         let (app, cx) = open_with_state(&fixture, Some(1000), Some(path.clone()), cx);
         until(cx, |cx| {
-            cx.update(|_, cx| app.view.read(cx).selected.is_some())
+            cx.update(|_, cx| app.view.read(cx).history_state.selected.is_some())
         });
         assert_eq!(cx.update(|_, cx| app.view.read(cx).graph_width), 320.);
         assert_eq!(
@@ -2596,7 +2708,7 @@ fn resized_columns_and_panes_are_saved_and_restored(cx: &mut TestAppContext) {
     };
     let (app, cx) = open_with_state(&fixture, Some(1000), Some(path.clone()), cx);
     until(cx, |cx| {
-        cx.update(|_, cx| app.view.read(cx).selected.is_some())
+        cx.update(|_, cx| app.view.read(cx).history_state.selected.is_some())
     });
     assert_eq!(
         cx.update(|_, cx| app.view.read(cx).graph_width),
@@ -2618,7 +2730,14 @@ fn metadata_search_shows_badges_errors_and_recovers(cx: &mut TestAppContext) {
     fixture.commit("other");
     let (app, cx) = open(&fixture, cx);
     until(cx, |cx| {
-        cx.update(|_, cx| app.view.read(cx).snapshot.as_ref().is_some_and(|s| s.eof))
+        cx.update(|_, cx| {
+            app.view
+                .read(cx)
+                .history_state
+                .snapshot
+                .as_ref()
+                .is_some_and(|s| s.eof)
+        })
     });
     assert!(cx.update(|window, _| window.try_find("author:text").is_none()));
     cx.simulate_keystrokes("/");
@@ -2626,9 +2745,15 @@ fn metadata_search_shows_badges_errors_and_recovers(cx: &mut TestAppContext) {
     until(cx, |cx| {
         cx.update(|window, cx| {
             window.try_find("search-filter-0").is_some()
-                && app.view.read(cx).snapshot.as_ref().is_some_and(|s| {
-                    s.visible == 1 && s.rows[0].commit.summary() == "needle" && !s.filtering
-                })
+                && app
+                    .view
+                    .read(cx)
+                    .history_state
+                    .snapshot
+                    .as_ref()
+                    .is_some_and(|s| {
+                        s.visible == 1 && s.rows[0].commit.summary() == "needle" && !s.filtering
+                    })
         })
     });
     cx.simulate_keystrokes("ctrl-a ctrl-k");
@@ -2639,6 +2764,7 @@ fn metadata_search_shows_badges_errors_and_recovers(cx: &mut TestAppContext) {
                 && app
                     .view
                     .read(cx)
+                    .history_state
                     .snapshot
                     .as_ref()
                     .is_some_and(|s| s.error.is_some())
@@ -2652,6 +2778,7 @@ fn metadata_search_shows_badges_errors_and_recovers(cx: &mut TestAppContext) {
                 && app
                     .view
                     .read(cx)
+                    .history_state
                     .snapshot
                     .as_ref()
                     .is_some_and(|s| s.error.is_none() && s.visible == 2)
@@ -2700,15 +2827,23 @@ fn regex_toggle_refilters_reports_errors_and_restores_saved_state(cx: &mut TestA
     {
         let (app, cx) = open_with_state(&fixture, None, Some(path.clone()), cx);
         until(cx, |cx| {
-            cx.update(|_, cx| app.view.read(cx).snapshot.as_ref().is_some_and(|s| s.eof))
+            cx.update(|_, cx| {
+                app.view
+                    .read(cx)
+                    .history_state
+                    .snapshot
+                    .as_ref()
+                    .is_some_and(|s| s.eof)
+            })
         });
-        assert!(!cx.update(|_, cx| app.view.read(cx).request.regex));
+        assert!(!cx.update(|_, cx| app.view.read(cx).history_state.request.regex));
         cx.simulate_keystrokes("/");
         cx.simulate_input("message:fix.*");
         until(cx, |cx| {
             cx.update(|_, cx| {
                 app.view
                     .read(cx)
+                    .history_state
                     .snapshot
                     .as_ref()
                     .is_some_and(|s| s.visible == 1 && !s.filtering)
@@ -2727,24 +2862,32 @@ fn regex_toggle_refilters_reports_errors_and_restores_saved_state(cx: &mut TestA
         until(cx, |cx| {
             cx.update(|_, cx| {
                 let view = app.view.read(cx);
-                view.request.regex
-                    && view.snapshot.as_ref().is_some_and(|s| {
-                        s.request_id == view.request.id && s.visible == 2 && !s.filtering
+                view.history_state.request.regex
+                    && view.history_state.snapshot.as_ref().is_some_and(|s| {
+                        s.request_id == view.history_state.request.id
+                            && s.visible == 2
+                            && !s.filtering
                     })
             })
         });
         cx.simulate_keystrokes("f1 alt-r");
-        assert!(cx.update(|_, cx| app.view.read(cx).request.regex));
+        assert!(cx.update(|_, cx| app.view.read(cx).history_state.request.regex));
         cx.simulate_keystrokes("escape / ctrl-a ctrl-k");
         cx.simulate_input("message:[");
         until(cx, |cx| {
             cx.update(|window, cx| {
                 window.try_find("search-error").is_some()
-                    && app.view.read(cx).snapshot.as_ref().is_some_and(|s| {
-                        s.query_error
-                            .as_deref()
-                            .is_some_and(|error| error.contains("Invalid regular expression"))
-                    })
+                    && app
+                        .view
+                        .read(cx)
+                        .history_state
+                        .snapshot
+                        .as_ref()
+                        .is_some_and(|s| {
+                            s.query_error
+                                .as_deref()
+                                .is_some_and(|error| error.contains("Invalid regular expression"))
+                        })
             })
         });
         let toggle = cx.update(|window, _| window.find("search-regex").bounds().center());
@@ -2754,8 +2897,10 @@ fn regex_toggle_refilters_reports_errors_and_restores_saved_state(cx: &mut TestA
             cx.update(|window, cx| {
                 let view = app.view.read(cx);
                 window.try_find("search-error").is_none()
-                    && view.snapshot.as_ref().is_some_and(|s| {
-                        s.request_id == view.request.id && s.error.is_none() && s.visible == 0
+                    && view.history_state.snapshot.as_ref().is_some_and(|s| {
+                        s.request_id == view.history_state.request.id
+                            && s.error.is_none()
+                            && s.visible == 0
                     })
             })
         });
@@ -2765,9 +2910,11 @@ fn regex_toggle_refilters_reports_errors_and_restores_saved_state(cx: &mut TestA
         until(cx, |cx| {
             cx.update(|_, cx| {
                 let view = app.view.read(cx);
-                view.request.regex
-                    && view.snapshot.as_ref().is_some_and(|s| {
-                        s.request_id == view.request.id && s.error.is_none() && s.visible == 2
+                view.history_state.request.regex
+                    && view.history_state.snapshot.as_ref().is_some_and(|s| {
+                        s.request_id == view.history_state.request.id
+                            && s.error.is_none()
+                            && s.visible == 2
                     })
             })
         });
@@ -2780,12 +2927,19 @@ fn regex_toggle_refilters_reports_errors_and_restores_saved_state(cx: &mut TestA
     {
         let (app, cx) = open_with_state(&fixture, None, Some(path.clone()), cx);
         until(cx, |cx| {
-            cx.update(|_, cx| app.view.read(cx).snapshot.as_ref().is_some_and(|s| s.eof))
+            cx.update(|_, cx| {
+                app.view
+                    .read(cx)
+                    .history_state
+                    .snapshot
+                    .as_ref()
+                    .is_some_and(|s| s.eof)
+            })
         });
-        assert!(cx.update(|_, cx| app.view.read(cx).request.regex));
+        assert!(cx.update(|_, cx| app.view.read(cx).history_state.request.regex));
         let toggle = cx.update(|window, _| window.find("search-regex").bounds().center());
         cx.simulate_click(toggle, gpui_kit::Modifiers::default());
-        assert!(!cx.update(|_, cx| app.view.read(cx).request.regex));
+        assert!(!cx.update(|_, cx| app.view.read(cx).history_state.request.regex));
     }
     assert!(!options::load_state_from(&path).unwrap().search.regex);
 }
