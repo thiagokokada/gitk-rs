@@ -44,7 +44,7 @@ fn open_with_state<'a>(
         source: HistorySource {
             repository: config.repository.clone(),
             graph_columns: config.graph_columns,
-            history_readers: config.history_readers,
+            git_workers: config.git_workers,
             reload_generation: Default::default(),
         },
         generation: Generation(1),
@@ -1876,20 +1876,20 @@ fn application_preferences_replace_flags_apply_and_persist(cx: &mut TestAppConte
     cx.update(|window, cx| window.click("graph-columns-input", cx));
     cx.simulate_keystrokes("ctrl-a ctrl-k");
     cx.simulate_input("512");
-    scroll_preferences_to("history-readers-input", cx);
-    cx.update(|window, cx| window.click("history-readers-input", cx));
+    scroll_preferences_to("git-workers-input", cx);
+    cx.update(|window, cx| window.click("git-workers-input", cx));
     cx.simulate_keystrokes("ctrl-a ctrl-k");
     cx.simulate_input("0");
     cx.update(|window, cx| window.click("apply-preferences", cx));
     assert!(cx.update(|_, cx| {
         let view = app.view.read(cx);
-        view.operation_message.contains("history readers")
-            && view.config.history_readers == 4
+        view.operation_message.contains("Git workers")
+            && view.config.git_workers == 4
             && view.request.generation == generation
     }));
-    cx.update(|window, cx| window.click("history-readers-input", cx));
+    cx.update(|window, cx| window.click("git-workers-input", cx));
     cx.simulate_keystrokes("ctrl-a ctrl-k");
-    cx.simulate_input("4");
+    cx.simulate_input("2");
 
     cx.update(|window, cx| window.click("apply-preferences", cx));
     until(cx, |cx| {
@@ -1900,7 +1900,7 @@ fn application_preferences_replace_flags_apply_and_persist(cx: &mut TestAppConte
     assert_eq!(saved.theme, Theme::Dark);
     assert_eq!(saved.batch, Some(73));
     assert_eq!(saved.graph_columns, 512);
-    assert_eq!(saved.history_readers, 4);
+    assert_eq!(saved.git_workers, 2);
     assert!(saved.syntax && saved.watch);
     assert!(!saved.text_graph);
     cx.update(|_, cx| {
@@ -1909,7 +1909,7 @@ fn application_preferences_replace_flags_apply_and_persist(cx: &mut TestAppConte
         assert_eq!(saved.with_config(&view.config), saved);
         assert_eq!(view.request.batch, Some(73));
         assert_eq!(view.request.source.graph_columns, 512);
-        assert_eq!(view.request.source.history_readers, 4);
+        assert_eq!(view.request.source.git_workers, 2);
         assert!(view.request.generation.0 > generation.0);
     });
     let restarted = gitk_rs::cli::parse_with_preferences([], &saved).unwrap();

@@ -146,7 +146,7 @@ struct HistoryWindow {
     preferences_draft: Preferences,
     graph_columns_input: Entity<InputState>,
     batch_input: Entity<InputState>,
-    history_readers_input: Entity<InputState>,
+    git_workers_input: Entity<InputState>,
     preferences_path: Option<std::path::PathBuf>,
     preferences_save_generation: u64,
     preferences_save_pending: bool,
@@ -256,7 +256,7 @@ impl HistoryWindow {
         });
         let graph_columns_input = cx.new(|cx| InputState::new(window, cx));
         let batch_input = cx.new(|cx| InputState::new(window, cx));
-        let history_readers_input = cx.new(|cx| InputState::new(window, cx));
+        let git_workers_input = cx.new(|cx| InputState::new(window, cx));
         let mut font_subscriptions = Vec::new();
         for selector in [&ui_font_select, &fixed_font_select] {
             font_subscriptions.push(
@@ -272,7 +272,7 @@ impl HistoryWindow {
                 }
             }),
         );
-        for input in [&graph_columns_input, &batch_input, &history_readers_input] {
+        for input in [&graph_columns_input, &batch_input, &git_workers_input] {
             font_subscriptions.push(cx.subscribe(input, |_, _, _: &InputEvent, cx| cx.notify()));
         }
         let branch_filter =
@@ -366,7 +366,7 @@ impl HistoryWindow {
             preferences_draft: preferences.clone(),
             graph_columns_input,
             batch_input,
-            history_readers_input,
+            git_workers_input,
             preferences_path: None,
             preferences_save_generation: 0,
             preferences_save_pending: false,
@@ -1843,7 +1843,7 @@ pub fn run(mut config: Config, preferences: Preferences, launched: Instant) {
         source: HistorySource {
             repository: config.repository.clone(),
             graph_columns: config.graph_columns,
-            history_readers: config.history_readers,
+            git_workers: config.git_workers,
             reload_generation: Default::default(),
         },
         generation: Generation(1),

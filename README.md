@@ -42,9 +42,9 @@ qualifiers, including `contents:` for added or removed text, and matching rules.
 
 History streams in the background until the whole repository history is loaded.
 For lower memory use, `--limit N` opts into loading history on demand in batches
-of N commits. Git uses two object readers by default. Set the reader count in
-Preferences or with `--history-readers N`; larger pools increase Git process
-memory. The end-of-history notice includes elapsed loading time in seconds.
+of N commits. Git uses four workers per pool by default. Set the worker count
+(1-8) in Preferences or with `--git-workers N` for history loading and content
+search; larger pools increase Git process memory.
 
 For more command-line options:
 
@@ -63,7 +63,7 @@ fixed_font = "DejaVu Sans Mono"
 font_size = 13.0
 theme = "dark"
 graph_columns = 256
-history_readers = 2
+git_workers = 2
 text_graph = false
 syntax = true
 watch = true

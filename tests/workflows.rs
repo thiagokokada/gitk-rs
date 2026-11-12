@@ -80,7 +80,7 @@ fn history_request(fixture: &Fixture) -> Request {
         source: HistorySource {
             repository: fixture.root().into(),
             graph_columns: 200,
-            history_readers: gitk_rs::git::DEFAULT_HISTORY_READERS,
+            git_workers: gitk_rs::git::DEFAULT_GIT_WORKERS,
             reload_generation: Default::default(),
         },
         generation: Generation(1),
@@ -713,7 +713,7 @@ fn reader_changes_restart_history_and_completed_timings_stay_fixed() {
     fixture.append_history(600, false, "candidate");
     let mut request = history_request(&fixture);
     request.batch = None;
-    request.source.history_readers = 1;
+    request.source.git_workers = 1;
     let engine = HistoryEngine::spawn(request.clone());
     let handle = engine.handle();
     let before = wait(|| handle.take_snapshot().filter(|s| s.eof));
@@ -729,7 +729,7 @@ fn reader_changes_restart_history_and_completed_timings_stay_fixed() {
     });
     assert_eq!(same.load_duration, before.load_duration);
     assert!(Arc::ptr_eq(&same.rows[0], &before.rows[0]));
-    request.source.history_readers = 4;
+    request.source.git_workers = 4;
     request.generation.0 += 1;
     request.id += 1;
     handle.request(request.clone());

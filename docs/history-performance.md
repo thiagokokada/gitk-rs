@@ -1,9 +1,10 @@
 # History loading performance
 
 History now uses one Git revision traversal and an ordered pool of native
-`cat-file` readers, defaulting to two. `--history-readers N` and Preferences
-support 1-64 readers; one reader keeps the direct buffered pipe. Indexed graph
-lane lookup and direct continuation packing reduce graph preparation work.
+`cat-file` readers, defaulting to four. `--git-workers N` and Preferences
+support 1-8 workers for both history loading and content search; one reader
+keeps the direct buffered pipe. Indexed graph lane lookup and direct
+continuation packing reduce graph preparation work.
 
 Reader queues and chunks are bounded, cancellation terminates and reaps Git
 children, and every child exit status is checked before EOF. The first viewport

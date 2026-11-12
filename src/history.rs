@@ -7,7 +7,7 @@ use crate::{
 };
 use anyhow::{Result, ensure};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     ops::Range,
     path::PathBuf,
     sync::mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError},
@@ -33,7 +33,7 @@ pub struct ReloadGeneration(pub u64);
 pub struct HistorySource {
     pub repository: PathBuf,
     pub graph_columns: usize,
-    pub history_readers: usize,
+    pub git_workers: usize,
     pub reload_generation: ReloadGeneration,
 }
 
@@ -348,7 +348,126 @@ fn empty_snapshot(request: &Request, error: Option<String>) -> Snapshot {
 
 // Only metadata candidates are sent through diff-tree. Both directions are
 // bounded, and cancellation owns the process and all pipe threads.
+// Batches are distributed round-robin and drained in submission order. The
+// session's candidate cap bounds queued work across the entire pool.
 struct DiffSearch {
+    workers: Vec<DiffWorker>,
+    batches: VecDeque<(usize, usize)>,
+    next: usize,
+    batch_size: usize,
+    closed: bool,
+    done: bool,
+}
+
+impl DiffSearch {
+    fn start(repository: &Repository, query: &CompiledQuery, workers: usize) -> Option<Self> {
+        Self::start_with_workers(
+            repository,
+            query,
+            if query.contents.is_some() { workers } else { 1 },
+        )
+    }
+
+    fn start_with_workers(
+        repository: &Repository,
+        query: &CompiledQuery,
+        count: usize,
+    ) -> Option<Self> {
+        let workers = (0..count)
+            .map(|_| DiffWorker::start(repository, query))
+            .collect::<Option<Vec<_>>>()?;
+        Some(Self {
+            workers,
+            batches: VecDeque::new(),
+            next: 0,
+            batch_size: if query.contents.is_some() { 64 } else { 1000 },
+            closed: false,
+            done: false,
+        })
+    }
+
+    // On backpressure, return only the unsent suffix. Accepted chunks already
+    // have their ordering recorded and must never be submitted again.
+    fn try_send(
+        &mut self,
+        batch: Vec<CommitId>,
+    ) -> std::result::Result<(), TrySendError<Vec<CommitId>>> {
+        let mut remaining = batch.into_iter();
+        loop {
+            let chunk: Vec<_> = remaining.by_ref().take(self.batch_size).collect();
+            if chunk.is_empty() {
+                return Ok(());
+            }
+            let count = chunk.len();
+            match self.workers[self.next]
+                .input
+                .as_ref()
+                .unwrap()
+                .try_send(chunk)
+            {
+                Ok(()) => {
+                    self.batches.push_back((self.next, count));
+                    self.next = (self.next + 1) % self.workers.len();
+                }
+                Err(TrySendError::Full(mut chunk)) => {
+                    chunk.extend(remaining);
+                    return Err(TrySendError::Full(chunk));
+                }
+                Err(TrySendError::Disconnected(mut chunk)) => {
+                    chunk.extend(remaining);
+                    return Err(TrySendError::Disconnected(chunk));
+                }
+            }
+        }
+    }
+
+    fn close(&mut self) {
+        self.closed = true;
+        for worker in &mut self.workers {
+            worker.input.take();
+        }
+    }
+
+    fn try_recv(&mut self) -> std::result::Result<Result<(CommitId, bool)>, TryRecvError> {
+        if let Some((index, remaining)) = self.batches.front_mut() {
+            let result = self.workers[*index].receiver.as_ref().unwrap().try_recv()?;
+            *remaining -= 1;
+            if *remaining == 0 {
+                self.batches.pop_front();
+            }
+            return Ok(result);
+        }
+        // Drain terminal errors even when no candidates were submitted.
+        for worker in &mut self.workers {
+            if !worker.done {
+                match worker.receiver.as_ref().unwrap().try_recv() {
+                    Err(TryRecvError::Disconnected) => worker.done = true,
+                    Err(TryRecvError::Empty) => (),
+                    result => return result,
+                }
+            }
+        }
+        if self.workers.iter().all(|worker| worker.done) {
+            Err(TryRecvError::Disconnected)
+        } else {
+            Err(TryRecvError::Empty)
+        }
+    }
+}
+
+impl Drop for DiffSearch {
+    fn drop(&mut self) {
+        // Signal the entire pool before joining any worker, so cancellation
+        // latency does not accumulate one process-monitor wait per worker.
+        for worker in &mut self.workers {
+            worker.cancel.store(true, Ordering::Release);
+            worker.input.take();
+            worker.receiver.take();
+        }
+    }
+}
+
+struct DiffWorker {
     cancel: Cancellation,
     input: Option<SyncSender<Vec<CommitId>>>,
     receiver: Option<Receiver<Result<(CommitId, bool)>>>,
@@ -356,7 +475,7 @@ struct DiffSearch {
     done: bool,
 }
 
-impl DiffSearch {
+impl DiffWorker {
     fn start(repository: &Repository, query: &CompiledQuery) -> Option<Self> {
         if query.path.is_none() && query.contents.is_none() {
             return None;
@@ -389,7 +508,10 @@ impl DiffSearch {
                 if let Some(pattern) = &prefilter {
                     // --always retains one header per candidate, even on a miss.
                     // Keep all changed paths so path/contents remain commit-level AND.
-                    args.extend(["-G", pattern, "--pickaxe-all"]);
+                    args.extend(["-G", pattern]);
+                    if path.is_some() {
+                        args.push("--pickaxe-all");
+                    }
                 }
                 if contents.is_some() {
                     args.extend([
@@ -493,7 +615,7 @@ impl DiffSearch {
     }
 }
 
-impl Drop for DiffSearch {
+impl Drop for DiffWorker {
     fn drop(&mut self) {
         self.cancel.store(true, Ordering::Release);
         self.input.take();
@@ -576,6 +698,7 @@ struct PrefixSearch {
 
 struct Session {
     repository: Repository,
+    git_workers: usize,
     stream: Option<CommitStream>,
     cancellation: Cancellation,
     entries: Vec<Arc<Entry>>,
@@ -609,13 +732,12 @@ impl Session {
         let stream = repository
             .head
             .as_ref()
-            .map(|_| {
-                repository.log_with_readers(cancellation.clone(), request.source.history_readers)
-            })
+            .map(|_| repository.log_with_readers(cancellation.clone(), request.source.git_workers))
             .transpose()?;
         let eof = stream.is_none();
         Ok(Self {
             repository,
+            git_workers: request.source.git_workers,
             stream,
             cancellation,
             entries: Vec::new(),
@@ -681,7 +803,7 @@ impl Session {
             }
             self.reload = Some(LinearReload {
                 stream: repository
-                    .log_with_readers(self.cancellation.clone(), request.source.history_readers)?,
+                    .log_with_readers(self.cancellation.clone(), request.source.git_workers)?,
                 repository,
                 old_head,
                 expected,
@@ -739,7 +861,7 @@ impl Session {
             // This avoids both a delta-sized candidate queue and repeated
             // insertion of prefix matches at the front of a large suffix.
             self.paths = None;
-            self.paths = DiffSearch::start(&self.repository, &self.parsed);
+            self.paths = DiffSearch::start(&self.repository, &self.parsed, self.git_workers);
             let mut suffix_candidates: Vec<_> = self.candidates.drain().collect();
             suffix_candidates.sort_unstable_by_key(|(_, ordinal)| *ordinal);
             self.path_pending.clear();
@@ -809,7 +931,7 @@ impl Session {
                 .and_then(|query| query.compile(request.regex))
             {
                 Ok(parsed) => {
-                    self.paths = DiffSearch::start(&self.repository, &parsed);
+                    self.paths = DiffSearch::start(&self.repository, &parsed, self.git_workers);
                     self.parsed = parsed;
                 }
                 Err(error) => self.query_error = Some(error.to_string()),
@@ -818,10 +940,12 @@ impl Session {
         if self.query_error.is_some() {
             return Ok(false);
         }
+        let mut progressed = false;
         if let Some(paths) = &mut self.paths {
             for _ in 0..256 {
-                match paths.receiver.as_ref().unwrap().try_recv() {
+                match paths.try_recv() {
                     Ok(Ok((id, matched))) => {
+                        progressed = true;
                         let ordinal = self
                             .candidates
                             .remove(&id)
@@ -853,22 +977,29 @@ impl Session {
         if let Some(paths) = &mut self.paths {
             if !self.path_pending.is_empty() {
                 let batch = std::mem::take(&mut self.path_pending);
-                match paths.input.as_ref().unwrap().try_send(batch) {
-                    Ok(()) => (),
+                let pending = batch.len();
+                match paths.try_send(batch) {
+                    Ok(()) => progressed = true,
                     Err(TrySendError::Full(batch)) => {
+                        progressed |= batch.len() < pending;
                         self.path_pending = batch;
-                        thread::sleep(Duration::from_millis(5));
+                        if !progressed {
+                            thread::sleep(Duration::from_millis(5));
+                        }
                         return Ok(true);
                     }
-                    Err(TrySendError::Disconnected(batch)) => {
-                        // Drain the worker's error before reporting a closed pipe.
-                        self.path_pending = batch;
-                        return Ok(true);
+                    Err(TrySendError::Disconnected(_)) => {
+                        // Another worker may still be waiting for more input. Do
+                        // not wait for ordered draining to reach a failed worker.
+                        self.query_error = Some("Diff search failed: worker input closed".into());
+                        return Ok(false);
                     }
                 }
             }
             if self.candidates.len() >= 4096 {
-                thread::sleep(Duration::from_millis(5));
+                if !progressed {
+                    thread::sleep(Duration::from_millis(5));
+                }
                 return Ok(true);
             }
         }
@@ -881,15 +1012,17 @@ impl Session {
                 && let Some(paths) = &mut self.paths
             {
                 // diff-tree can buffer the last decision until stdin closes.
-                paths.input.take();
+                paths.close();
             }
             if !self.candidates.is_empty() || !self.path_pending.is_empty() {
-                thread::sleep(Duration::from_millis(5));
+                if !progressed {
+                    thread::sleep(Duration::from_millis(5));
+                }
                 return Ok(true);
             }
             let mut prefix = self.prefix_search.take().unwrap();
             self.paths = None;
-            self.paths = DiffSearch::start(&self.repository, &self.parsed);
+            self.paths = DiffSearch::start(&self.repository, &self.parsed, self.git_workers);
             self.matches.append(&mut prefix.suffix_matches);
             for (id, ordinal) in prefix.suffix_candidates {
                 self.path_pending.push(id.clone());
@@ -957,9 +1090,12 @@ impl Session {
         if !self.eof && visible < needed {
             if let Some(paths) = &self.paths {
                 if paths.done {
-                    self.paths = DiffSearch::start(&self.repository, &self.parsed);
-                } else if paths.input.is_none() {
-                    thread::sleep(Duration::from_millis(5));
+                    self.paths =
+                        DiffSearch::start(&self.repository, &self.parsed, self.git_workers);
+                } else if paths.closed {
+                    if !progressed {
+                        thread::sleep(Duration::from_millis(5));
+                    }
                     return Ok(true);
                 }
             }
@@ -970,9 +1106,11 @@ impl Session {
             // Close at EOF or an opt-in prefetch pause to flush the last diff.
             // Resuming demand opens a new diff stream for newly loaded candidates.
             if self.eof || visible >= needed {
-                self.paths.as_mut().unwrap().input.take();
+                self.paths.as_mut().unwrap().close();
             }
-            thread::sleep(Duration::from_millis(5));
+            if !progressed {
+                thread::sleep(Duration::from_millis(5));
+            }
             return Ok(true);
         }
         Ok(false)
@@ -1203,7 +1341,7 @@ mod tests {
             source: HistorySource {
                 repository: fixture.root().to_owned(),
                 graph_columns: crate::graph::DEFAULT_GRAPH_LANES,
-                history_readers: crate::git::DEFAULT_HISTORY_READERS,
+                git_workers: crate::git::DEFAULT_GIT_WORKERS,
                 reload_generation: ReloadGeneration::default(),
             },
             generation: Generation(1),
@@ -1646,15 +1784,15 @@ mod tests {
             .unwrap();
         assert!(count > 64);
         let readers: usize = std::env::var("GITK_PROFILE_READERS")
-            .unwrap_or_else(|_| crate::git::DEFAULT_HISTORY_READERS.to_string())
+            .unwrap_or_else(|_| crate::git::DEFAULT_GIT_WORKERS.to_string())
             .parse()
             .unwrap();
-        assert!((1..=crate::git::MAX_HISTORY_READERS).contains(&readers));
+        assert!((1..=crate::git::MAX_GIT_WORKERS).contains(&readers));
         let request = Request {
             source: HistorySource {
                 repository: repository.into(),
                 graph_columns: crate::graph::DEFAULT_GRAPH_LANES,
-                history_readers: readers,
+                git_workers: readers,
                 reload_generation: ReloadGeneration::default(),
             },
             generation: Generation(1),
@@ -1696,7 +1834,7 @@ mod tests {
             + session.strings.capacity() * (size_of::<Arc<str>>() + 1);
         eprintln!(
             "history_probe readers={} graph_lanes={} loaded={} eof={} elapsed_ms={} records_bytes={records} metadata_bytes={metadata} messages_bytes={messages} graph_bytes={graph} index_bytes={index} accounted_bytes={}",
-            request.source.history_readers,
+            request.source.git_workers,
             request.source.graph_columns,
             session.entries.len(),
             session.eof,
@@ -1866,7 +2004,7 @@ mod tests {
         // Replacing a running search releases its producer and cancellation token.
         request.query = "path:yml".into();
         session.step(&request).unwrap();
-        let path_cancel = session.paths.as_ref().unwrap().cancel.clone();
+        let path_cancel = session.paths.as_ref().unwrap().workers[0].cancel.clone();
         request.query = "author:fixture".into();
         while session.step(&request).unwrap() {}
         assert!(path_cancel.load(Ordering::Acquire));
@@ -1902,6 +2040,130 @@ mod tests {
             assert!(session.query_error.is_none(), "{:?}", session.query_error);
             assert_eq!(session.visible_count(), expected, "{query}");
             assert!(session.candidates.is_empty());
+        }
+    }
+
+    #[test]
+    fn content_pool_bounds_backpressure_across_large_loading_batches() {
+        let fixture = Fixture::new();
+        fixture.commit("root");
+        fixture.append_history(6000, true, "change");
+        for count in [1, 2, 4, 8] {
+            let mut request = request(&fixture);
+            request.query = "contents:[0-9]".into();
+            request.regex = true;
+            request.batch = None;
+            request.source.git_workers = count;
+            let mut session = Session::open(&request, Cancellation::default()).unwrap();
+            session.step(&request).unwrap();
+            assert_eq!(session.paths.as_ref().unwrap().workers.len(), count);
+            let deadline = Instant::now() + Duration::from_secs(30);
+            while session.step(&request).unwrap() {
+                assert!(
+                    Instant::now() < deadline,
+                    "pool stalled with {count} workers"
+                );
+                assert!(session.candidates.len() <= 5096);
+                assert!(session.query_error.is_none(), "{:?}", session.query_error);
+            }
+            assert_eq!(session.matches, (0..6000).collect::<Vec<_>>());
+            assert!(session.candidates.is_empty());
+        }
+    }
+
+    #[test]
+    fn failed_pool_input_does_not_wait_for_an_earlier_buffered_worker() {
+        let fixture = Fixture::new();
+        fixture.commit("needle");
+        let mut request = request(&fixture);
+        request.query = "contents:needle".into();
+        let mut session = Session::open(&request, Cancellation::default()).unwrap();
+        session.step(&request).unwrap();
+        session.paths = DiffSearch::start_with_workers(&session.repository, &session.parsed, 2);
+        let paths = session.paths.as_mut().unwrap();
+        // The earlier worker cannot finish this candidate until more input or EOF.
+        assert!(
+            !session.path_pending.is_empty(),
+            "expected pending candidate"
+        );
+        paths.try_send(session.path_pending.clone()).unwrap();
+        paths.workers[1].cancel.store(true, Ordering::Release);
+        paths.workers[1].worker.take().unwrap().join().unwrap();
+        assert!(matches!(
+            paths.try_send(session.path_pending.clone()),
+            Err(TrySendError::Disconnected(_))
+        ));
+        assert!(!session.step(&request).unwrap());
+        assert!(
+            session
+                .query_error
+                .as_ref()
+                .unwrap()
+                .contains("worker input closed")
+        );
+    }
+
+    #[test]
+    fn diff_pool_preserves_submission_order_for_all_worker_counts() {
+        let fixture = Fixture::new();
+        for index in 0..24 {
+            fixture.commit(&format!("needle {index}"));
+        }
+        let repository = Repository::open(fixture.root(), &Cancellation::default()).unwrap();
+        let ids: Vec<_> = fixture
+            .git(&["rev-list", "HEAD"])
+            .lines()
+            .map(|id| CommitId::parse(id).unwrap())
+            .collect();
+        for query in [
+            "contents:needle",
+            "contents:needle path:file.txt",
+            "contents:absent",
+            "contents:needle path:absent",
+        ] {
+            let query = Query::parse(query).unwrap().compile(false).unwrap();
+            for count in [1, 2, 4, 8] {
+                let mut pool = DiffSearch::start_with_workers(&repository, &query, count).unwrap();
+                // Two batches per worker, including an uneven tail.
+                let chunk = ids.len().div_ceil(count * 2);
+                let mut sent = 0;
+                let mut received = Vec::new();
+                let deadline = Instant::now() + Duration::from_secs(10);
+                while !pool.done {
+                    assert!(
+                        Instant::now() < deadline,
+                        "pool stalled with {count} workers"
+                    );
+                    if sent < ids.len() {
+                        let end = (sent + chunk).min(ids.len());
+                        match pool.try_send(ids[sent..end].to_vec()) {
+                            Ok(()) => sent = end,
+                            Err(TrySendError::Full(_)) => (),
+                            Err(error) => panic!("{error}"),
+                        }
+                    } else {
+                        pool.close();
+                    }
+                    match pool.try_recv() {
+                        Ok(result) => received.push(result.unwrap()),
+                        Err(TryRecvError::Disconnected) => pool.done = true,
+                        Err(TryRecvError::Empty) => thread::sleep(Duration::from_millis(1)),
+                    }
+                }
+                assert_eq!(
+                    received
+                        .iter()
+                        .map(|(id, _)| id.clone())
+                        .collect::<Vec<_>>(),
+                    ids
+                );
+                let expected = query.contents.as_ref().unwrap().is_match("needle")
+                    && query
+                        .path
+                        .as_ref()
+                        .is_none_or(|path| path.is_match("file.txt"));
+                assert!(received.iter().all(|(_, matched)| *matched == expected));
+            }
         }
     }
 
@@ -1954,10 +2216,21 @@ mod tests {
         }
         request.query = "contents:Needle".into();
         session.step(&request).unwrap();
-        let cancel = session.paths.as_ref().unwrap().cancel.clone();
+        let cancellations: Vec<_> = session
+            .paths
+            .as_ref()
+            .unwrap()
+            .workers
+            .iter()
+            .map(|worker| worker.cancel.clone())
+            .collect();
         request.query = "message:introduce".into();
         while session.step(&request).unwrap() {}
-        assert!(cancel.load(Ordering::Acquire));
+        assert!(
+            cancellations
+                .iter()
+                .all(|cancel| cancel.load(Ordering::Acquire))
+        );
         assert_eq!(session.visible_count(), 1);
     }
 
@@ -2070,7 +2343,7 @@ mod tests {
             source: HistorySource {
                 repository: repository.into(),
                 graph_columns: crate::graph::DEFAULT_GRAPH_LANES,
-                history_readers: crate::git::DEFAULT_HISTORY_READERS,
+                git_workers: crate::git::DEFAULT_GIT_WORKERS,
                 reload_generation: ReloadGeneration::default(),
             },
             generation: Generation(1),

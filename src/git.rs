@@ -17,8 +17,8 @@ use std::{
 mod commit_pool;
 use commit_pool::CommitPool;
 
-pub const DEFAULT_HISTORY_READERS: usize = 4;
-pub const MAX_HISTORY_READERS: usize = 64;
+pub const DEFAULT_GIT_WORKERS: usize = 4;
+pub const MAX_GIT_WORKERS: usize = 8;
 
 pub const MAX_RECORD_BYTES: usize = 2 * 1024 * 1024;
 const MAX_STDERR_BYTES: usize = 64 * 1024;
@@ -214,7 +214,7 @@ impl Repository {
     }
 
     pub fn log(&self, cancel: Cancellation) -> Result<CommitStream> {
-        self.log_with_readers(cancel, DEFAULT_HISTORY_READERS)
+        self.log_with_readers(cancel, DEFAULT_GIT_WORKERS)
     }
 
     pub fn log_with_readers(&self, cancel: Cancellation, readers: usize) -> Result<CommitStream> {
@@ -588,8 +588,8 @@ enum CommitSource {
 impl CommitStream {
     fn open(root: &Path, head: &CommitId, cancel: Cancellation, readers: usize) -> Result<Self> {
         ensure!(
-            (1..=MAX_HISTORY_READERS).contains(&readers),
-            "history readers must be between 1 and {MAX_HISTORY_READERS}"
+            (1..=MAX_GIT_WORKERS).contains(&readers),
+            "Git workers must be between 1 and {MAX_GIT_WORKERS}"
         );
         let mut encoding = run_bytes(
             root,
@@ -875,7 +875,7 @@ mod tests {
     }
 
     fn assert_matches_pretty_log(root: &Path) -> usize {
-        assert_matches_pretty_log_with_readers(root, DEFAULT_HISTORY_READERS)
+        assert_matches_pretty_log_with_readers(root, DEFAULT_GIT_WORKERS)
     }
 
     fn assert_matches_pretty_log_with_readers(root: &Path, readers: usize) -> usize {
@@ -1056,7 +1056,7 @@ mod tests {
             assert_matches_pretty_log_with_readers(
                 Path::new(&root),
                 std::env::var("GITK_PROFILE_READERS")
-                    .map_or(DEFAULT_HISTORY_READERS, |value| value.parse().unwrap())
+                    .map_or(DEFAULT_GIT_WORKERS, |value| value.parse().unwrap())
             )
         );
     }
