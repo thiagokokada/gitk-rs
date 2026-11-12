@@ -254,7 +254,7 @@ fn diff_page(id: u64) -> DiffPage {
 fn history_selection_highlighting_and_copy_across_unloaded_lines() {
     let fixture = Fixture::new();
     let source = (0..400)
-        .map(|i| format!("\tlet value_{i} = {i};\n"))
+        .map(|i| format!("\tlet λ{i} = {i};\n"))
         .collect::<String>();
     fs::write(fixture.root().join("main.rs"), &source).unwrap();
     fixture.git(&["add", "."]);
@@ -278,10 +278,12 @@ fn history_selection_highlighting_and_copy_across_unloaded_lines() {
     );
     let snapshot = wait(|| handle.take_snapshot().filter(|s| !s.highlighting));
     assert!(snapshot.error.is_none());
+    assert_eq!(snapshot.files.len(), 1);
     assert_eq!(snapshot.files[0].path, std::path::Path::new("main.rs"));
     assert_eq!(snapshot.files[0].added, Some(400));
     assert_eq!((snapshot.added, snapshot.removed), (400, 0));
     assert!(snapshot.count > 400);
+    assert_eq!(snapshot.lines.len(), diff_page(1).range.len());
     assert!(snapshot.lines.len() < snapshot.count);
     let first = snapshot
         .lines
@@ -295,22 +297,30 @@ fn history_selection_highlighting_and_copy_across_unloaded_lines() {
             .iter()
             .any(|line| line.kind == LineKind::Added && line.spans.len() > 1)
     );
-    handle.copy(CopyRequest {
-        selection: SelectionId(1),
-        strip_markers: true,
-        range: TextSelection {
-            anchor: TextPoint {
-                line: first,
-                byte: 0,
-            },
-            cursor: TextPoint {
-                line: snapshot.count - 1,
-                byte: snapshot.last_line_len,
-            },
+    let range = TextSelection {
+        anchor: TextPoint {
+            line: first,
+            byte: 0,
         },
-    });
-    let copied = wait(|| handle.take_copy()).result.unwrap();
-    assert_eq!(copied, source.trim_end_matches('\n'));
+        cursor: TextPoint {
+            line: snapshot.count - 1,
+            byte: snapshot.last_line_len,
+        },
+    };
+    for strip_markers in [true, false] {
+        handle.copy(CopyRequest {
+            selection: SelectionId(1),
+            strip_markers,
+            range,
+        });
+        let copied = wait(|| handle.take_copy()).result.unwrap();
+        if strip_markers {
+            assert_eq!(copied, source.trim_end_matches('\n'));
+        } else {
+            assert!(copied.starts_with("+\tlet λ0"));
+            assert!(copied.contains("\n+\tlet λ399"));
+        }
+    }
 }
 
 fn history_fixture(count: usize) -> Fixture {
@@ -827,6 +837,8 @@ fn force_reload_survives_coalesced_requests_and_normal_reload_reuses_again() {
     handle.request(request.clone());
     let forced = wait(|| {
         handle.take_snapshot().filter(|s| {
+            assert_eq!(s.generation, request.generation);
+            assert!(s.error.is_none());
             s.source.reload_generation == request.source.reload_generation
                 && s.request_id == request.id
                 && s.eof
@@ -840,9 +852,11 @@ fn force_reload_survives_coalesced_requests_and_normal_reload_reuses_again() {
     request.id += 1;
     handle.request(request.clone());
     let incremental = wait(|| {
-        handle
-            .take_snapshot()
-            .filter(|s| s.generation == request.generation && s.eof)
+        handle.take_snapshot().filter(|s| {
+            assert_eq!(s.generation, request.generation);
+            assert!(s.error.is_none());
+            s.eof
+        })
     });
     assert!(Arc::ptr_eq(&incremental.rows[0], &forced.rows[0]));
 }

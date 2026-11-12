@@ -297,29 +297,6 @@ fn forced_reload_releases_rows_after_capturing_bookmarks_and_anchor() {
 }
 
 #[test]
-fn forced_reload_refreshes_local_selection_while_preserving_the_top_commit() {
-    let mut state = loaded();
-    state.update_local_rows(&LocalStatus {
-        unstaged: true,
-        ..Default::default()
-    });
-    state.select_row(0).unwrap();
-    state.viewport = 6..11;
-    let top = state.cached(6).unwrap();
-    let update = state.reload(PathBuf::from("repository"), true);
-    assert!(matches!(
-        update.selection,
-        Some(Selection::Local(LocalChangeKind::Unstaged))
-    ));
-    assert_eq!(state.local_selection, Some(LocalChangeKind::Unstaged));
-    assert_eq!(
-        update.request.restore.unwrap().top,
-        Some(top.commit.id.clone())
-    );
-    assert!(state.snapshot.is_none());
-}
-
-#[test]
 fn navigation_stops_at_visible_rows_and_uses_pending_selection() {
     let mut state = loaded();
     assert_eq!(state.navigation_index(isize::MIN), Some(0));

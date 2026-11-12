@@ -110,34 +110,6 @@ mod tests {
     use super::*;
     use std::fs;
     #[test]
-    fn atomic_preferences_roundtrip_and_invalid_input() {
-        let root = tempfile::tempdir().unwrap();
-        let path = root.path().join("config/preferences.toml");
-        let prefs = Preferences {
-            fixed_font: "Example Mono".into(),
-            font_size: 16.,
-            ..Preferences::default()
-        };
-        prefs.save_to(&path).unwrap();
-        assert!(
-            fs::read_to_string(&path)
-                .unwrap()
-                .contains("font_size = 16.0")
-        );
-        assert_eq!(Preferences::load_from(&path).unwrap(), prefs);
-        fs::write(&path, "{invalid").unwrap();
-        assert!(Preferences::load_from(&path).is_err());
-        assert!(
-            Preferences {
-                font_size: f32::NAN,
-                ..prefs
-            }
-            .validate()
-            .is_err()
-        );
-    }
-
-    #[test]
     fn read_only_preferences_are_not_replaced_by_atomic_save() {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("preferences.toml");
@@ -181,8 +153,10 @@ mod tests {
     #[test]
     fn all_persistent_options_roundtrip_and_feed_startup_defaults() {
         let root = tempfile::tempdir().unwrap();
-        let path = root.path().join("preferences.toml");
+        let path = root.path().join("config/preferences.toml");
         let preferences = Preferences {
+            fixed_font: "Example Mono".into(),
+            font_size: 16.,
             theme: Theme::Light,
             batch: Some(73),
             graph_columns: 1024,
@@ -194,6 +168,7 @@ mod tests {
         };
         preferences.save_to(&path).unwrap();
         let text = fs::read_to_string(&path).unwrap();
+        assert!(text.contains("font_size = 16.0"));
         assert!(!text.contains("timings") && !text.contains("verbose"));
         let loaded = Preferences::load_from(&path).unwrap();
         assert_eq!(loaded, preferences);
@@ -210,7 +185,8 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("preferences.toml");
         for contents in [
-            b"font_size = 100.0".as_slice(),
+            b"{invalid".as_slice(),
+            b"font_size = 100.0",
             b"font_size = 'large'",
             b"ui_font = ''",
             b"batch = 0",
@@ -228,6 +204,14 @@ mod tests {
         }
         fs::write(&path, vec![b' '; 65537]).unwrap();
         assert!(Preferences::load_from(&path).is_err());
+        assert!(
+            Preferences {
+                font_size: f32::NAN,
+                ..Preferences::default()
+            }
+            .validate()
+            .is_err()
+        );
         #[cfg(target_pointer_width = "64")]
         assert!(
             Preferences {

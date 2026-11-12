@@ -164,23 +164,6 @@ mod tests {
     }
 
     #[test]
-    fn worker_flushes_latest_options_on_exit_and_loads_them_next_time() {
-        let root = tempfile::tempdir().unwrap();
-        let path = root.path().join("state.toml");
-        let engine = DiffEngine::with_options_file(Some(path.clone()));
-        assert_eq!(engine.handle().initial_options(), DiffOptions::default());
-        let mut options = DiffOptions::default();
-        for context in 0..50 {
-            options.context = context;
-            engine.handle().save_options(options);
-        }
-        drop(engine);
-        let next = DiffEngine::with_options_file(Some(path.clone()));
-        assert_eq!(next.handle().initial_options(), options);
-        assert!(!root.path().join("preferences.toml").exists());
-    }
-
-    #[test]
     fn read_only_file_survives_worker_save_failure() {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("state.toml");
@@ -228,7 +211,7 @@ mod layout_tests {
     use std::fs;
 
     #[test]
-    fn layout_and_diff_updates_merge_and_survive_shutdown() {
+    fn worker_flushes_latest_diff_layout_and_search_on_shutdown() {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("state.toml");
         // Existing diff-only state files remain readable.
@@ -239,11 +222,14 @@ mod layout_tests {
         let handle = engine.handle();
         handle.save_layout(LayoutChange::GraphWidth(410.));
         handle.save_layout(LayoutChange::HistoryHeight(330.));
-        let diff = DiffOptions {
+        let mut diff = DiffOptions {
             words: WordDiff::Markup,
             ..handle.initial_options()
         };
-        handle.save_options(diff);
+        for context in 0..50 {
+            diff.context = context;
+            handle.save_options(diff);
+        }
         handle.save_search(Search { regex: true });
         handle.save_layout(LayoutChange::FileListWidth(350.));
         drop(engine);
@@ -251,6 +237,7 @@ mod layout_tests {
         assert_eq!(saved.diff, diff);
         assert!(saved.search.regex);
         let next = DiffEngine::with_options_file(Some(path.clone()));
+        assert_eq!(next.handle().initial_options(), diff);
         assert!(next.handle().initial_search().regex);
         drop(next);
         assert_eq!(

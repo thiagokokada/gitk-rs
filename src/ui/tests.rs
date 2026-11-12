@@ -310,7 +310,7 @@ fn history_pages_settle_after_scrolling_beyond_the_first_page(cx: &mut TestAppCo
 }
 
 #[gpui_kit::test]
-fn unchanged_head_reload_retains_rows_and_selection(cx: &mut TestAppContext) {
+fn reload_shortcuts_reuse_or_rebuild_history_and_preserve_selection(cx: &mut TestAppContext) {
     let fixture = history_fixture(20);
     let (app, cx) = open(&fixture, cx);
     until(cx, |cx| {
@@ -325,7 +325,7 @@ fn unchanged_head_reload_retains_rows_and_selection(cx: &mut TestAppContext) {
     });
     app.view
         .update_in(cx, |view, window, cx| view.select(8, window, cx));
-    let (before, generation) = cx.update(|_, cx| {
+    let (retained, generation) = cx.update(|_, cx| {
         let view = app.view.read(cx);
         (
             view.cached(8).unwrap(),
@@ -345,30 +345,12 @@ fn unchanged_head_reload_retains_rows_and_selection(cx: &mut TestAppContext) {
     });
     cx.update(|_, cx| {
         let view = app.view.read(cx);
-        assert!(Arc::ptr_eq(&before, &view.cached(8).unwrap()));
+        assert!(Arc::ptr_eq(&retained, &view.cached(8).unwrap()));
         assert_eq!(
             view.history_state.selected.as_ref().unwrap().1.commit.id,
-            before.commit.id
+            retained.commit.id
         );
     });
-}
-
-#[gpui_kit::test]
-fn shift_f5_rebuilds_history_and_diff_while_preserving_selection(cx: &mut TestAppContext) {
-    let fixture = history_fixture(20);
-    let (app, cx) = open(&fixture, cx);
-    until(cx, |cx| {
-        cx.update(|_, cx| {
-            app.view
-                .read(cx)
-                .history_state
-                .snapshot
-                .as_ref()
-                .is_some_and(|s| s.eof)
-        })
-    });
-    app.view
-        .update_in(cx, |view, window, cx| view.select(8, window, cx));
     let (before, reload, diff_selection) = cx.update(|_, cx| {
         let view = app.view.read(cx);
         (
@@ -446,6 +428,7 @@ fn force_reload_preserves_local_selection_and_refreshes_its_diff(cx: &mut TestAp
             view.history_state.snapshot.as_ref().is_some_and(|s| s.eof)
                 && view.diff.read(cx).has_loaded_selection()
                 && view.diff.read(cx).selection_id() != before
+                && view.history_state.viewport.start == 10
         })
     });
     assert!(

@@ -1445,39 +1445,6 @@ mod tests {
     }
 
     #[test]
-    fn worker_reload_reuses_completed_history_and_rejects_old_snapshots() {
-        let fixture = Fixture::new();
-        fixture.commit("retained");
-        let mut request = request(&fixture);
-        let engine = HistoryEngine::spawn(request.clone());
-        let handle = engine.handle();
-        let wait = |generation| {
-            let deadline = Instant::now() + Duration::from_secs(5);
-            loop {
-                if let Some(snapshot) = handle.take_snapshot() {
-                    assert_eq!(snapshot.generation, generation);
-                    assert!(snapshot.error.is_none());
-                    if snapshot.eof {
-                        break snapshot;
-                    }
-                }
-                assert!(Instant::now() < deadline);
-                thread::sleep(Duration::from_millis(5));
-            }
-        };
-        let before = wait(request.generation);
-        request.generation = Generation(2);
-        handle.request(request.clone());
-        let after = wait(request.generation);
-        assert!(Arc::ptr_eq(&before.rows[0], &after.rows[0]));
-        request.generation = Generation(3);
-        request.source.graph_columns = 1;
-        handle.request(request.clone());
-        let rebuilt = wait(request.generation);
-        assert!(!Arc::ptr_eq(&after.rows[0], &rebuilt.rows[0]));
-    }
-
-    #[test]
     fn traversal_overrides_disable_same_head_reuse() {
         let fixture = Fixture::new();
         let root = fixture.commit("root");
