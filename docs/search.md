@@ -25,8 +25,8 @@ not mean the search is complete.
 | `hash:text` | Commit hash substring |
 | `contents:text` | Added or removed text line containing the literal text |
 | `path:text` | Changed path containing the literal text, including directory components |
-| `before:YYYY-MM-DD` | Author's recorded calendar date strictly before this day |
-| `after:YYYY-MM-DD` | Author's recorded calendar date strictly after this day |
+| `before:YYYY-MM-DD` | Author's recorded calendar date on or before this day |
+| `after:YYYY-MM-DD` | Author's recorded calendar date on or after this day |
 | `merge:true` / `merge:false` | Commits with multiple parents / other commits |
 
 Unqualified text searches the hash, author name/email, and full message as one

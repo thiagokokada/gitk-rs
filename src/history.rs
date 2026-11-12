@@ -1947,8 +1947,9 @@ mod tests {
                 1,
             ),
             ("message:needle before:2026-01-02", 1),
-            ("after:2026-01-02", 0),
-            ("before:2026-01-01", 0),
+            ("after:2026-01-02", 1),
+            ("after:2026-01-02 before:2026-01-02", 1),
+            ("before:2026-01-01", 1),
             ("author:fixture message:second", 0),
             ("merge:true", 0),
         ] {

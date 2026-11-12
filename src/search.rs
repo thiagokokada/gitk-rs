@@ -1,6 +1,7 @@
 //! Parsed commit filters shared by the worker and search feedback UI.
 use crate::git::Commit;
 use anyhow::{Result, ensure};
+use chrono::NaiveDate;
 use std::{fmt, str::FromStr};
 
 /// Supported qualifiers and their user-facing names share one inventory.
@@ -66,8 +67,8 @@ impl Qualifier {
             Self::Hash => "Commit hash substring",
             Self::Path => "Changed path substring or regex; merges compare with their first parent",
             Self::Contents => "Added or removed text line substring or regex",
-            Self::Before => "Author's recorded calendar day strictly before this date",
-            Self::After => "Author's recorded calendar day strictly after this date",
+            Self::Before => "Author's recorded calendar day on or before this date",
+            Self::After => "Author's recorded calendar day on or after this date",
             Self::Merge => "Include merges with true; exclude merges with false",
         }
     }
@@ -206,6 +207,24 @@ impl Query {
             }
             result.filters.push(format!("{qualifier}:{value}"));
         }
+        let before = result
+            .terms
+            .iter()
+            .filter(|(key, _)| *key == Qualifier::Before)
+            .map(|(_, value)| parse_date(value).expect("date filter was validated"))
+            .min();
+        let after = result
+            .terms
+            .iter()
+            .filter(|(key, _)| *key == Qualifier::After)
+            .map(|(_, value)| parse_date(value).expect("date filter was validated"))
+            .max();
+        if let (Some(before), Some(after)) = (before, after) {
+            ensure!(
+                after <= before,
+                "after date {after} must be on or before the before date {before}"
+            );
+        }
         result.text = text.join(" ");
         Ok(result)
     }
@@ -236,8 +255,12 @@ impl Query {
                 Qualifier::Committer => Predicate::Committer(pattern(value)?),
                 Qualifier::Message => Predicate::Message(pattern(value)?),
                 Qualifier::Hash => Predicate::Hash(pattern(value)?),
-                Qualifier::Before => Predicate::Before(value),
-                Qualifier::After => Predicate::After(value),
+                Qualifier::Before => {
+                    Predicate::Before(parse_date(&value).expect("date filter was validated"))
+                }
+                Qualifier::After => {
+                    Predicate::After(parse_date(&value).expect("date filter was validated"))
+                }
                 Qualifier::Merge => Predicate::Merge(value == "true"),
                 Qualifier::Path | Qualifier::Contents => continue, // Diff predicates use the separate stream.
             });
@@ -332,8 +355,8 @@ enum Predicate {
     Committer(Matcher),
     Message(Matcher),
     Hash(Matcher),
-    Before(String),
-    After(String),
+    Before(NaiveDate),
+    After(NaiveDate),
     Merge(bool),
 }
 
@@ -361,12 +384,14 @@ impl CompiledQuery {
                 .author
                 .time
                 .get(..10)
-                .is_some_and(|day| day < value.as_str()),
+                .and_then(parse_date)
+                .is_some_and(|day| day <= *value),
             Predicate::After(value) => commit
                 .author
                 .time
                 .get(..10)
-                .is_some_and(|day| day > value.as_str()),
+                .and_then(parse_date)
+                .is_some_and(|day| day >= *value),
             Predicate::Merge(value) => (commit.parents.len() > 1) == *value,
         }) && self
             .text
@@ -376,35 +401,11 @@ impl CompiledQuery {
 }
 
 fn valid_date(value: &str) -> bool {
-    let b = value.as_bytes();
-    if b.len() != 10
-        || b[4] != b'-'
-        || b[7] != b'-'
-        || b.iter()
-            .enumerate()
-            .any(|(i, b)| i != 4 && i != 7 && !b.is_ascii_digit())
-    {
-        return false;
-    }
-    let year: u32 = value[..4].parse().unwrap();
-    let month: usize = value[5..7].parse().unwrap();
-    let day: u32 = value[8..].parse().unwrap();
-    let leap = year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400));
-    let days = [
-        31,
-        if leap { 29 } else { 28 },
-        31,
-        30,
-        31,
-        30,
-        31,
-        31,
-        30,
-        31,
-        30,
-        31,
-    ];
-    year > 0 && (1..=12).contains(&month) && day > 0 && day <= days[month - 1]
+    parse_date(value).is_some()
+}
+
+fn parse_date(value: &str) -> Option<NaiveDate> {
+    NaiveDate::parse_from_str(value, "%Y-%m-%d").ok()
 }
 
 #[cfg(test)]
@@ -451,7 +452,7 @@ mod tests {
                 true,
                 true,
             ),
-            (r"before:2026-01-02", true, false),
+            (r"before:2026-01-02", true, true),
             (r#"author:"Alice Smith|Bob Jones""#, true, true),
             (r#"message:"say \"hello\"""#, false, true),
             (r#"message:"say \"hello\"""#, true, true),
@@ -599,6 +600,38 @@ mod tests {
     }
 
     #[test]
+    fn validates_inclusive_date_ranges() {
+        for input in [
+            "after:2026-01-03 before:2026-01-01",
+            "after:2026-01-01 before:2026-01-10 after:2026-01-11",
+        ] {
+            for regex in [false, true] {
+                let error = Query::parse_with_mode(input, regex)
+                    .unwrap_err()
+                    .to_string();
+                assert!(error.contains("must be on or before"), "{input}: {error}");
+            }
+        }
+        assert_eq!(
+            Query::parse("before:2026-1-1 after:2026-01-2")
+                .unwrap_err()
+                .to_string(),
+            "after date 2026-01-02 must be on or before the before date 2026-01-01"
+        );
+        let commit = sample_commit("example");
+        for (input, expected) in [
+            ("after:2026-01-02 before:2026-01-02", true),
+            ("after:2026-01-02 before:2026-01-03", true),
+            ("after:2026-01-01 before:2026-01-02", true),
+            ("before:2026-01-01", false),
+            ("after:2026-01-03", false),
+        ] {
+            let query = Query::parse(input).unwrap().compile(false).unwrap();
+            assert_eq!(query.matches(&commit), expected, "{input}");
+        }
+    }
+
+    #[test]
     fn validates_and_explains_filters() {
         let query =
             Query::parse("fix author:\"Alice Smith\" path:ci.yml after:2024-02-29 merge:false")
@@ -610,7 +643,6 @@ mod tests {
             "before:2025-02-29",
             "after:2026-13-01",
             "before:2026-00-01",
-            "after:0000-01-01",
             "merge:yes",
             "from:abc",
             "path:a path:b",
@@ -619,6 +651,18 @@ mod tests {
         ] {
             assert!(Query::parse(bad).is_err(), "{bad}");
         }
-        assert!(Query::parse("before:2000-02-29").is_ok());
+        for input in [
+            "before:2000-02-29",
+            "before:2026-1-3",
+            "after:0000-01-01",
+            "before:+10000-01-01",
+        ] {
+            assert!(Query::parse(input).is_ok(), "{input}");
+        }
+        let query = Query::parse("after:2026-1-1 before:2026-1-3")
+            .unwrap()
+            .compile(false)
+            .unwrap();
+        assert!(query.matches(&sample_commit("example")));
     }
 }
