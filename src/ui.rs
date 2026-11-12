@@ -20,8 +20,8 @@ use gitk_rs::{
     search::Query,
     timing::{Phase, Timing, TimingGuard},
     workspace::{
-        Operation, WorkspaceEngine, WorkspaceGeneration, WorkspaceHandle, WorkspaceRequest,
-        WorkspaceSnapshot,
+        Operation, OperationId, OperationOutcome, WorkspaceEngine, WorkspaceGeneration,
+        WorkspaceHandle, WorkspaceRequest, WorkspaceSnapshot,
     },
 };
 use gpui_kit::component::{
@@ -129,16 +129,6 @@ enum LocalChangeKind {
     Staged,
 }
 
-enum PendingOperationKind {
-    ListBranches,
-    SwitchBranch,
-}
-
-struct PendingOperation {
-    id: u64,
-    kind: PendingOperationKind,
-}
-
 struct HistoryWindow {
     title: String,
     config: Config,
@@ -180,8 +170,8 @@ struct HistoryWindow {
     branch_index: usize,
     branch_scroll: UniformListScrollHandle,
     help_scroll: ScrollHandle,
-    operation_id: u64,
-    pending_operation: Option<PendingOperation>,
+    operation_id: OperationId,
+    pending_operation: Option<OperationId>,
     operation_message: String,
     request: Request,
     snapshot: Option<Snapshot>,
@@ -399,7 +389,7 @@ impl HistoryWindow {
             branch_index: 0,
             branch_scroll: UniformListScrollHandle::new(),
             help_scroll: ScrollHandle::new(),
-            operation_id: 0,
+            operation_id: OperationId::default(),
             pending_operation: None,
             operation_message: String::new(),
             config,
@@ -633,25 +623,22 @@ impl HistoryWindow {
     fn consume_workspace(&mut self, cx: &mut Context<Self>) {
         if let Some(result) = self.workspace.take_result()
             && result.generation == self.workspace_generation
-            && self
-                .pending_operation
-                .as_ref()
-                .is_some_and(|p| p.id == result.id)
+            && self.pending_operation == Some(result.id)
         {
-            let operation = self.pending_operation.take().unwrap();
-            match (operation.kind, result.result) {
-                (PendingOperationKind::ListBranches, Ok(branches)) => {
+            self.pending_operation = None;
+            match result.result {
+                Ok(OperationOutcome::Branches(branches)) => {
                     self.branches = branches;
                     self.filter_branches(cx);
                     self.branch_index = 0;
                     self.operation_message.clear();
                 }
-                (PendingOperationKind::SwitchBranch, Ok(_)) => {
+                Ok(OperationOutcome::BranchSwitched) => {
                     self.dialog = None;
                     self.restore_focus = true;
                     self.operation_message = "branch switched".into();
                     let generation = self.workspace_generation;
-                    let operation_id = operation.id;
+                    let operation_id = result.id;
                     self.expire_status_notice(cx, move |this| {
                         if this.workspace_generation != generation
                             || this.operation_id != operation_id
@@ -667,7 +654,7 @@ impl HistoryWindow {
                     self.workspace_snapshot = None;
                     self.reload(cx);
                 }
-                (_, Err(error)) => self.operation_message = error,
+                Err(error) => self.operation_message = error,
             }
             cx.notify();
         }

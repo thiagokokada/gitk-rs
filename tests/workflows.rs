@@ -9,7 +9,10 @@ use gitk_rs::{
         SelectionId, TextPoint, TextSelection,
     },
     history::{Generation, HistoryEngine, HistorySource, Request, Restore},
-    workspace::{Operation, WorkspaceEngine, WorkspaceGeneration, WorkspaceRequest},
+    workspace::{
+        Operation, OperationId, OperationOutcome, WorkspaceEngine, WorkspaceGeneration,
+        WorkspaceRequest,
+    },
 };
 use std::{
     fs,
@@ -483,15 +486,30 @@ fn protected_branch_operations_reconcile_status_through_the_worker() {
     let initial = wait(|| handle.take_snapshot());
     assert!(initial.error.is_none());
     assert!(initial.status.unstaged);
-    assert!(handle.operate(generation, 1, Operation::Branches));
-    let listed = wait(|| handle.take_result().filter(|r| r.id == 1))
-        .result
-        .unwrap();
-    assert_eq!(listed, ["main", "side"]);
-    assert!(handle.operate(generation, 2, Operation::Switch("side".into())));
-    let failed = wait(|| handle.take_result().filter(|r| r.id == 2))
-        .result
-        .unwrap_err();
+    assert!(handle.operate(generation, OperationId { value: 1 }, Operation::Branches));
+    let listed = wait(|| {
+        handle
+            .take_result()
+            .filter(|r| r.id == OperationId { value: 1 })
+    })
+    .result
+    .unwrap();
+    assert_eq!(
+        listed,
+        OperationOutcome::Branches(vec!["main".into(), "side".into()])
+    );
+    assert!(handle.operate(
+        generation,
+        OperationId { value: 2 },
+        Operation::Switch("side".into())
+    ));
+    let failed = wait(|| {
+        handle
+            .take_result()
+            .filter(|r| r.id == OperationId { value: 2 })
+    })
+    .result
+    .unwrap_err();
     assert!(failed.contains("Git failed"));
     assert_eq!(fixture.git(&["branch", "--show-current"]), "main");
     assert_eq!(
@@ -499,11 +517,17 @@ fn protected_branch_operations_reconcile_status_through_the_worker() {
         "unsaved edits"
     );
     fs::write(fixture.root().join("file.txt"), "base").unwrap();
-    assert!(handle.operate(generation, 3, Operation::Switch("side".into())));
+    assert!(handle.operate(
+        generation,
+        OperationId { value: 3 },
+        Operation::Switch("side".into())
+    ));
     assert!(
-        wait(|| handle.take_result().filter(|r| r.id == 3))
-            .result
-            .is_ok()
+        wait(|| handle
+            .take_result()
+            .filter(|r| r.id == OperationId { value: 3 }))
+        .result
+            == Ok(OperationOutcome::BranchSwitched)
     );
     let changed = wait(|| {
         handle
