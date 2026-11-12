@@ -696,6 +696,24 @@ struct PrefixSearch {
     suffix_candidates: Vec<(CommitId, usize)>,
 }
 
+#[derive(Default)]
+struct BookmarkState {
+    ordinal: Option<usize>,
+    reachable: bool,
+}
+
+impl BookmarkState {
+    fn pending(&self) -> bool {
+        self.reachable && self.ordinal.is_none()
+    }
+}
+
+#[derive(Default)]
+struct Bookmarks {
+    selected: BookmarkState,
+    top: BookmarkState,
+}
+
 struct Session {
     repository: Repository,
     git_workers: usize,
@@ -718,8 +736,7 @@ struct Session {
     matches: Vec<usize>,
     scanned: usize,
     restore: Option<Restore>,
-    restore_ordinals: [Option<usize>; 2],
-    restore_reachable: [bool; 2],
+    bookmarks: Bookmarks,
     reusable: bool,
     reload: Option<LinearReload>,
     prefix_search: Option<PrefixSearch>,
@@ -757,8 +774,7 @@ impl Session {
             matches: Vec::new(),
             scanned: 0,
             restore: None,
-            restore_ordinals: [None; 2],
-            restore_reachable: [false; 2],
+            bookmarks: Bookmarks::default(),
             reusable,
             reload: None,
             prefix_search: None,
@@ -872,8 +888,7 @@ impl Session {
             });
         }
         self.restore = None;
-        self.restore_ordinals = [None; 2];
-        self.restore_reachable = [false; 2];
+        self.bookmarks = Bookmarks::default();
     }
 
     fn intern(&mut self, commit: &mut Commit) {
@@ -891,16 +906,17 @@ impl Session {
     fn step(&mut self, request: &Request) -> Result<bool> {
         if self.restore != request.restore {
             self.restore = request.restore.clone();
-            self.restore_ordinals = [None; 2];
-            self.restore_reachable = [false; 2];
+            self.bookmarks = Bookmarks::default();
             if let Some(restore) = &self.restore {
-                for (index, target) in [&restore.selected, &restore.top].into_iter().enumerate() {
+                for (bookmark, target) in [
+                    (&mut self.bookmarks.selected, &restore.selected),
+                    (&mut self.bookmarks.top, &restore.top),
+                ] {
                     if let Some(target) = target {
-                        self.restore_ordinals[index] =
-                            self.entries.iter().position(|e| &e.commit.id == target);
+                        bookmark.ordinal = self.entries.iter().position(|e| &e.commit.id == target);
                         // Avoid streaming an unrelated branch to EOF just to find
                         // a bookmark which is no longer reachable from HEAD.
-                        self.restore_reachable[index] = self.restore_ordinals[index].is_some()
+                        bookmark.reachable = bookmark.ordinal.is_some()
                             || run_bytes(
                                 &self.repository.root,
                                 &["merge-base", "--all", &target.to_hex(), "HEAD"],
@@ -1142,9 +1158,12 @@ impl Session {
             let graph = self.graph.push(&commit);
             let ordinal = self.entries.len();
             if let Some(restore) = &self.restore {
-                for (index, target) in [&restore.selected, &restore.top].into_iter().enumerate() {
+                for (bookmark, target) in [
+                    (&mut self.bookmarks.selected, &restore.selected),
+                    (&mut self.bookmarks.top, &restore.top),
+                ] {
                     if target.as_ref() == Some(&commit.id) {
-                        self.restore_ordinals[index] = Some(ordinal);
+                        bookmark.ordinal = Some(ordinal);
                     }
                 }
             }
@@ -1170,7 +1189,7 @@ impl Session {
     }
 
     fn restore_pending(&self) -> bool {
-        !self.eof && (0..2).any(|i| self.restore_reachable[i] && self.restore_ordinals[i].is_none())
+        !self.eof && (self.bookmarks.selected.pending() || self.bookmarks.top.pending())
     }
 
     fn visible_position(&self, ordinal: usize) -> Option<usize> {
@@ -1184,11 +1203,15 @@ impl Session {
     fn snapshot(&self, request: &Request) -> Snapshot {
         let visible = self.visible_count();
         let restored = self.restore.as_ref().map(|_| Restored {
-            selected: self.restore_ordinals[0].and_then(|ordinal| {
+            selected: self.bookmarks.selected.ordinal.and_then(|ordinal| {
                 self.visible_position(ordinal)
                     .map(|position| (position, self.entries[ordinal].clone()))
             }),
-            top: self.restore_ordinals[1].and_then(|ordinal| self.visible_position(ordinal)),
+            top: self
+                .bookmarks
+                .top
+                .ordinal
+                .and_then(|ordinal| self.visible_position(ordinal)),
             pending: self.restore_pending()
                 || !self.query.is_empty() && self.scanned < self.entries.len()
                 || self.restore.as_ref().is_some_and(|restore| {
