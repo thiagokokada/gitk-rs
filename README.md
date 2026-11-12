@@ -10,15 +10,13 @@ A lightweight Git history explorer for Linux and macOS, written in Rust with
 ## Features
 
 - Commit history with a branch graph, author and date columns
-- Background loading and filtering to browse large repositories
+- Background loading and filtering to browse large repositories such as
+  [NixOS/nixpkgs](https://github.com/NixOS/nixpkgs/)
 - Syntax-highlighted diffs with support for more than 200 languages
 - Diff, old/new sides, adjustable context, whitespace filtering and word diffs
 - File list to jump between changes, with text selection and copying
 - Staged, unstaged and untracked changes
 - Branch switching, automatic refresh and keyboard navigation
-- Light and dark themes with searchable font selection and live previews
-- Built to browse large Git repositories such as
-  [NixOS/nixpkgs](https://github.com/NixOS/nixpkgs/)
 
 ## Usage
 
