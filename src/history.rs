@@ -366,7 +366,7 @@ impl DiffSearch {
                 .ok()
                 .and_then(|value| value.parse::<usize>().ok())
                 .filter(|count| (1..=8).contains(count))
-                .unwrap_or(2)
+                .unwrap_or(4)
         } else {
             1
         };

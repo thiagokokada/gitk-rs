@@ -71,3 +71,6 @@ change can take time. Add metadata qualifiers such as `author:` or `after:`
 when you know them to reduce the commits whose diffs need searching. A `path:`
 filter narrows results but currently does not skip generating unrelated
 candidate diffs.
+
+See [content search performance](contents-search-performance.md) for worker-pool
+configuration and reproducible measurements.
