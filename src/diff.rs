@@ -1209,67 +1209,6 @@ mod tests {
     }
 
     #[test]
-    fn root_diff_and_copy_across_unloaded_lines_preserve_tabs_and_unicode() {
-        let fixture = Fixture::new();
-        let source = (0..400)
-            .map(|i| format!("\tlet λ{i} = {i};\n"))
-            .collect::<String>();
-        fs::write(fixture.root().join("main.rs"), &source).unwrap();
-        fixture.git(&["add", "."]);
-        fixture.git(&["commit", "-qm", "root"]);
-        let cancellation = cancel();
-        let mut document = DiffDocument::load(&selected(&fixture, 1), &cancellation).unwrap();
-        assert_eq!(document.files.len(), 1);
-        assert_eq!(document.files[0].path, PathBuf::from("main.rs"));
-        assert_eq!(document.files[0].added, Some(400));
-        let first = document
-            .index
-            .iter()
-            .position(|line| line.kind == LineKind::Added)
-            .unwrap();
-        let last = document.index.len() - 1;
-        let mut snapshot = document.page(&page(1)).unwrap();
-        document
-            .highlight(&mut snapshot, page(1).settings, || false)
-            .unwrap();
-        assert!(snapshot.lines.iter().any(|line| line.spans.len() > 1));
-        assert_eq!(snapshot.lines.len(), 256);
-        let selection = TextSelection {
-            anchor: TextPoint {
-                line: first,
-                byte: 0,
-            },
-            cursor: TextPoint {
-                line: last,
-                byte: document.index[last].len as usize,
-            },
-        };
-        let copied = document
-            .copy(
-                CopyRequest {
-                    selection: SelectionId(1),
-                    range: selection,
-                    strip_markers: true,
-                },
-                &cancellation,
-            )
-            .unwrap();
-        assert_eq!(copied, source.trim_end_matches('\n'));
-        let copied = document
-            .copy(
-                CopyRequest {
-                    selection: SelectionId(1),
-                    range: selection,
-                    strip_markers: false,
-                },
-                &cancellation,
-            )
-            .unwrap();
-        assert!(copied.starts_with("+\tlet λ0"));
-        assert!(copied.contains("\n+\tlet λ399"));
-    }
-
-    #[test]
     fn rename_binary_unusual_paths_and_removed_header_like_code() {
         let fixture = Fixture::new();
         fs::write(

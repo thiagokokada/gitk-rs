@@ -13,7 +13,7 @@ fn ref_refresh_preserves_local_diff_page_and_text_selection(cx: &mut TestAppCont
     let (app, cx) = open(&fixture, cx);
     let pane = cx.update(|_, cx| app.view.read(cx).diff.clone());
     until(cx, |cx| {
-        cx.update(|_, cx| !app.view.read(cx).local_rows.is_empty())
+        cx.update(|_, cx| !app.view.read(cx).history_state.local_rows.is_empty())
     });
     cx.simulate_keystrokes("home");
     until(cx, |cx| {
@@ -68,19 +68,21 @@ fn removing_the_selected_local_row_returns_to_a_commit(cx: &mut TestAppContext) 
     std::fs::write(fixture.root().join("file.txt"), "edited").unwrap();
     let (app, cx) = open(&fixture, cx);
     until(cx, |cx| {
-        cx.update(|_, cx| !app.view.read(cx).local_rows.is_empty())
+        cx.update(|_, cx| !app.view.read(cx).history_state.local_rows.is_empty())
     });
     cx.simulate_keystrokes("home");
     assert!(
-        cx.update(|_, cx| app.view.read(cx).local_selection == Some(LocalChangeKind::Unstaged))
+        cx.update(|_, cx| app.view.read(cx).history_state.local_selection
+            == Some(LocalChangeKind::Unstaged))
     );
     std::fs::write(fixture.root().join("file.txt"), "base").unwrap();
     app.view.update(cx, |view, _| view.refresh_workspace());
     until(cx, |cx| {
         cx.update(|_, cx| {
             let view = app.view.read(cx);
-            view.local_rows.is_empty()
+            view.history_state.local_rows.is_empty()
                 && view
+                    .history_state
                     .selected
                     .as_ref()
                     .is_some_and(|s| s.1.commit.id.to_hex() == head)
@@ -222,12 +224,13 @@ fn file_click_and_copy_use_the_full_diff_not_just_visible_rows(cx: &mut TestAppC
     });
     cx.update(|window, cx| app.view.read(cx).focus.clone().focus(window, cx));
     let identity = cx.update(|_, cx| pane.read(cx).page.selection);
-    let generation = cx.update(|_, cx| app.view.read(cx).request.generation);
+    let generation = cx.update(|_, cx| app.view.read(cx).history_state.request.generation);
     cx.simulate_keystrokes("f5");
     until(cx, |cx| {
         cx.update(|_, cx| {
             let view = app.view.read(cx);
-            view.request.generation != generation && view.reload_selection.is_none()
+            view.history_state.request.generation != generation
+                && view.history_state.reload_selection.is_none()
         })
     });
     assert_eq!(cx.update(|_, cx| pane.read(cx).selected_file), Some(1));
@@ -238,6 +241,7 @@ fn file_click_and_copy_use_the_full_diff_not_just_visible_rows(cx: &mut TestAppC
         cx.update(|_, cx| {
             app.view
                 .read(cx)
+                .history_state
                 .snapshot
                 .as_ref()
                 .is_some_and(|s| s.rows.first().is_some_and(|e| e.commit.id.to_hex() == next))
@@ -274,8 +278,8 @@ fn staged_and_unstaged_diff_pages_settle_after_scrolling(cx: &mut TestAppContext
     until(cx, |cx| {
         cx.update(|_, cx| {
             let view = app.view.read(cx);
-            view.local_rows == [LocalChangeKind::Unstaged, LocalChangeKind::Staged]
-                && view.selected.is_some()
+            view.history_state.local_rows == [LocalChangeKind::Unstaged, LocalChangeKind::Staged]
+                && view.history_state.selected.is_some()
         })
     });
     for keys in ["home", "j"] {
@@ -455,7 +459,10 @@ fn opening_a_non_repository_shows_one_error_and_recovers(cx: &mut TestAppContext
     until(cx, |cx| {
         cx.update(|_, cx| {
             let view = app.view.read(cx);
-            view.snapshot.as_ref().is_some_and(|s| s.error.is_some())
+            view.history_state
+                .snapshot
+                .as_ref()
+                .is_some_and(|s| s.error.is_some())
                 && view
                     .workspace_snapshot
                     .as_ref()
@@ -479,7 +486,8 @@ fn opening_a_non_repository_shows_one_error_and_recovers(cx: &mut TestAppContext
     until(cx, |cx| {
         cx.update(|_, cx| {
             let view = app.view.read(cx);
-            view.snapshot
+            view.history_state
+                .snapshot
                 .as_ref()
                 .is_some_and(|s| s.error.is_none() && s.loaded > 0)
                 && view

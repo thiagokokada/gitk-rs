@@ -347,15 +347,26 @@ pub enum Operation {
     Branches,
     Switch(String),
 }
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct OperationId {
+    pub value: u64,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum OperationOutcome {
+    Branches(Vec<String>),
+    BranchSwitched,
+}
+
 pub struct OperationResult {
     pub generation: WorkspaceGeneration,
-    pub id: u64,
-    pub result: Result<Vec<String>, String>,
+    pub id: OperationId,
+    pub result: Result<OperationOutcome, String>,
 }
 struct WorkMailbox {
     generation: WorkspaceGeneration,
     request: Option<WorkspaceRequest>,
-    operation: Option<(WorkspaceGeneration, u64, Operation)>,
+    operation: Option<(WorkspaceGeneration, OperationId, Operation)>,
     snapshot: Option<WorkspaceSnapshot>,
     result: Option<OperationResult>,
     cancel: Cancellation,
@@ -424,7 +435,12 @@ impl WorkspaceHandle {
         mailbox.request = Some(request);
         self.shared.changed.notify_one();
     }
-    pub fn operate(&self, generation: WorkspaceGeneration, id: u64, operation: Operation) -> bool {
+    pub fn operate(
+        &self,
+        generation: WorkspaceGeneration,
+        id: OperationId,
+        operation: Operation,
+    ) -> bool {
         let mut mailbox = self.shared.mailbox.lock().unwrap();
         if generation != mailbox.generation || mailbox.operation.is_some() {
             return false;
@@ -522,10 +538,11 @@ fn workspace_worker(shared: Arc<WorkShared>) {
             && generation == request.generation
         {
             let result = match operation {
-                Operation::Branches => branches(&request.repository, &cancel),
-                Operation::Switch(branch) => {
-                    switch_branch(&request.repository, &branch, &cancel).map(|()| Vec::new())
+                Operation::Branches => {
+                    branches(&request.repository, &cancel).map(OperationOutcome::Branches)
                 }
+                Operation::Switch(branch) => switch_branch(&request.repository, &branch, &cancel)
+                    .map(|()| OperationOutcome::BranchSwitched),
             }
             .map_err(|error| format!("{error:#}"));
             let mut mailbox = shared.mailbox.lock().unwrap();

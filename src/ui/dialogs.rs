@@ -48,14 +48,9 @@ impl HistoryWindow {
         self.config.repository = std::path::absolute(&path).unwrap_or(path);
         self.workspace_generation.0 += 1;
         self.workspace_snapshot = None;
-        self.local_rows.clear();
+        self.history_state.reset_repository();
         self.pending_operation = None;
         self.operation_message.clear();
-        self.selected = None;
-        self.local_selection = None;
-        self.reload_selection = None;
-        self.request.restore = None;
-        self.snapshot = None;
         self.dialog = None;
         self.restore_focus = true;
         self.reload(cx);
@@ -94,16 +89,13 @@ impl HistoryWindow {
         self.branch_filter
             .update(cx, |input, cx| input.focus(window, cx));
         self.operation_message = "loading local branches…".into();
-        self.operation_id += 1;
+        self.operation_id.value += 1;
         if self.workspace.operate(
             self.workspace_generation,
             self.operation_id,
             Operation::Branches,
         ) {
-            self.pending_operation = Some(PendingOperation {
-                id: self.operation_id,
-                kind: PendingOperationKind::ListBranches,
-            });
+            self.pending_operation = Some(self.operation_id);
         } else {
             self.operation_message = "a repository operation is already pending".into();
         }
@@ -121,7 +113,7 @@ impl HistoryWindow {
         else {
             return;
         };
-        self.operation_id += 1;
+        self.operation_id.value += 1;
         self.operation_message = format!("switching to {branch}…");
         if self.config.verbose {
             eprintln!("gitk-rs: {}", self.operation_message);
@@ -131,10 +123,7 @@ impl HistoryWindow {
             self.operation_id,
             Operation::Switch(branch),
         ) {
-            self.pending_operation = Some(PendingOperation {
-                id: self.operation_id,
-                kind: PendingOperationKind::SwitchBranch,
-            });
+            self.pending_operation = Some(self.operation_id);
         }
         cx.notify();
     }
@@ -588,11 +577,11 @@ impl HistoryWindow {
             return;
         }
         let previous = self.config.clone();
-        let previous_source = self.request.source.clone();
+        let previous_source = self.history_state.request.source.clone();
         self.config.apply_preferences(&preferences);
-        self.request.batch = self.config.batch;
-        self.request.source.graph_columns = self.config.graph_columns;
-        self.request.source.git_workers = self.config.git_workers;
+        self.history_state.request.batch = self.config.batch;
+        self.history_state.request.source.graph_columns = self.config.graph_columns;
+        self.history_state.request.source.git_workers = self.config.git_workers;
         if previous.watch != self.config.watch {
             self.workspace_generation.0 += 1;
             self.refresh_workspace();
@@ -625,7 +614,7 @@ impl HistoryWindow {
         apply_fonts(&preferences, cx);
         window.refresh();
         self.preferences = preferences.clone();
-        if previous_source != self.request.source {
+        if previous_source != self.history_state.request.source {
             self.reload(cx);
         } else if previous.batch != self.config.batch {
             self.submit();

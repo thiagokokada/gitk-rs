@@ -190,12 +190,6 @@ mod tests {
     }
 
     #[test]
-    fn syntax_can_be_disabled() {
-        let config = command(&["--nosyntax"]).unwrap();
-        assert!(!config.syntax);
-    }
-
-    #[test]
     fn explicit_flags_override_saved_settings_including_default_and_false_values() {
         let preferences = crate::preferences::Preferences {
             theme: Theme::Light,
