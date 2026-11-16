@@ -725,7 +725,10 @@ const SHORTCUT_GROUPS: &[ShortcutGroup] = &[
                 "Enter",
                 "Apply filter and return to history (in filter box)",
             ),
-            ("Escape", "Leave the filter box"),
+            (
+                "Escape",
+                "Dismiss filter suggestions, then leave the filter box",
+            ),
             ("F5", "Reload commits"),
             ("Alt+R", "Toggle regex search"),
             ("F1 / ?", "Show help (? outside text inputs)"),
@@ -744,6 +747,10 @@ const SHORTCUT_GROUPS: &[ShortcutGroup] = &[
         qualifiers: &[],
         title: "Filter box and text inputs",
         shortcuts: &[
+            (
+                "Tab / Up / Down",
+                "Complete filter tag / choose suggestion (when shown)",
+            ),
             ("Ctrl+A / Ctrl+E", "Move to start / end of line"),
             ("Ctrl+B / Ctrl+F", "Move back / forward one character"),
             ("Ctrl+W", "Delete word before cursor"),

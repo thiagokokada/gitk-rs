@@ -4,6 +4,7 @@ mod tests;
 mod colors;
 mod dialogs;
 mod diff_view;
+mod filter_completion;
 mod preference_dialog;
 mod system_fonts;
 
@@ -173,6 +174,9 @@ struct HistoryWindow {
     diff: Entity<diff_view::DiffPane>,
     scroll: UniformListScrollHandle,
     _subscription: Subscription,
+    _filter_observation: Subscription,
+    filter_completion_index: usize,
+    filter_completion_dismissed: bool,
     _history_task: Task<()>,
     filter_task: Option<Task<()>>,
     pending_history_activity: Option<&'static str>,
@@ -287,6 +291,8 @@ impl HistoryWindow {
                 }
                 this.focus.focus(window, cx);
             } else if matches!(event, InputEvent::Change) {
+                this.filter_completion_index = 0;
+                this.filter_completion_dismissed = false;
                 let query = input.read(cx).value().to_string();
                 this.filter_task = None;
                 cx.notify();
@@ -301,7 +307,14 @@ impl HistoryWindow {
                         this.apply_filter(query, cx);
                     });
                 }));
+            } else if matches!(event, InputEvent::Focus | InputEvent::Blur) {
+                this.filter_completion_dismissed = false;
+                cx.notify();
             }
+        });
+        let filter_observation = cx.observe(&filter, |this, _, cx| {
+            this.filter_completion_index = 0;
+            cx.notify();
         });
         let task = cx.spawn(async |this, cx| {
             loop {
@@ -388,6 +401,9 @@ impl HistoryWindow {
             detail: "Loading commits…".into(),
             scroll: UniformListScrollHandle::new(),
             _subscription: subscription,
+            _filter_observation: filter_observation,
+            filter_completion_index: 0,
+            filter_completion_dismissed: false,
             _history_task: task,
             filter_task: None,
             pending_history_activity: Some("Loading commits…"),
@@ -1357,7 +1373,7 @@ impl Render for HistoryWindow {
             .child(
                 div().flex().items_center().gap_2()
                     .child("Filter:")
-                    .child(div().flex_1().key_context("HistoryFilter").child(Input::new(&self.filter).cleanable(true)))
+                    .child(self.filter_input(window, cx))
                     .child(Checkbox::new("search-regex")
                         .label("Regex (Alt+R)")
                         .tooltip("Toggle regex with Alt+R. Turn off for literal text and path searches.")

@@ -2,7 +2,61 @@
 use crate::git::Commit;
 use anyhow::{Result, ensure};
 use chrono::NaiveDate;
-use std::{fmt, str::FromStr};
+use std::{fmt, ops::Range, str::FromStr};
+
+/// Maximum UTF-8 query length shared by parsing and qualifier completion.
+pub const MAX_QUERY_BYTES: usize = 8 * 1024;
+
+/// A qualifier word at the caret, with byte offsets into the original query.
+#[derive(Debug, PartialEq, Eq)]
+pub struct QualifierCompletion {
+    pub range: Range<usize>,
+    pub candidates: Vec<Qualifier>,
+}
+
+pub fn complete_qualifier(input: &str, cursor: usize) -> Option<QualifierCompletion> {
+    if input.len() > MAX_QUERY_BYTES {
+        return None;
+    }
+    let before = input.get(..cursor)?;
+    let mut start = 0;
+    let mut quoted = false;
+    let mut escaped = false;
+    for (index, ch) in before.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match ch {
+            '\\' => escaped = true,
+            '"' => quoted = !quoted,
+            ch if ch.is_whitespace() && !quoted => start = index + ch.len_utf8(),
+            _ => (),
+        }
+    }
+    if quoted || escaped || start == cursor {
+        return None;
+    }
+    let end = input[cursor..]
+        .find(char::is_whitespace)
+        .map_or(input.len(), |end| cursor + end);
+    // Colons, quotes and escapes identify values or literal text, not keys.
+    if !input[start..end]
+        .bytes()
+        .all(|byte| byte.is_ascii_alphabetic())
+    {
+        return None;
+    }
+    let prefix = input[start..cursor].to_ascii_lowercase();
+    let candidates: Vec<_> = Qualifier::ALL
+        .into_iter()
+        .filter(|qualifier| qualifier.name().starts_with(&prefix))
+        .collect();
+    (!candidates.is_empty()).then_some(QualifierCompletion {
+        range: start..end,
+        candidates,
+    })
+}
 
 /// Supported qualifiers and their user-facing names share one inventory.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -133,8 +187,8 @@ impl Query {
 
     pub fn parse_with_mode(input: &str, regex: bool) -> Result<Self> {
         ensure!(
-            input.len() <= 8192,
-            "filter is too long (maximum 8192 bytes)"
+            input.len() <= MAX_QUERY_BYTES,
+            "filter is too long (maximum {MAX_QUERY_BYTES} bytes)"
         );
         let mut tokens = Vec::new();
         let mut token = String::new();
@@ -411,6 +465,57 @@ fn parse_date(value: &str) -> Option<NaiveDate> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn qualifier_completion_matches_inventory_and_replaces_only_the_key() {
+        for qualifier in Qualifier::ALL {
+            let prefix = "author:alice ";
+            let input = format!("{prefix}{}", qualifier.name()[..2].to_ascii_uppercase());
+            let completion = complete_qualifier(&input, input.len()).unwrap();
+            assert!(completion.candidates.contains(&qualifier));
+            assert_eq!(completion.range, prefix.len()..input.len());
+        }
+        let input = "λ author:\"Alice Smith\" contents path:src";
+        let cursor = input.find("contents").unwrap() + 4;
+        let completion = complete_qualifier(input, cursor).unwrap();
+        assert_eq!(completion.candidates, [Qualifier::Contents]);
+        assert_eq!(&input[completion.range], "contents");
+        assert_eq!(
+            complete_qualifier("co", 2).unwrap().candidates,
+            [Qualifier::Committer, Qualifier::Contents]
+        );
+    }
+
+    #[test]
+    fn qualifier_completion_preserves_literals_values_and_invalid_carets() {
+        for input in [
+            "",
+            " ",
+            "unknown",
+            "contents:",
+            "path:cont",
+            "path:src/cont",
+            "\"cont",
+            "\"hello cont",
+            "author:\"hello cont",
+            "\"cont\"",
+            "hello\\ cont",
+            "cont\\",
+            "λcont",
+        ] {
+            assert!(complete_qualifier(input, input.len()).is_none(), "{input}");
+        }
+        assert!(complete_qualifier("λ cont", 1).is_none());
+        assert!(complete_qualifier("cont", 10).is_none());
+        assert!(complete_qualifier("contents:value", 4).is_none());
+        let oversized = "a".repeat(MAX_QUERY_BYTES + 1);
+        assert!(complete_qualifier(&oversized, oversized.len()).is_none());
+        let input = "author:\"Alice \\\"Smith\\\"\" cont";
+        assert_eq!(
+            complete_qualifier(input, input.len()).unwrap().candidates,
+            [Qualifier::Contents]
+        );
+    }
     fn sample_commit(message: &str) -> Commit {
         use crate::git::{CommitId, Signature};
         Commit {

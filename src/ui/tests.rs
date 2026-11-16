@@ -2822,6 +2822,96 @@ fn history_activity_covers_pending_filters_progress_errors_and_reload(cx: &mut T
 }
 
 #[gpui_kit::test]
+fn filter_tag_completion_supports_keyboard_mouse_and_cursor_edits(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    fixture.commit("needle");
+    fixture.commit("other");
+    let (app, cx) = open(&fixture, cx);
+    cx.simulate_keystrokes("/");
+    cx.simulate_input("cont");
+    cx.refresh().unwrap();
+    assert!(cx.update(|window, _| window.try_find("complete-contents").is_some()));
+    cx.simulate_keystrokes("tab");
+    assert_eq!(
+        cx.update(|_, cx| app.view.read(cx).filter.read(cx).value()),
+        "contents:"
+    );
+    cx.simulate_input("needle");
+    cx.simulate_keystrokes("enter");
+    until(cx, |cx| {
+        cx.update(|window, cx| {
+            let view = app.view.read(cx);
+            view.history_state.request.query == "contents:needle"
+                && view
+                    .history_state
+                    .snapshot
+                    .as_ref()
+                    // Both adding and removing "needle" match contents:.
+                    .is_some_and(|s| !s.filtering && s.visible == 2 && s.error.is_none())
+                && window.try_find("filter-completions").is_none()
+        })
+    });
+    cx.simulate_keystrokes("/ ctrl-a ctrl-k");
+    cx.simulate_input("co");
+    cx.refresh().unwrap();
+    assert!(cx.update(|window, _| window.try_find("complete-committer").is_some()));
+    cx.simulate_keystrokes("down tab");
+    assert_eq!(
+        cx.update(|_, cx| app.view.read(cx).filter.read(cx).value()),
+        "contents:"
+    );
+    cx.simulate_keystrokes("ctrl-a ctrl-k");
+    cx.simulate_input("co");
+    cx.simulate_keystrokes("up tab");
+    assert_eq!(
+        cx.update(|_, cx| app.view.read(cx).filter.read(cx).value()),
+        "contents:"
+    );
+    cx.simulate_keystrokes("ctrl-a ctrl-k");
+    cx.simulate_input("author:λ cont path:src");
+    cx.simulate_keystrokes("home");
+    for _ in "author:λ cont".chars() {
+        cx.simulate_keystrokes("right");
+    }
+    cx.refresh().unwrap();
+    cx.update(|window, cx| window.click("complete-contents", cx));
+    assert_eq!(
+        cx.update(|_, cx| app.view.read(cx).filter.read(cx).value()),
+        "author:λ contents: path:src"
+    );
+    cx.simulate_input("needle");
+    assert_eq!(
+        cx.update(|_, cx| app.view.read(cx).filter.read(cx).value()),
+        "author:λ contents:needle path:src"
+    );
+    cx.simulate_keystrokes("ctrl-a ctrl-k");
+    cx.simulate_input("cont");
+    cx.simulate_keystrokes("escape");
+    cx.refresh().unwrap();
+    cx.update(|window, cx| {
+        assert!(window.try_find("filter-completions").is_none());
+        assert!(
+            app.view
+                .read(cx)
+                .filter
+                .read(cx)
+                .focus_handle(cx)
+                .is_focused(window)
+        );
+    });
+    cx.simulate_keystrokes("escape");
+    assert!(cx.update(|window, cx| app.view.read(cx).focus.is_focused(window)));
+    cx.simulate_keystrokes("/ ctrl-a ctrl-k");
+    cx.simulate_input("\"cont");
+    cx.refresh().unwrap();
+    assert!(cx.update(|window, _| window.try_find("filter-completions").is_none()));
+    cx.simulate_keystrokes("ctrl-a ctrl-k");
+    cx.simulate_input("path:cont");
+    cx.refresh().unwrap();
+    assert!(cx.update(|window, _| window.try_find("filter-completions").is_none()));
+}
+
+#[gpui_kit::test]
 fn metadata_search_shows_badges_errors_and_recovers(cx: &mut TestAppContext) {
     let fixture = Fixture::new();
     fixture.commit("needle");
