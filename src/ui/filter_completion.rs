@@ -1,6 +1,6 @@
 use super::*;
 use gitk_rs::search::{QualifierCompletion, complete_qualifier};
-use gpui_kit::component::input::{Escape, IndentInline, MoveDown, MoveUp, RopeExt as _};
+use gpui_kit::component::input::{Escape, IndentInline, MoveDown, MoveUp};
 use gpui_kit::{EntityInputHandler as _, MouseButton, deferred};
 
 const COMPLETION_MENU_WIDTH: f32 = 420.;
@@ -25,17 +25,13 @@ impl HistoryWindow {
         let index = self
             .filter_completion_index
             .min(completion.candidates.len() - 1);
-        let text = format!("{}:\"\"", completion.candidates[index]);
+        let text = format!("{}:", completion.candidates[index]);
         self.filter.update(cx, |input, cx| {
             let value = input.value();
             let start = value[..completion.range.start].encode_utf16().count();
             let end = value[..completion.range.end].encode_utf16().count();
             input.replace_text_in_range(Some(start..end), &text, window, cx);
-            // Leave the caret immediately before the closing quote.
-            let cursor = input
-                .text()
-                .offset_to_position(completion.range.start + text.len() - 1);
-            input.set_cursor_position(cursor, window, cx);
+            input.focus(window, cx);
         });
         self.filter_completion_index = 0;
         cx.notify();

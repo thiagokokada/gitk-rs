@@ -2842,14 +2842,14 @@ fn filter_tag_completion_supports_keyboard_mouse_and_cursor_edits(cx: &mut TestA
     cx.simulate_keystrokes("tab");
     assert_eq!(
         cx.update(|_, cx| app.view.read(cx).filter.read(cx).value()),
-        "contents:\"\""
+        "contents:"
     );
     cx.simulate_input("needle");
     cx.simulate_keystrokes("enter");
     until(cx, |cx| {
         cx.update(|window, cx| {
             let view = app.view.read(cx);
-            view.history_state.request.query == "contents:\"needle\""
+            view.history_state.request.query == "contents:needle"
                 && view
                     .history_state
                     .snapshot
@@ -2866,14 +2866,14 @@ fn filter_tag_completion_supports_keyboard_mouse_and_cursor_edits(cx: &mut TestA
     cx.simulate_keystrokes("down tab");
     assert_eq!(
         cx.update(|_, cx| app.view.read(cx).filter.read(cx).value()),
-        "contents:\"\""
+        "contents:"
     );
     cx.simulate_keystrokes("ctrl-a ctrl-k");
     cx.simulate_input("co");
     cx.simulate_keystrokes("up tab");
     assert_eq!(
         cx.update(|_, cx| app.view.read(cx).filter.read(cx).value()),
-        "contents:\"\""
+        "contents:"
     );
     cx.simulate_keystrokes("ctrl-a ctrl-k");
     cx.simulate_input("author:λ cont path:src");
@@ -2885,12 +2885,12 @@ fn filter_tag_completion_supports_keyboard_mouse_and_cursor_edits(cx: &mut TestA
     cx.update(|window, cx| window.click("complete-contents", cx));
     assert_eq!(
         cx.update(|_, cx| app.view.read(cx).filter.read(cx).value()),
-        "author:λ contents:\"\" path:src"
+        "author:λ contents: path:src"
     );
-    cx.simulate_input("needle with spaces");
+    cx.simulate_input("needle");
     assert_eq!(
         cx.update(|_, cx| app.view.read(cx).filter.read(cx).value()),
-        "author:λ contents:\"needle with spaces\" path:src"
+        "author:λ contents:needle path:src"
     );
     cx.simulate_keystrokes("ctrl-a ctrl-k");
     cx.simulate_input("cont");
