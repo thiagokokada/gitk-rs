@@ -33,7 +33,8 @@ Unqualified text searches the hash, author name/email, and full message as one
 contiguous phrase, preserving the original plain-text filter behavior. By default,
 all text, path, and contents metacharacters are literal.
 
-Enable **Regex** next to the filter box, or press **Alt+R**, to interpret text,
+Enable **Regex** next to the filter box, or press **Option+R** on macOS
+(**Alt+R** on Linux), to interpret text,
 path, and contents values as regular expressions. The shortcut also works while
 typing in the filter box. For example:
 

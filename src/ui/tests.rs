@@ -2355,10 +2355,22 @@ fn shortcuts_descriptions_wrap_without_clipping(cx: &mut TestAppContext) {
     cx.update(|window, _| {
         let viewport = window.find("shortcut-groups").bounds();
         let group = window.within("Commit list");
+        assert!(
+            group
+                .find(if cfg!(target_os = "macos") {
+                    "Option+J / Option+K"
+                } else {
+                    "Alt+J / Alt+K"
+                })
+                .bounds()
+                .size
+                .height
+                > px(0.)
+        );
         let single_line = group.find("Up / p / k").bounds();
         let copy = group
             .find(if cfg!(target_os = "macos") {
-                "Ctrl/Cmd+C"
+                "Cmd+C"
             } else {
                 "Ctrl+C"
             })
@@ -3166,7 +3178,11 @@ fn regex_toggle_refilters_reports_errors_and_restores_saved_state(cx: &mut TestA
                     .is_some_and(|s| s.visible == 1 && !s.filtering)
             })
         });
-        cx.simulate_keystrokes("alt-r");
+        cx.simulate_keystrokes(if cfg!(target_os = "macos") {
+            "alt-r->®"
+        } else {
+            "alt-r"
+        });
         assert!(!cx.update(|_, cx| app.view.read(cx).config.watch));
         assert!(cx.update(|window, cx| {
             app.view

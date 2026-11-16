@@ -676,11 +676,48 @@ struct ShortcutGroup {
 
 // Only application shortcuts gain Command aliases; Control input editing stays literal.
 macro_rules! command_shortcut {
+    ("Enter") => {
+        if cfg!(target_os = "macos") {
+            "Cmd+Return"
+        } else {
+            "Ctrl+Enter"
+        }
+    };
     ($key:literal) => {
         if cfg!(target_os = "macos") {
-            concat!("Ctrl/Cmd+", $key)
+            concat!("Cmd+", $key)
         } else {
             concat!("Ctrl+", $key)
+        }
+    };
+    ($first:literal, $second:literal) => {
+        if cfg!(target_os = "macos") {
+            concat!("Cmd+", $first, " / Cmd+", $second)
+        } else {
+            concat!("Ctrl+", $first, " / Ctrl+", $second)
+        }
+    };
+}
+
+const ENTER_KEY: &str = if cfg!(target_os = "macos") {
+    "Return"
+} else {
+    "Enter"
+};
+
+macro_rules! option_shortcut {
+    ($first:literal, $second:literal) => {
+        if cfg!(target_os = "macos") {
+            concat!("Option+", $first, " / Option+", $second)
+        } else {
+            concat!("Alt+", $first, " / Alt+", $second)
+        }
+    };
+    ($key:literal) => {
+        if cfg!(target_os = "macos") {
+            concat!("Option+", $key)
+        } else {
+            concat!("Alt+", $key)
         }
     };
 }
@@ -692,11 +729,11 @@ const SHORTCUT_GROUPS: &[ShortcutGroup] = &[
         shortcuts: &[
             ("Up / p / k", "Move up one commit"),
             ("Down / n / j", "Move down one commit"),
-            ("Alt+J / Alt+K", "Select next / previous commit"),
+            (option_shortcut!("J", "K"), "Select next / previous commit"),
             ("Home / gg", "Jump to the first commit"),
             ("End / G", "Jump to the last loaded commit"),
             (
-                command_shortcut!("PageUp / PageDown"),
+                command_shortcut!("PageUp", "PageDown"),
                 "Scroll history up / down a page",
             ),
             (command_shortcut!("C"), "Copy commit hash and summary"),
@@ -723,7 +760,7 @@ const SHORTCUT_GROUPS: &[ShortcutGroup] = &[
         shortcuts: &[
             ("/", "Focus the filter box"),
             (
-                "Enter",
+                ENTER_KEY,
                 "Apply filter and return to history (in filter box)",
             ),
             (
@@ -731,7 +768,7 @@ const SHORTCUT_GROUPS: &[ShortcutGroup] = &[
                 "Dismiss filter suggestions, then leave the filter box",
             ),
             ("F5", "Reload commits"),
-            ("Alt+R", "Toggle regex search"),
+            (REGEX_SHORTCUT, "Toggle regex search"),
             ("F1 / ?", "Show help (? outside text inputs)"),
             (command_shortcut!("O"), "Open repository"),
             (command_shortcut!("Shift+O"), "Open repository by path"),
@@ -740,7 +777,7 @@ const SHORTCUT_GROUPS: &[ShortcutGroup] = &[
                 "Switch local branch (outside text inputs)",
             ),
             (command_shortcut!(","), "Open preferences"),
-            ("Alt+T", "Toggle theme (outside text inputs)"),
+            (option_shortcut!("T"), "Toggle theme (outside text inputs)"),
             (command_shortcut!("Q"), "Quit gitk-rs"),
         ],
     },
@@ -764,9 +801,23 @@ const SHORTCUT_GROUPS: &[ShortcutGroup] = &[
         qualifiers: &[],
         title: "Branch dialog",
         shortcuts: &[
-            ("Up / Ctrl+P / Alt+K", "Select previous branch"),
-            ("Down / Ctrl+N / Alt+J", "Select next branch"),
-            ("Enter", "Switch to selected branch"),
+            (
+                if cfg!(target_os = "macos") {
+                    "Up / Ctrl+P / Option+K"
+                } else {
+                    "Up / Ctrl+P / Alt+K"
+                },
+                "Select previous branch",
+            ),
+            (
+                if cfg!(target_os = "macos") {
+                    "Down / Ctrl+N / Option+J"
+                } else {
+                    "Down / Ctrl+N / Alt+J"
+                },
+                "Select next branch",
+            ),
+            (ENTER_KEY, "Switch to selected branch"),
             ("Type in filter", "Filter local branches"),
         ],
     },
@@ -784,7 +835,7 @@ const SHORTCUT_GROUPS: &[ShortcutGroup] = &[
         title: "Dialogs",
         shortcuts: &[
             ("Escape", "Close the dialog"),
-            ("Enter", "Open repository in the path input"),
+            (ENTER_KEY, "Open repository in the path input"),
             (command_shortcut!("Enter"), "Apply and save preferences"),
         ],
     },

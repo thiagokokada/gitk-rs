@@ -51,6 +51,12 @@ use std::{
     time::{Duration, Instant},
 };
 
+const REGEX_SHORTCUT: &str = if cfg!(target_os = "macos") {
+    "Option+R"
+} else {
+    "Alt+R"
+};
+
 actions!(
     gitk,
     [
@@ -1382,8 +1388,8 @@ impl Render for HistoryWindow {
                     .child("Filter:")
                     .child(self.filter_input(window, cx))
                     .child(Checkbox::new("search-regex")
-                        .label("Regex (Alt+R)")
-                        .tooltip("Toggle regex with Alt+R. Turn off for literal text and path searches.")
+                        .label(format!("Regex ({REGEX_SHORTCUT})"))
+                        .tooltip(format!("Toggle regex with {REGEX_SHORTCUT}. Turn off for literal text and path searches."))
                         .checked(self.history_state.request.regex)
                         .on_click(cx.listener(|this, checked: &bool, _, cx| this.set_search_regex(*checked, cx))))
                     .child(
