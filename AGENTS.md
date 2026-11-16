@@ -66,6 +66,10 @@ actually required.
 - Protect behavior fixes with regression tests at the useful boundaries: pure
   unit tests for algorithms/parsing, tests/ workflows for real Git and worker
   integration, and headless GPUI tests for view, input and focus interactions.
+- Test supported behavior. When functionality changes or is removed, update
+  existing coverage and remove obsolete checks. Do not add tests or assertions
+  solely to prove removed functionality is absent; keep negative checks that
+  verify current requirements, such as error handling and data protection.
 - cargo test --all-targets must run all Rust tests, including GPUI, headlessly.
   Use deterministic temporary Git fixtures; keep native desktop smoke and
   million-commit benchmarks opt-in. Smoke-test real Wayland and X11 separately.
