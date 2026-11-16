@@ -602,15 +602,7 @@ impl HistoryWindow {
             self.refresh_workspace();
         }
         if previous.theme != self.config.theme {
-            gpui_kit::component::Theme::change(
-                if self.config.theme == Theme::Dark {
-                    ThemeMode::Dark
-                } else {
-                    ThemeMode::Light
-                },
-                Some(window),
-                cx,
-            );
+            apply_theme(self.config.theme, window, cx);
         }
         self.diff.update(cx, |diff, cx| {
             diff.set_settings(

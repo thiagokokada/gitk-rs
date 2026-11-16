@@ -1037,6 +1037,18 @@ impl HistoryWindow {
     }
 }
 
+fn apply_theme(theme: Theme, window: &mut Window, cx: &mut App) {
+    gpui_kit::component::Theme::change(
+        if theme == Theme::Dark {
+            ThemeMode::Dark
+        } else {
+            ThemeMode::Light
+        },
+        Some(window),
+        cx,
+    );
+}
+
 fn apply_fonts(preferences: &Preferences, cx: &mut App) {
     let ui_font = system_fonts::resolve(&preferences.ui_font, cx);
     let fixed_font = system_fonts::resolve(&preferences.fixed_font, cx);
@@ -1267,15 +1279,7 @@ impl Render for HistoryWindow {
                 } else {
                     Theme::Dark
                 };
-                gpui_kit::component::Theme::change(
-                    if this.config.theme == Theme::Dark {
-                        ThemeMode::Dark
-                    } else {
-                        ThemeMode::Light
-                    },
-                    Some(window),
-                    cx,
-                );
+                apply_theme(this.config.theme, window, cx);
                 apply_fonts(&this.preferences, cx);
                 this.refresh_filter_highlights(cx);
                 this.diff.update(cx, |diff, cx| {

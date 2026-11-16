@@ -628,6 +628,25 @@ impl Drop for DiffWorker {
     }
 }
 
+fn intern_signatures(
+    commit: &mut Commit,
+    strings: &mut HashSet<Arc<str>>,
+    retained: Option<&HashSet<Arc<str>>>,
+) {
+    for signature in [&mut commit.author, &mut commit.committer] {
+        for value in [&mut signature.name, &mut signature.email] {
+            if let Some(shared) = retained
+                .and_then(|strings| strings.get(value.as_ref()))
+                .or_else(|| strings.get(value.as_ref()))
+            {
+                *value = shared.clone();
+            } else {
+                strings.insert(value.clone());
+            }
+        }
+    }
+}
+
 enum ReloadProgress {
     Pending,
     Ready,
@@ -664,18 +683,7 @@ impl LinearReload {
             }
             bytes += commit.memory_bytes();
             self.expected = commit.parents[0].clone();
-            for signature in [&mut commit.author, &mut commit.committer] {
-                for value in [&mut signature.name, &mut signature.email] {
-                    if let Some(shared) = retained_strings
-                        .get(value.as_ref())
-                        .or_else(|| self.strings.get(value.as_ref()))
-                    {
-                        *value = shared.clone();
-                    } else {
-                        self.strings.insert(value.clone());
-                    }
-                }
-            }
+            intern_signatures(&mut commit, &mut self.strings, Some(retained_strings));
             self.entries.push(Arc::new(Entry {
                 ordinal: self.entries.len(),
                 graph: self.graph.push(&commit),
@@ -891,18 +899,6 @@ impl Session {
         }
         self.restore = None;
         self.bookmarks = Bookmarks::default();
-    }
-
-    fn intern(&mut self, commit: &mut Commit) {
-        for signature in [&mut commit.author, &mut commit.committer] {
-            for value in [&mut signature.name, &mut signature.email] {
-                if let Some(shared) = self.strings.get(value.as_ref()) {
-                    *value = shared.clone();
-                } else {
-                    self.strings.insert(value.clone());
-                }
-            }
-        }
     }
 
     fn step(&mut self, request: &Request) -> Result<bool> {
@@ -1156,7 +1152,7 @@ impl Session {
             bytes += commit.memory_bytes();
             // Share repeated identities within this history generation. Full
             // messages and exact timestamps remain available for search/details.
-            self.intern(&mut commit);
+            intern_signatures(&mut commit, &mut self.strings, None);
             let graph = self.graph.push(&commit);
             let ordinal = self.entries.len();
             if let Some(restore) = &self.restore {
