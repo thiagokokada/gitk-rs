@@ -34,6 +34,24 @@
         touch $out
       '';
 
+  markdown =
+    pkgs.runCommand "gitk-rs-markdown"
+      {
+        src = pkgs.lib.fileset.toSource {
+          root = ./.;
+          fileset = pkgs.lib.fileset.unions [
+            ./.mdformat.toml
+            (pkgs.lib.fileset.fileFilter (file: file.hasExt "md") ./.)
+          ];
+        };
+        nativeBuildInputs = [ (pkgs.mdformat.withPlugins (ps: [ ps.mdformat-gfm ])) ];
+      }
+      ''
+        cd "$src"
+        mdformat --check .
+        touch $out
+      '';
+
   nixfmt =
     pkgs.runCommand "gitk-rs-nixfmt"
       {
