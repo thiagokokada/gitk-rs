@@ -120,3 +120,12 @@ nix develop --command env \
   failed with
   `fatal: Unable to create '/home/thiagoko/Projects/gitk-rs/.git/index.lock': Read-only file system`.
   Run milestone commits with approved Git index access.
+
+- On Linux, sandboxed `nix develop --command rustc --version` failed opening
+  `~/.cache/nix/fetcher-locks/*.lock` with `Read-only file system`. Approved Nix
+  cache access succeeded; use it for validation.
+
+- `nix develop --command mdformat --check .` also scans generated dependency
+  Markdown under `target/native-ci/` and reports unformatted third-party files.
+  Check tracked Markdown files separately; do not reformat generated
+  dependencies.

@@ -913,8 +913,12 @@ impl Render for DiffPane {
                                                         .get(i.saturating_sub(1))
                                                         .filter(|_| i > 0)
                                                         .map(|f| {
-                                                            f.path.to_string_lossy().into_owned()
+                                                            f.path.clone()
                                                         });
+                                                    let open_path = path.as_ref().and_then(|path| {
+                                                        this.snapshot.as_ref()?.worktree_root.as_ref()
+                                                            .map(|root| root.join(path))
+                                                    });
                                                     div()
                                                         .id(("diff-file", i))
                                                         .test_support()
@@ -950,6 +954,16 @@ impl Render for DiffPane {
                                                             },
                                                         ))
                                                         .context_menu(move |menu, _, _| {
+                                                            let menu = if let Some(path) = open_path.clone() {
+                                                                menu.item(
+                                                                    PopupMenuItem::new("Open file")
+                                                                        .on_click(move |_, _, cx| {
+                                                                            cx.open_with_system(&path);
+                                                                        }),
+                                                                )
+                                                            } else {
+                                                                menu
+                                                            };
                                                             if let Some(path) = path.clone() {
                                                                 menu.item(
                                                                     PopupMenuItem::new(
@@ -958,7 +972,7 @@ impl Render for DiffPane {
                                                                     .on_click(move |_, _, cx| {
                                                                         cx.write_to_clipboard(
                                                                     ClipboardItem::new_string(
-                                                                        path.clone(),
+                                                                        path.to_string_lossy().into_owned(),
                                                                     ),
                                                                 )
                                                                     }),

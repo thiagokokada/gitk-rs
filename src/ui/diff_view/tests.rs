@@ -1,6 +1,9 @@
 use crate::ui::LocalChangeKind;
 use crate::ui::tests::{Fixture, open, selected, until};
-use gpui_kit::{AppContext, Modifiers, TestAppContext, point, px, test::TestWindowExt};
+use gpui_kit::{
+    AppContext, Modifiers, TestAppContext, point, px,
+    test::{TestQueryExt, TestWindowExt},
+};
 
 #[gpui_kit::test]
 fn ref_refresh_preserves_local_diff_page_and_text_selection(cx: &mut TestAppContext) {
@@ -617,4 +620,52 @@ fn diff_options_restore_and_save_independently_of_preferences(cx: &mut TestAppCo
     assert_eq!(cx.update(|_, cx| pane.read(cx).options.context), 31);
     assert_eq!(options::load_from(&path).unwrap(), changed);
     std::fs::set_permissions(&path, permissions).unwrap();
+}
+
+#[gpui_kit::test]
+fn file_context_menu_keeps_copy_after_open_file(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let path = "file with # and %.txt";
+    std::fs::write(fixture.root().join(path), "content\n").unwrap();
+    fixture.git(&["add", "."]);
+    fixture.git(&["commit", "-qm", "file menu"]);
+    let (app, cx) = open(&fixture, cx);
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            app.view
+                .read(cx)
+                .diff
+                .read(cx)
+                .snapshot
+                .as_ref()
+                .is_some_and(|snapshot| snapshot.files.len() == 1)
+        })
+    });
+    let bounds = cx.update(|window, _| window.find(("diff-file", 1_usize)).bounds());
+    cx.simulate_mouse_down(
+        bounds.center(),
+        gpui_kit::MouseButton::Right,
+        Modifiers::default(),
+    );
+    cx.simulate_mouse_up(
+        bounds.center(),
+        gpui_kit::MouseButton::Right,
+        Modifiers::default(),
+    );
+    until(cx, |cx| {
+        cx.update(|window, _| window.try_find("popup-menu").is_some())
+    });
+    cx.update(|window, _| {
+        assert!(window.find_by_label("Open file").visible());
+        assert!(window.find_by_label("Copy file path").visible());
+    });
+    // Open file is first; Copy file path remains the second keyboard item.
+    // The headless GPUI platform does not implement open_with_system.
+    cx.simulate_keystrokes("down down enter");
+    until(cx, |cx| {
+        cx.read_from_clipboard()
+            .and_then(|item| item.text())
+            .as_deref()
+            == Some(path)
+    });
 }

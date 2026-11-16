@@ -53,6 +53,7 @@ mod tests {
 
     fn snapshot(count: usize, files: &[(&str, Option<usize>)]) -> DiffSnapshot {
         DiffSnapshot {
+            worktree_root: None,
             selection: SelectionId(1),
             request: 1,
             start: 0,

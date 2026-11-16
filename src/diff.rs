@@ -146,6 +146,8 @@ pub struct DiffLine {
 
 #[derive(Clone, Debug)]
 pub struct DiffSnapshot {
+    /// Absolute worktree root for resolving repository-relative file paths.
+    pub worktree_root: Option<PathBuf>,
     pub selection: SelectionId,
     pub request: u64,
     pub start: usize,
@@ -182,6 +184,7 @@ struct LineIndex {
 }
 
 pub struct DiffDocument {
+    worktree_root: PathBuf,
     reader: BufReader<File>,
     position: u64,
     index: Vec<LineIndex>,
@@ -391,6 +394,7 @@ impl DiffDocument {
         let mut file = output.into_inner()?;
         file.seek(SeekFrom::Start(0))?;
         Ok(Self {
+            worktree_root: selection.repository.clone(),
             reader: BufReader::new(file),
             position: 0,
             index,
@@ -464,6 +468,7 @@ impl DiffDocument {
             });
         }
         Ok(DiffSnapshot {
+            worktree_root: Some(self.worktree_root.clone()),
             selection: request.selection,
             request: request.id,
             start,
@@ -989,6 +994,7 @@ fn publish_diff(shared: &DiffShared, snapshot: DiffSnapshot) {
 
 fn diff_error(page: &DiffPage, error: String) -> DiffSnapshot {
     DiffSnapshot {
+        worktree_root: None,
         selection: page.selection,
         request: page.id,
         start: 0,
@@ -1142,6 +1148,29 @@ mod tests {
                 dark: true,
             },
         }
+    }
+
+    #[test]
+    fn snapshot_resolves_file_paths_from_a_repository_subdirectory() {
+        let fixture = Fixture::new();
+        let path = PathBuf::from("nested/file with # and %.txt");
+        fs::create_dir(fixture.root().join("nested")).unwrap();
+        fs::write(fixture.root().join(&path), "content\n").unwrap();
+        fixture.git(&["add", "."]);
+        fixture.git(&["commit", "-qm", "nested file"]);
+        let mut selection = selected(&fixture, 1);
+        selection.repository = fixture.root().join("nested");
+        let mut document = DiffDocument::load(&selection, &cancel()).unwrap();
+        let snapshot = document.page(&page(1)).unwrap();
+        assert_eq!(snapshot.files.len(), 1);
+        assert_eq!(snapshot.files[0].path, path);
+        assert_eq!(
+            snapshot
+                .worktree_root
+                .unwrap()
+                .join(&snapshot.files[0].path),
+            fixture.root().canonicalize().unwrap().join(path),
+        );
     }
 
     #[test]
