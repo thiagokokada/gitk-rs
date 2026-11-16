@@ -14,7 +14,7 @@
   libxi,
   libxkbcommon,
   libxrandr,
-  makeWrapper,
+  makeBinaryWrapper,
   openssl,
   pkg-config,
   rustPlatform,
@@ -25,7 +25,7 @@
 }:
 
 let
-  baseVersion = (builtins.fromTOML (builtins.readFile ./Cargo.toml)).package.version;
+  baseVersion = (fromTOML (builtins.readFile ./Cargo.toml)).package.version;
   commonArgs = {
     pname = "gitk-rs";
     version = "${baseVersion}-${revision}";
@@ -90,7 +90,7 @@ craneLib.buildPackage (
     inherit cargoArtifacts;
     nativeBuildInputs =
       commonArgs.nativeBuildInputs
-      ++ [ makeWrapper ]
+      ++ [ makeBinaryWrapper ]
       ++ lib.optionals stdenv.hostPlatform.isLinux [ autoPatchelfHook ];
     buildInputs =
       commonArgs.buildInputs ++ lib.optionals stdenv.hostPlatform.isLinux [ stdenv.cc.cc.lib ];
