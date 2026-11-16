@@ -2707,6 +2707,99 @@ fn resized_columns_and_panes_are_saved_and_restored(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn history_activity_covers_pending_filters_progress_errors_and_reload(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    fixture.commit("needle");
+    fixture.commit("other");
+    let (app, cx) = open(&fixture, cx);
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            let view = app.view.read(cx);
+            view.history_state.snapshot.as_ref().is_some_and(|s| s.eof)
+                && view.history_activity_text().is_none()
+        })
+    });
+    cx.update(|_, cx| {
+        app.view.update(cx, |view, cx| {
+            view.apply_filter("message:needle".into(), cx);
+            assert_eq!(
+                view.history_activity_text().as_deref(),
+                Some("Filtering commits…")
+            );
+        });
+    });
+    cx.refresh().unwrap();
+    assert!(cx.update(|window, _| window.try_find("history-activity").is_some()));
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            let view = app.view.read(cx);
+            view.history_activity_text().is_none()
+                && view
+                    .history_state
+                    .snapshot
+                    .as_ref()
+                    .is_some_and(|s| s.visible == 1)
+        })
+    });
+    cx.refresh().unwrap();
+    assert!(cx.update(|window, _| window.try_find("history-activity").is_none()));
+    // Keep a deterministic partial snapshot; the worker timer stays paused.
+    cx.update(|_, cx| {
+        app.view.update(cx, |view, cx| {
+            view.history_state.snapshot.as_mut().unwrap().filtering = true;
+            assert_eq!(
+                view.history_activity_text().as_deref(),
+                Some("Filtering commits… 1 matching / 2 loaded commits")
+            );
+            cx.notify();
+        });
+    });
+    cx.refresh().unwrap();
+    assert!(cx.update(|window, _| window.try_find("history-activity").is_some()));
+    cx.update(|_, cx| {
+        app.view.update(cx, |view, cx| {
+            let snapshot = view.history_state.snapshot.as_mut().unwrap();
+            snapshot.filtering = false;
+            snapshot.eof = false;
+            // An opt-in limit pauses prefetch; it must not look perpetually busy.
+            assert!(view.history_activity_text().is_none());
+            view.history_state.request.batch = None;
+            assert_eq!(
+                view.history_activity_text().as_deref(),
+                Some("Loading history… 2 commits loaded")
+            );
+            view.history_state.request.batch = Some(1000);
+            view.history_state.snapshot.as_mut().unwrap().error = Some("failed".into());
+            assert!(view.history_activity_text().is_none());
+            view.reload(cx);
+            assert_eq!(
+                view.history_activity_text().as_deref(),
+                Some("Reloading history…")
+            );
+        });
+    });
+    until(cx, |cx| {
+        cx.update(|_, cx| app.view.read(cx).history_activity_text().is_none())
+    });
+    // An invalid replacement query must clear the pending indicator too.
+    cx.update(|_, cx| {
+        app.view
+            .update(cx, |view, cx| view.apply_filter("before:nope".into(), cx));
+    });
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            let view = app.view.read(cx);
+            view.history_activity_text().is_none()
+                && view
+                    .history_state
+                    .snapshot
+                    .as_ref()
+                    .is_some_and(|s| s.query_error.is_some())
+        })
+    });
+}
+
+#[gpui_kit::test]
 fn metadata_search_shows_badges_errors_and_recovers(cx: &mut TestAppContext) {
     let fixture = Fixture::new();
     fixture.commit("needle");

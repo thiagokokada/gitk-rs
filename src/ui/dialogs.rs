@@ -231,7 +231,18 @@ impl HistoryWindow {
                                     ),
                             ),
                     )
-                    .child(self.operation_message.clone());
+                    .child(
+                        div()
+                            .id("branch-operation-status")
+                            .test_support()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .when(self.pending_operation.is_some(), |status| {
+                                status.child(Spinner::new().color(rgb(palette.foreground).into()))
+                            })
+                            .child(self.operation_message.clone()),
+                    );
             }
             Some(DialogKind::OpenRepository) => {
                 body = body

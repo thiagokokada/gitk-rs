@@ -33,6 +33,7 @@ use gpui_kit::component::{
     resizable::{resizable_panel, v_resizable},
     scroll::{ScrollableElement, Scrollbar, ScrollbarMode},
     select::{SearchableVec, Select, SelectEvent, SelectState},
+    spinner::Spinner,
     tooltip::Tooltip,
 };
 use gpui_kit::{
@@ -174,6 +175,7 @@ struct HistoryWindow {
     _subscription: Subscription,
     _history_task: Task<()>,
     filter_task: Option<Task<()>>,
+    pending_history_activity: Option<&'static str>,
     graph_layout: GraphLayout,
     layout_handle: DiffHandle,
     history_height: f32,
@@ -388,6 +390,7 @@ impl HistoryWindow {
             _subscription: subscription,
             _history_task: task,
             filter_task: None,
+            pending_history_activity: Some("Loading commits…"),
             graph_layout: GraphLayout::default(),
             layout_handle: diff_handle,
             history_height: layout.history_height,
@@ -400,6 +403,7 @@ impl HistoryWindow {
     }
 
     fn apply_filter(&mut self, query: String, cx: &mut Context<Self>) {
+        self.pending_history_activity = Some("Filtering commits…");
         self.history_state.begin_filter(query);
         self.detail = "Filtering commits…".into();
         self.submit();
@@ -456,6 +460,7 @@ impl HistoryWindow {
         let Some(update) = self.history_state.consume_snapshot(snapshot) else {
             return;
         };
+        self.pending_history_activity = None;
         let snapshot = self.history_state.snapshot.as_ref().unwrap();
         if self.config.verbose {
             eprintln!(
@@ -694,6 +699,7 @@ impl HistoryWindow {
     }
 
     fn reload_history(&mut self, force: bool, cx: &mut Context<Self>) {
+        self.pending_history_activity = Some("Reloading history…");
         let update = self
             .history_state
             .reload(self.config.repository.clone(), force);
@@ -715,6 +721,31 @@ impl HistoryWindow {
         }
         self.refresh_workspace();
         cx.notify();
+    }
+
+    fn history_activity_text(&self) -> Option<String> {
+        // A new request keeps the old rows until an accepted snapshot arrives.
+        // Do not describe those rows as results of the new filter or reload.
+        if let Some(message) = self.pending_history_activity {
+            return Some(message.into());
+        }
+        let snapshot = self.history_state.snapshot.as_ref()?;
+        if snapshot.error.is_some() {
+            return None;
+        }
+        if snapshot.filtering {
+            Some(format!(
+                "Filtering commits… {} matching / {} loaded commits",
+                snapshot.visible, snapshot.loaded
+            ))
+        } else if !snapshot.eof && self.history_state.request.batch.is_none() {
+            Some(format!(
+                "Loading history… {} commits loaded",
+                snapshot.loaded
+            ))
+        } else {
+            None
+        }
     }
 
     fn status_text(&self) -> String {
@@ -1340,6 +1371,15 @@ impl Render for HistoryWindow {
                     )
             )
             .children(search_feedback(self.filter.read(cx).value().as_ref(), self.history_state.request.regex, self.query_error(cx), palette))
+            .when_some(self.history_activity_text(), |view, message| {
+                view.child(
+                    div().id("history-activity").test_support()
+                        .flex().items_center().gap_2().px_2().py_1()
+                        .bg(rgb(palette.header_line))
+                        .child(Spinner::new().color(rgb(palette.foreground).into()))
+                        .child(message),
+                )
+            })
             .child(
                 div().flex_1().min_h_0().child(
                     v_resizable("main-split")
