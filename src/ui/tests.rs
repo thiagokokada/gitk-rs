@@ -1392,7 +1392,6 @@ fn shortcuts_are_grouped_scrollable_and_restore_focus(cx: &mut TestAppContext) {
     assert_eq!(selected(&app.view, cx).as_deref(), Some(older.as_str()));
 }
 
-#[cfg(target_os = "macos")]
 #[gpui_kit::test]
 fn command_aliases_copy_commits_and_page_history(cx: &mut TestAppContext) {
     let fixture = history_fixture(300);
@@ -1408,19 +1407,18 @@ fn command_aliases_copy_commits_and_page_history(cx: &mut TestAppContext) {
                 && app.view.read(cx).history_state.selected.is_some()
         })
     });
-    for modifier in ["ctrl", "cmd"] {
+    let modifiers: &[&str] = if cfg!(target_os = "macos") {
+        &["ctrl", "cmd"]
+    } else {
+        &["ctrl"]
+    };
+    for modifier in modifiers {
         let commit = selected(&app.view, cx).unwrap();
         cx.update(|_, cx| {
             cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string("sentinel".into()))
         });
         cx.simulate_keystrokes(&format!("{modifier}-c"));
-        assert!(
-            cx.read_from_clipboard()
-                .unwrap()
-                .text()
-                .unwrap()
-                .starts_with(&commit)
-        );
+        assert_eq!(cx.read_from_clipboard().unwrap().text().unwrap(), commit);
         cx.simulate_keystrokes(&format!("{modifier}-pagedown"));
         until(cx, |cx| {
             cx.update(|_, cx| app.view.read(cx).history_state.viewport.start > 0)
@@ -2428,21 +2426,15 @@ fn shortcuts_descriptions_wrap_without_clipping(cx: &mut TestAppContext) {
                 > px(0.)
         );
         let single_line = group.find("Up / p / k").bounds();
-        let copy = group
-            .find(if cfg!(target_os = "macos") {
-                "Cmd+C"
-            } else {
-                "Ctrl+C"
-            })
-            .bounds();
+        let jump = group.find("End / G").bounds();
         assert!(
-            copy.size.height > single_line.size.height,
+            jump.size.height > single_line.size.height,
             "long descriptions must wrap rather than overflow horizontally"
         );
-        assert!(copy.right() <= viewport.right());
-        assert!(copy.left() >= viewport.left());
+        assert!(jump.right() <= viewport.right());
+        assert!(jump.left() >= viewport.left());
         assert!(
-            copy.bottom() < window.find("Diff view").bounds().top(),
+            jump.bottom() < window.find("Diff view").bounds().top(),
             "the following group must stay below wrapped descriptions"
         );
     });

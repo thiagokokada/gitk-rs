@@ -164,7 +164,7 @@ pub(super) const GROUPS: &[ShortcutGroup] = &[
             shortcut!("Scroll history up / down a page";
                 [HISTORY], HistoryPageUp => [command!("pageup")];
                 [HISTORY], HistoryPageDown => [command!("pagedown")]),
-            shortcut!("Copy commit hash and summary";
+            shortcut!("Copy commit hash";
                 [Some("GitHistory && !Input && !Diff && !Dialog")], CopyCommit => [command!("c")]),
         ],
     },

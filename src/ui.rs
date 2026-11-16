@@ -925,14 +925,12 @@ impl HistoryWindow {
                 ),
             )
             .context_menu({
-                let reference = format!("{} {}", entry.commit.id, entry.commit.summary());
+                let hash = entry.commit.id.to_string();
                 move |menu, _, _| {
-                    menu.item(PopupMenuItem::new("Copy commit reference").on_click({
-                        let reference = reference.clone();
+                    menu.item(PopupMenuItem::new("Copy commit hash").on_click({
+                        let hash = hash.clone();
                         move |_, _, cx| {
-                            cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(
-                                reference.clone(),
-                            ))
+                            cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(hash.clone()))
                         }
                     }))
                 }
@@ -1193,11 +1191,9 @@ impl Render for HistoryWindow {
             }))
             .on_action(cx.listener(|this, _: &CopyCommit, _, cx| {
                 if let Some((_, entry)) = &this.history_state.selected {
-                    cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(format!(
-                        "{} {}",
-                        entry.commit.id,
-                        entry.commit.summary()
-                    )));
+                    cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(
+                        entry.commit.id.to_string(),
+                    ));
                 }
             }))
             .on_action(cx.listener(|this, _: &ToggleRegex, _, cx| {
@@ -1308,7 +1304,7 @@ impl Render for HistoryWindow {
                                         .menu("Reload", Box::new(Reload))
                                         .menu("Force reload", Box::new(ForceReload))
                                         .separator()
-                                        .menu("Copy commit reference", Box::new(CopyCommit))
+                                        .menu("Copy commit hash", Box::new(CopyCommit))
                                         .menu("Preferences…", Box::new(OpenPreferences))
                                         .menu_with_check("Light theme", light, Box::new(ToggleTheme))
                                         .separator()
