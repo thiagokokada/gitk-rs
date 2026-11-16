@@ -1,6 +1,9 @@
 //! Loaded entries live once in memory. The GUI receives only nearby Arc
 //! references; neither history nor filter results persist on disk.
+mod search;
 pub mod view;
+
+use search::{HistorySearch, SearchProgress};
 
 use crate::{
     git::{Cancellation, Commit, CommitId, CommitStream, GitStream, Repository, run_bytes},
@@ -291,8 +294,9 @@ fn run(shared: Arc<Shared>) {
             let work = retained.step(request)?;
             // Do not restore the viewport using the old HEAD or an incomplete
             // prefix filter. Keep the existing UI snapshot until reconciliation.
-            let snapshot = (retained.prefix_search.is_none() || retained.query_error.is_some())
-                .then(|| retained.snapshot(request));
+            let snapshot = (retained.search.prefix_search.is_none()
+                || retained.search.query_error.is_some())
+            .then(|| retained.snapshot(request));
             Ok((snapshot, work))
         })();
         if !completed {
@@ -700,12 +704,6 @@ impl LinearReload {
     }
 }
 
-struct PrefixSearch {
-    range: Range<usize>,
-    suffix_matches: Vec<usize>,
-    suffix_candidates: Vec<(CommitId, usize)>,
-}
-
 #[derive(Default)]
 struct BookmarkState {
     ordinal: Option<usize>,
@@ -736,20 +734,11 @@ struct Session {
     refs_loaded: bool,
     refs_revision: u64,
     eof: bool,
-    query: String,
-    regex: bool,
-    parsed: CompiledQuery,
-    query_error: Option<String>,
-    paths: Option<DiffSearch>,
-    path_pending: Vec<CommitId>,
-    candidates: HashMap<CommitId, usize>,
-    matches: Vec<usize>,
-    scanned: usize,
+    search: HistorySearch,
     restore: Option<Restore>,
     bookmarks: Bookmarks,
     reusable: bool,
     reload: Option<LinearReload>,
-    prefix_search: Option<PrefixSearch>,
 }
 
 impl Session {
@@ -774,20 +763,11 @@ impl Session {
             refs_loaded: false,
             refs_revision: 0,
             eof,
-            query: String::new(),
-            regex: false,
-            parsed: CompiledQuery::default(),
-            query_error: None,
-            paths: None,
-            path_pending: Vec::new(),
-            candidates: HashMap::new(),
-            matches: Vec::new(),
-            scanned: 0,
+            search: HistorySearch::default(),
             restore: None,
             bookmarks: Bookmarks::default(),
             reusable,
             reload: None,
-            prefix_search: None,
         })
     }
 
@@ -795,17 +775,8 @@ impl Session {
     /// new UI generation. Retain both loaded entries and the unread stream.
     fn refresh(&mut self, request: &Request) -> Result<bool> {
         self.reload = None;
-        if self.prefix_search.take().is_some() {
-            // An unfinished reconciliation was superseded. Keep the commits,
-            // and let step rebuild the new request's search in bounded chunks.
-            self.query.clear();
-            self.paths = None;
-            self.path_pending.clear();
-            self.candidates.clear();
-            self.matches.clear();
-            self.scanned = 0;
-        }
-        if self.cancellation.load(Ordering::Acquire) || self.query_error.is_some() {
+        self.search.discard_prefix();
+        if self.cancellation.load(Ordering::Acquire) || self.search.query_error.is_some() {
             return Ok(false);
         }
         let repository = Repository::open(&request.source.repository, &self.cancellation)?;
@@ -872,31 +843,9 @@ impl Session {
         for entry in &mut self.entries {
             Arc::make_mut(entry).ordinal += offset;
         }
-        for ordinal in &mut self.matches {
-            *ordinal += offset;
-        }
-        for ordinal in self.candidates.values_mut() {
-            *ordinal += offset;
-        }
-        self.scanned += offset;
-
         self.entries.splice(0..0, prefix);
-
-        if !self.query.is_empty() {
-            // Filter the prefix separately before joining the known suffix.
-            // This avoids both a delta-sized candidate queue and repeated
-            // insertion of prefix matches at the front of a large suffix.
-            self.paths = None;
-            self.paths = DiffSearch::start(&self.repository, &self.parsed, self.git_workers);
-            let mut suffix_candidates: Vec<_> = self.candidates.drain().collect();
-            suffix_candidates.sort_unstable_by_key(|(_, ordinal)| *ordinal);
-            self.path_pending.clear();
-            self.prefix_search = Some(PrefixSearch {
-                range: 0..offset,
-                suffix_matches: std::mem::take(&mut self.matches),
-                suffix_candidates,
-            });
-        }
+        self.search
+            .prepend(offset, &self.repository, self.git_workers);
         self.restore = None;
         self.bookmarks = Bookmarks::default();
     }
@@ -930,147 +879,20 @@ impl Session {
                 }
             }
         }
-        let query = request.query.trim().to_owned();
-        if self.query != query || self.regex != request.regex {
-            self.prefix_search = None;
-            self.query = query;
-            self.regex = request.regex;
-            self.matches.clear();
-            self.scanned = 0;
-            self.paths = None;
-            self.path_pending.clear();
-            self.candidates = HashMap::new();
-            self.query_error = None;
-            match Query::parse_with_mode(&self.query, request.regex)
-                .and_then(|query| query.compile(request.regex))
-            {
-                Ok(parsed) => {
-                    self.paths = DiffSearch::start(&self.repository, &parsed, self.git_workers);
-                    self.parsed = parsed;
-                }
-                Err(error) => self.query_error = Some(error.to_string()),
-            }
-        }
-        if self.query_error.is_some() {
+        self.search
+            .update_query(request, &self.repository, self.git_workers);
+        if self.search.query_error.is_some() {
             return Ok(false);
         }
-        let mut progressed = false;
-        if let Some(paths) = &mut self.paths {
-            for _ in 0..256 {
-                match paths.try_recv() {
-                    Ok(Ok((id, matched))) => {
-                        progressed = true;
-                        let ordinal = self
-                            .candidates
-                            .remove(&id)
-                            .ok_or_else(|| anyhow::anyhow!("Unexpected diff-search commit"))?;
-                        if matched {
-                            // A reload can queue new prefix candidates before
-                            // the remaining suffix has finished filtering.
-                            let position = self.matches.partition_point(|i| *i < ordinal);
-                            self.matches.insert(position, ordinal);
-                        }
-                    }
-                    Ok(Err(error)) => {
-                        self.query_error = Some(format!("Diff search failed: {error:#}"));
-                        paths.done = true;
-                        return Ok(false);
-                    }
-                    Err(TryRecvError::Empty) => break,
-                    Err(TryRecvError::Disconnected) => {
-                        paths.done = true;
-                        ensure!(
-                            self.candidates.is_empty(),
-                            "Diff search ended before all commits were checked"
-                        );
-                        break;
-                    }
-                }
-            }
-        }
-        if let Some(paths) = &mut self.paths {
-            if !self.path_pending.is_empty() {
-                let batch = std::mem::take(&mut self.path_pending);
-                let pending = batch.len();
-                match paths.try_send(batch) {
-                    Ok(()) => progressed = true,
-                    Err(TrySendError::Full(batch)) => {
-                        progressed |= batch.len() < pending;
-                        self.path_pending = batch;
-                        if !progressed {
-                            thread::sleep(Duration::from_millis(5));
-                        }
-                        return Ok(true);
-                    }
-                    Err(TrySendError::Disconnected(_)) => {
-                        // Another worker may still be waiting for more input. Do
-                        // not wait for ordered draining to reach a failed worker.
-                        self.query_error = Some("Diff search failed: worker input closed".into());
-                        return Ok(false);
-                    }
-                }
-            }
-            if self.candidates.len() >= 4096 {
-                if !progressed {
-                    thread::sleep(Duration::from_millis(5));
-                }
-                return Ok(true);
-            }
-        }
-        if self
-            .prefix_search
-            .as_ref()
-            .is_some_and(|prefix| prefix.range.is_empty())
-        {
-            if self.path_pending.is_empty()
-                && let Some(paths) = &mut self.paths
+        let progressed =
+            match self
+                .search
+                .step(&self.entries, &self.repository, self.git_workers)?
             {
-                // diff-tree can buffer the last decision until stdin closes.
-                paths.close();
-            }
-            if !self.candidates.is_empty() || !self.path_pending.is_empty() {
-                if !progressed {
-                    thread::sleep(Duration::from_millis(5));
-                }
-                return Ok(true);
-            }
-            let mut prefix = self.prefix_search.take().unwrap();
-            self.paths = None;
-            self.paths = DiffSearch::start(&self.repository, &self.parsed, self.git_workers);
-            self.matches.append(&mut prefix.suffix_matches);
-            for (id, ordinal) in prefix.suffix_candidates {
-                self.path_pending.push(id.clone());
-                self.candidates.insert(id, ordinal);
-            }
-            if !self.path_pending.is_empty() {
-                return Ok(true);
-            }
-        }
-        let scan = self
-            .prefix_search
-            .as_ref()
-            .map(|prefix| prefix.range.clone())
-            .unwrap_or(self.scanned..self.entries.len());
-        if !self.query.is_empty() && !scan.is_empty() {
-            let end = (scan.start + 1000).min(scan.end);
-            for index in scan.start..end {
-                let commit = &self.entries[index].commit;
-                if self.parsed.matches(commit) {
-                    if self.paths.is_some() {
-                        self.candidates.insert(commit.id.clone(), index);
-                        self.path_pending.push(commit.id.clone());
-                    } else {
-                        self.matches.push(index);
-                    }
-                }
-            }
-            if let Some(prefix) = &mut self.prefix_search {
-                prefix.range.start = end;
-            } else {
-                self.scanned = end;
-            }
-            return Ok(true);
-        }
+                SearchProgress::Ready { progressed } => progressed,
+                SearchProgress::Pending => return Ok(true),
+                SearchProgress::Failed => return Ok(false),
+            };
         // Publish a small first viewport before ref discovery or further batches.
         if self.entries.is_empty() && !self.eof {
             self.load(request.batch.unwrap_or(1000).clamp(1, 64), 64)?;
@@ -1085,7 +907,11 @@ impl Session {
         // The requested batch controls prefetch demand, not the size of one
         // worker step. Publish bounded chunks even when --limit is very large.
         let batch = request.batch.unwrap_or(1000).max(1);
-        let step = batch.min(if self.paths.is_some() { 1000 } else { 10000 });
+        let step = batch.min(if self.search.paths.is_some() {
+            1000
+        } else {
+            10000
+        });
         let needed = if request.batch.is_none() {
             usize::MAX
         } else {
@@ -1102,10 +928,10 @@ impl Session {
             return Ok(true);
         }
         if !self.eof && visible < needed {
-            if let Some(paths) = &self.paths {
+            if let Some(paths) = &self.search.paths {
                 if paths.done {
-                    self.paths =
-                        DiffSearch::start(&self.repository, &self.parsed, self.git_workers);
+                    self.search.paths =
+                        DiffSearch::start(&self.repository, &self.search.parsed, self.git_workers);
                 } else if paths.closed {
                     if !progressed {
                         thread::sleep(Duration::from_millis(5));
@@ -1116,11 +942,11 @@ impl Session {
             self.load(step, needed)?;
             return Ok(true);
         }
-        if self.paths.as_ref().is_some_and(|paths| !paths.done) {
+        if self.search.paths.as_ref().is_some_and(|paths| !paths.done) {
             // Close at EOF or an opt-in prefetch pause to flush the last diff.
             // Resuming demand opens a new diff stream for newly loaded candidates.
             if self.eof || visible >= needed {
-                self.paths.as_mut().unwrap().close();
+                self.search.paths.as_mut().unwrap().close();
             }
             if !progressed {
                 thread::sleep(Duration::from_millis(5));
@@ -1131,10 +957,10 @@ impl Session {
     }
 
     fn visible_count(&self) -> usize {
-        if self.query.is_empty() {
+        if self.search.query.is_empty() {
             self.entries.len()
         } else {
-            self.matches.len()
+            self.search.matches.len()
         }
     }
 
@@ -1165,20 +991,13 @@ impl Session {
                     }
                 }
             }
-            if !self.query.is_empty() && self.parsed.matches(&commit) {
-                if self.paths.is_some() {
-                    self.candidates.insert(commit.id.clone(), ordinal);
-                    self.path_pending.push(commit.id.clone());
-                } else {
-                    self.matches.push(ordinal);
-                }
-            }
+            self.search.consider(&commit, ordinal);
             self.entries.push(Arc::new(Entry {
                 ordinal,
                 commit,
                 graph,
             }));
-            self.scanned = self.entries.len();
+            self.search.scanned = self.entries.len();
             if self.visible_count() >= wanted || bytes >= BATCH_BYTES {
                 break;
             }
@@ -1191,10 +1010,10 @@ impl Session {
     }
 
     fn visible_position(&self, ordinal: usize) -> Option<usize> {
-        if self.query.is_empty() {
+        if self.search.query.is_empty() {
             Some(ordinal)
         } else {
-            self.matches.binary_search(&ordinal).ok()
+            self.search.matches.binary_search(&ordinal).ok()
         }
     }
 
@@ -1211,12 +1030,12 @@ impl Session {
                 .ordinal
                 .and_then(|ordinal| self.visible_position(ordinal)),
             pending: self.restore_pending()
-                || !self.query.is_empty() && self.scanned < self.entries.len()
+                || !self.search.query.is_empty() && self.search.scanned < self.entries.len()
                 || self.restore.as_ref().is_some_and(|restore| {
                     [&restore.selected, &restore.top]
                         .into_iter()
                         .flatten()
-                        .any(|id| self.candidates.contains_key(id))
+                        .any(|id| self.search.candidates.contains_key(id))
                 }),
         });
         let range = if let Some(restored) = restored.as_ref().filter(|r| !r.pending) {
@@ -1233,10 +1052,10 @@ impl Session {
         let end = range.end.min(start + PAGE_ROWS).min(visible);
         let rows = (start..end)
             .map(|i| {
-                let ordinal = if self.query.is_empty() {
+                let ordinal = if self.search.query.is_empty() {
                     i
                 } else {
-                    self.matches[i]
+                    self.search.matches[i]
                 };
                 self.entries[ordinal].clone()
             })
@@ -1249,22 +1068,22 @@ impl Session {
             rows,
             visible,
             loaded: self.entries.len(),
-            eof: self.eof && self.paths.as_ref().is_none_or(|paths| paths.done),
+            eof: self.eof && self.search.paths.as_ref().is_none_or(|paths| paths.done),
             load_duration: Duration::ZERO,
-            filtering: self.query_error.is_none()
-                && !self.query.is_empty()
-                && (self.scanned < self.entries.len()
+            filtering: self.search.query_error.is_none()
+                && !self.search.query.is_empty()
+                && (self.search.scanned < self.entries.len()
                     || !self.eof && request.batch.is_none()
-                    || self.paths.as_ref().is_some_and(|paths| !paths.done)),
+                    || self.search.paths.as_ref().is_some_and(|paths| !paths.done)),
             branch: self.repository.branch.clone(),
             refs: self.refs.clone(),
-            error: self.query_error.clone(),
-            query_error: self.query_error.clone(),
+            error: self.search.query_error.clone(),
+            query_error: self.search.query_error.clone(),
             anchor_position: request.anchor.and_then(|ordinal| {
-                if self.query.is_empty() {
+                if self.search.query.is_empty() {
                     (ordinal < self.entries.len()).then_some(ordinal)
                 } else {
-                    self.matches.binary_search(&ordinal).ok()
+                    self.search.matches.binary_search(&ordinal).ok()
                 }
             }),
             restored,
@@ -1405,14 +1224,14 @@ mod tests {
         let before = session.entries.clone();
         request.query = "message:commit".into();
         while session.step(&request).unwrap() {}
-        let scanned = session.scanned;
-        let matches = session.matches.clone();
+        let scanned = session.search.scanned;
+        let matches = session.search.matches.clone();
         fixture.git(&["checkout", "-qb", "same-head"]);
         fixture.git(&["tag", "new-label"]);
         request.generation = Generation(2);
         assert!(refresh(&mut session, &request));
-        assert_eq!(session.scanned, scanned);
-        assert_eq!(session.matches, matches);
+        assert_eq!(session.search.scanned, scanned);
+        assert_eq!(session.search.matches, matches);
         for (old, retained) in before.iter().zip(&session.entries) {
             assert!(Arc::ptr_eq(old, retained));
         }
@@ -1468,7 +1287,7 @@ mod tests {
             assert_eq!(actual.commit.message, expected.commit.message);
             assert_eq!(actual.graph, expected.graph);
         }
-        assert_eq!(actual.matches, expected.matches);
+        assert_eq!(actual.search.matches, expected.search.matches);
         assert_eq!(actual.eof, expected.eof);
     }
 
@@ -1542,11 +1361,17 @@ mod tests {
                 request.generation = Generation(2);
                 assert!(refresh(&mut session, &request));
                 while session.step(&request).unwrap() {}
-                assert!(session.candidates.is_empty());
+                assert!(session.search.candidates.is_empty());
                 let mut fresh = Session::open(&request, Cancellation::default()).unwrap();
                 while fresh.step(&request).unwrap() {}
                 assert_same_history(&session, &fresh);
-                assert!(session.matches.windows(2).all(|pair| pair[0] < pair[1]));
+                assert!(
+                    session
+                        .search
+                        .matches
+                        .windows(2)
+                        .all(|pair| pair[0] < pair[1])
+                );
             }
         }
     }
@@ -1660,13 +1485,13 @@ mod tests {
             assert!(refresh(&mut session, &request));
             let deadline = Instant::now() + Duration::from_secs(30);
             while session.step(&request).unwrap() {
-                assert!(session.candidates.len() <= 5096);
-                assert!(session.path_pending.len() <= 5096);
+                assert!(session.search.candidates.len() <= 5096);
+                assert!(session.search.path_pending.len() <= 5096);
                 assert!(Instant::now() < deadline, "prefix search did not finish");
             }
-            assert!(session.prefix_search.is_none());
+            assert!(session.search.prefix_search.is_none());
             assert_eq!(session.entries[count].commit.message.as_ptr(), message);
-            assert_eq!(session.matches.len(), count + 3);
+            assert_eq!(session.search.matches.len(), count + 3);
             let mut fresh = Session::open(&request, Cancellation::default()).unwrap();
             while fresh.step(&request).unwrap() {}
             assert_same_history(&session, &fresh);
@@ -1747,12 +1572,12 @@ mod tests {
         fixture.append_history(600, true, "new");
         assert!(refresh(&mut session, &request));
         session.step(&request).unwrap();
-        assert!(session.prefix_search.is_some());
+        assert!(session.search.prefix_search.is_some());
         request.generation = Generation(2);
         assert!(refresh(&mut session, &request));
         request.query = "message:root".into();
         while session.step(&request).unwrap() {}
-        assert_eq!(session.matches, vec![600]);
+        assert_eq!(session.search.matches, vec![600]);
         let mut fresh = Session::open(&request, Cancellation::default()).unwrap();
         while fresh.step(&request).unwrap() {}
         assert_same_history(&session, &fresh);
@@ -1818,7 +1643,7 @@ mod tests {
             .map(|value| value.len() + 2 * size_of::<usize>())
             .sum::<usize>();
         let index = session.entries.capacity() * size_of::<Arc<Entry>>()
-            + session.matches.capacity() * size_of::<usize>()
+            + session.search.matches.capacity() * size_of::<usize>()
             + session.strings.capacity() * (size_of::<Arc<str>>() + 1);
         eprintln!(
             "history_probe readers={} graph_lanes={} loaded={} eof={} elapsed_ms={} records_bytes={records} metadata_bytes={metadata} messages_bytes={messages} graph_bytes={graph} index_bytes={index} accounted_bytes={}",
@@ -1993,11 +1818,13 @@ mod tests {
         // Replacing a running search releases its producer and cancellation token.
         request.query = "path:yml".into();
         session.step(&request).unwrap();
-        let path_cancel = session.paths.as_ref().unwrap().workers[0].cancel.clone();
+        let path_cancel = session.search.paths.as_ref().unwrap().workers[0]
+            .cancel
+            .clone();
         request.query = "author:fixture".into();
         while session.step(&request).unwrap() {}
         assert!(path_cancel.load(Ordering::Acquire));
-        assert!(session.paths.is_none());
+        assert!(session.search.paths.is_none());
         assert_eq!(session.visible_count(), 4);
     }
 
@@ -2026,9 +1853,13 @@ mod tests {
         ] {
             request.query = query.into();
             while session.step(&request).unwrap() {}
-            assert!(session.query_error.is_none(), "{:?}", session.query_error);
+            assert!(
+                session.search.query_error.is_none(),
+                "{:?}",
+                session.search.query_error
+            );
             assert_eq!(session.visible_count(), expected, "{query}");
-            assert!(session.candidates.is_empty());
+            assert!(session.search.candidates.is_empty());
         }
     }
 
@@ -2045,18 +1876,22 @@ mod tests {
             request.source.git_workers = count;
             let mut session = Session::open(&request, Cancellation::default()).unwrap();
             session.step(&request).unwrap();
-            assert_eq!(session.paths.as_ref().unwrap().workers.len(), count);
+            assert_eq!(session.search.paths.as_ref().unwrap().workers.len(), count);
             let deadline = Instant::now() + Duration::from_secs(30);
             while session.step(&request).unwrap() {
                 assert!(
                     Instant::now() < deadline,
                     "pool stalled with {count} workers"
                 );
-                assert!(session.candidates.len() <= 5096);
-                assert!(session.query_error.is_none(), "{:?}", session.query_error);
+                assert!(session.search.candidates.len() <= 5096);
+                assert!(
+                    session.search.query_error.is_none(),
+                    "{:?}",
+                    session.search.query_error
+                );
             }
-            assert_eq!(session.matches, (0..6000).collect::<Vec<_>>());
-            assert!(session.candidates.is_empty());
+            assert_eq!(session.search.matches, (0..6000).collect::<Vec<_>>());
+            assert!(session.search.candidates.is_empty());
         }
     }
 
@@ -2068,23 +1903,25 @@ mod tests {
         request.query = "contents:needle".into();
         let mut session = Session::open(&request, Cancellation::default()).unwrap();
         session.step(&request).unwrap();
-        session.paths = DiffSearch::start_with_workers(&session.repository, &session.parsed, 2);
-        let paths = session.paths.as_mut().unwrap();
+        session.search.paths =
+            DiffSearch::start_with_workers(&session.repository, &session.search.parsed, 2);
+        let paths = session.search.paths.as_mut().unwrap();
         // The earlier worker cannot finish this candidate until more input or EOF.
         assert!(
-            !session.path_pending.is_empty(),
+            !session.search.path_pending.is_empty(),
             "expected pending candidate"
         );
-        paths.try_send(session.path_pending.clone()).unwrap();
+        paths.try_send(session.search.path_pending.clone()).unwrap();
         paths.workers[1].cancel.store(true, Ordering::Release);
         paths.workers[1].worker.take().unwrap().join().unwrap();
         assert!(matches!(
-            paths.try_send(session.path_pending.clone()),
+            paths.try_send(session.search.path_pending.clone()),
             Err(TrySendError::Disconnected(_))
         ));
         assert!(!session.step(&request).unwrap());
         assert!(
             session
+                .search
                 .query_error
                 .as_ref()
                 .unwrap()
@@ -2196,16 +2033,17 @@ mod tests {
             request.regex = regex;
             while session.step(&request).unwrap() {}
             assert!(
-                session.query_error.is_none(),
+                session.search.query_error.is_none(),
                 "{query}: {:?}",
-                session.query_error
+                session.search.query_error
             );
             assert_eq!(session.visible_count(), expected, "{query}");
-            assert!(session.candidates.is_empty());
+            assert!(session.search.candidates.is_empty());
         }
         request.query = "contents:Needle".into();
         session.step(&request).unwrap();
         let cancellations: Vec<_> = session
+            .search
             .paths
             .as_ref()
             .unwrap()
@@ -2249,9 +2087,9 @@ mod tests {
             request.query = query.into();
             while session.step(&request).unwrap() {}
             assert!(
-                session.query_error.is_none(),
+                session.search.query_error.is_none(),
                 "{query}: {:?}",
-                session.query_error
+                session.search.query_error
             );
             assert_eq!(session.visible_count(), expected, "{query}");
         }
@@ -2356,7 +2194,11 @@ mod tests {
         );
         let mut first = false;
         while session.step(&request).unwrap() {
-            assert!(session.query_error.is_none(), "{:?}", session.query_error);
+            assert!(
+                session.search.query_error.is_none(),
+                "{:?}",
+                session.search.query_error
+            );
             if !first && session.visible_count() > 0 {
                 eprintln!(
                     "search_probe first_ms={} loaded={} matches={}",
@@ -2369,7 +2211,11 @@ mod tests {
                 first = true;
             }
         }
-        assert!(session.query_error.is_none(), "{:?}", session.query_error);
+        assert!(
+            session.search.query_error.is_none(),
+            "{:?}",
+            session.search.query_error
+        );
         eprintln!(
             "search_probe complete_ms={} loaded={} matches={} eof={}",
             start.elapsed().as_millis(),
@@ -2383,7 +2229,11 @@ mod tests {
             request.query = query;
             let start = Instant::now();
             while session.step(&request).unwrap() {}
-            assert!(session.query_error.is_none(), "{:?}", session.query_error);
+            assert!(
+                session.search.query_error.is_none(),
+                "{:?}",
+                session.search.query_error
+            );
             eprintln!(
                 "search_probe refine_query={:?} refine_ms={} loaded={} matches={}",
                 request.query,
