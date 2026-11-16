@@ -627,6 +627,7 @@ impl HistoryWindow {
             )
         });
         apply_fonts(&preferences, cx);
+        self.refresh_filter_highlights(cx);
         window.refresh();
         self.preferences = preferences.clone();
         if previous_source != self.history_state.request.source {

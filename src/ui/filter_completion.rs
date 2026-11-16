@@ -86,7 +86,18 @@ impl HistoryWindow {
             .capture_action(cx.listener(|this, _: &BlurFilter, window, cx| {
                 this.dismiss_filter_completion(window, cx)
             }))
-            .child(Input::new(&self.filter).cleanable(true))
+            .capture_action(cx.listener(
+                |this, _: &gpui_kit::component::input::Enter, window, cx| {
+                    this.filter_task = None;
+                    let query = this.filter.read(cx).value().to_string();
+                    if this.history_state.request.query != query {
+                        this.apply_filter(query, cx);
+                    }
+                    this.focus.focus(window, cx);
+                    cx.stop_propagation();
+                },
+            ))
+            .child(self.filter_control(cx))
             .when_some(completion, |container, completion| {
                 let selected = self
                     .filter_completion_index

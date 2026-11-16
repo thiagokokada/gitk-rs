@@ -5,6 +5,7 @@ mod colors;
 mod dialogs;
 mod diff_view;
 mod filter_completion;
+mod filter_highlight;
 mod preference_dialog;
 mod system_fonts;
 
@@ -29,7 +30,7 @@ use gpui_kit::component::{
     ThemeMode,
     button::Button,
     checkbox::Checkbox,
-    input::{Input, InputEvent, InputState},
+    input::{Input, InputEvent, InputState, TextareaState},
     menu::{ContextMenuExt, DropdownMenu, PopupMenuItem},
     resizable::{resizable_panel, v_resizable},
     scroll::{ScrollableElement, Scrollbar, ScrollbarMode},
@@ -169,7 +170,7 @@ struct HistoryWindow {
     operation_message: String,
     end_of_history_generation: Option<Generation>,
     show_end_of_history: bool,
-    filter: Entity<InputState>,
+    filter: Entity<TextareaState>,
     detail: SharedString,
     diff: Entity<diff_view::DiffPane>,
     scroll: UniformListScrollHandle,
@@ -280,7 +281,11 @@ impl HistoryWindow {
         let focus = cx.focus_handle();
         focus.focus(window, cx);
         let filter = cx.new(|cx| {
-            InputState::new(window, cx).placeholder("Search commits, e.g. author:alice path:ci.yml")
+            TextareaState::new(window, cx)
+                .rows(1)
+                .soft_wrap(false)
+                .submit_on_enter(true)
+                .placeholder("Search commits, e.g. author:alice path:ci.yml")
         });
         let subscription = cx.subscribe_in(&filter, window, |this, input, event, window, cx| {
             if matches!(event, InputEvent::PressEnter { .. }) {
@@ -291,6 +296,7 @@ impl HistoryWindow {
                 }
                 this.focus.focus(window, cx);
             } else if matches!(event, InputEvent::Change) {
+                this.refresh_filter_highlights(cx);
                 this.filter_completion_index = 0;
                 this.filter_completion_dismissed = false;
                 let query = input.read(cx).value().to_string();
@@ -1265,6 +1271,7 @@ impl Render for HistoryWindow {
                     cx,
                 );
                 apply_fonts(&this.preferences, cx);
+                this.refresh_filter_highlights(cx);
                 this.diff.update(cx, |diff, cx| {
                     diff.set_theme(this.config.theme == Theme::Dark, cx)
                 });
@@ -1839,26 +1846,6 @@ fn search_feedback(
                 )
                 .into_any_element(),
         ),
-        Ok(query) if query.filters.is_empty() => None,
-        Ok(query) => Some(
-            feedback
-                .child("All filters:")
-                .children(
-                    query
-                        .filters
-                        .into_iter()
-                        .enumerate()
-                        .map(|(index, filter)| {
-                            div()
-                                .id(SharedString::from(format!("search-filter-{index}")))
-                                .test_support()
-                                .px_2()
-                                .rounded_sm()
-                                .bg(rgb(palette.selection))
-                                .child(filter)
-                        }),
-                )
-                .into_any_element(),
-        ),
+        Ok(_) => None,
     }
 }

@@ -7,6 +7,59 @@ use std::{fmt, ops::Range, str::FromStr};
 /// Maximum UTF-8 query length shared by parsing and qualifier completion.
 pub const MAX_QUERY_BYTES: usize = 8 * 1024;
 
+#[derive(Debug, PartialEq, Eq)]
+pub struct FilterRange {
+    pub tag: Range<usize>,
+    pub value: Range<usize>,
+}
+
+/// Recognized filters in the original, editable query, including incomplete
+/// values. Quotes and escapes remain in the ranges used for display.
+pub fn filter_ranges(input: &str) -> Vec<FilterRange> {
+    if input.len() > MAX_QUERY_BYTES {
+        return Vec::new();
+    }
+    let mut ranges = Vec::new();
+    let mut start = 0;
+    let mut quoted = false;
+    let mut escaped = false;
+    let mut active: Option<Range<usize>> = None;
+    for (index, ch) in input.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match ch {
+            '\\' => escaped = true,
+            '"' => quoted = !quoted,
+            ch if ch.is_whitespace() && !quoted => {
+                if let Some(tag) = active.take() {
+                    ranges.push(FilterRange {
+                        value: tag.end..index,
+                        tag,
+                    });
+                }
+                start = index + ch.len_utf8();
+            }
+            ':' if !quoted
+                && Qualifier::ALL
+                    .iter()
+                    .any(|q| q.name().eq_ignore_ascii_case(&input[start..index])) =>
+            {
+                active = Some(start..index + ch.len_utf8());
+            }
+            _ => (),
+        }
+    }
+    if let Some(tag) = active {
+        ranges.push(FilterRange {
+            value: tag.end..input.len(),
+            tag,
+        });
+    }
+    ranges
+}
+
 /// A qualifier word at the caret, with byte offsets into the original query.
 #[derive(Debug, PartialEq, Eq)]
 pub struct QualifierCompletion {
@@ -465,6 +518,53 @@ fn parse_date(value: &str) -> Option<NaiveDate> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn qualifier_highlights_follow_query_syntax_and_original_byte_offsets() {
+        for (input, expected) in [
+            (
+                "λ author:\"Alice Smith\" path:src contents:\"\"",
+                vec!["author:", "path:", "contents:"],
+            ),
+            (
+                "AUTHOR:alice message:\"path:src author:literal\"",
+                vec!["AUTHOR:", "message:"],
+            ),
+            ("contents:\"unfinished author:value", vec!["contents:"]),
+            (
+                "\"author:alice\" unknown:value author\\:literal words",
+                vec![],
+            ),
+            ("message:author:value", vec!["message:"]),
+        ] {
+            let actual: Vec<_> = filter_ranges(input)
+                .into_iter()
+                .map(|range| &input[range.tag])
+                .collect();
+            assert_eq!(actual, expected, "{input}");
+        }
+        assert!(filter_ranges(&"a".repeat(MAX_QUERY_BYTES + 1)).is_empty());
+        for (input, expected) in [
+            (
+                "plain contents:\"hello world\" author:λ",
+                vec!["\"hello world\"", "λ"],
+            ),
+            (
+                "message:\"say \\\"hello\\\"\" path:some\\ file",
+                vec!["\"say \\\"hello\\\"\"", "some\\ file"],
+            ),
+            (
+                "contents:\"unfinished author:value",
+                vec!["\"unfinished author:value"],
+            ),
+        ] {
+            let values: Vec<_> = filter_ranges(input)
+                .into_iter()
+                .map(|range| &input[range.value])
+                .collect();
+            assert_eq!(values, expected, "{input}");
+        }
+    }
 
     #[test]
     fn qualifier_completion_matches_inventory_and_replaces_only_the_key() {

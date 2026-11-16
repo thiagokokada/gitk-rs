@@ -2920,7 +2920,108 @@ fn filter_tag_completion_supports_keyboard_mouse_and_cursor_edits(cx: &mut TestA
 }
 
 #[gpui_kit::test]
-fn metadata_search_shows_badges_errors_and_recovers(cx: &mut TestAppContext) {
+fn filter_text_is_centered_and_values_have_their_own_color(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    fixture.commit("tip");
+    let (app, cx) = open(&fixture, cx);
+    cx.simulate_keystrokes("/");
+    for value in ["", "plain contents:\"hello world\" author:λ"] {
+        cx.simulate_keystrokes("ctrl-a ctrl-k");
+        cx.simulate_input(value);
+        cx.refresh().unwrap();
+        cx.update(|window, cx| {
+            let view = app.view.read(cx);
+            let input = view.filter.read(cx);
+            let frame = window.find("history-filter").bounds();
+            let caret = input.prepaint_caret_geometry().unwrap().cursor_bounds();
+            assert!(
+                (caret.center().y - frame.center().y).abs() <= px(1.),
+                "caret {caret:?}, frame {frame:?}"
+            );
+            if !value.is_empty() {
+                let palette = Palette::for_theme(view.config.theme);
+                let values: Vec<_> = input
+                    .decorations()
+                    .iter()
+                    .filter(|decoration| {
+                        decoration.style.color == Some(rgb(palette.filter_value).into())
+                    })
+                    .map(|decoration| &value[decoration.range.clone()])
+                    .collect();
+                assert_eq!(values, ["\"hello world\"", "λ"]);
+                assert_ne!(palette.filter_tag, palette.filter_value);
+            }
+        });
+    }
+}
+
+#[gpui_kit::test]
+fn filter_highlights_follow_edits_theme_and_single_line_submission(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    fixture.commit("tip");
+    let (app, cx) = open(&fixture, cx);
+    cx.simulate_keystrokes("/");
+    cx.simulate_input("author:alice");
+    cx.refresh().unwrap();
+    let height = cx.update(|window, _| window.find("history-filter").bounds().size.height);
+    cx.simulate_keystrokes("home delete");
+    assert!(cx.update(|_, cx| app.view.read(cx).filter.read(cx).decorations().is_empty()));
+    cx.simulate_keystrokes(if cfg!(target_os = "macos") {
+        "cmd-z"
+    } else {
+        "ctrl-z"
+    });
+    cx.update(|_, cx| {
+        let input = app.view.read(cx).filter.read(cx);
+        assert_eq!(input.value(), "author:alice");
+        assert_eq!(input.decorations().len(), 2);
+    });
+    let color = cx.update(|_, cx| {
+        app.view.read(cx).filter.read(cx).decorations()[0]
+            .style
+            .color
+    });
+    cx.simulate_keystrokes("escape alt-t");
+    cx.update(|_, cx| {
+        let view = app.view.read(cx);
+        let updated = view.filter.read(cx).decorations()[0].style.color;
+        assert_ne!(updated, color);
+        assert_eq!(
+            updated,
+            Some(rgb(Palette::for_theme(view.config.theme).filter_tag).into())
+        );
+    });
+    cx.simulate_keystrokes("/ ctrl-a ctrl-k");
+    cx.update(|_, cx| {
+        cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(
+            "author:ali\nce\r".into(),
+        ))
+    });
+    cx.simulate_keystrokes(if cfg!(target_os = "macos") {
+        "cmd-v"
+    } else {
+        "ctrl-v"
+    });
+    cx.refresh().unwrap();
+    assert_eq!(
+        cx.update(|_, cx| app.view.read(cx).filter.read(cx).value()),
+        "author:alice"
+    );
+    assert_eq!(
+        cx.update(|window, _| window.find("history-filter").bounds().size.height),
+        height
+    );
+    cx.simulate_keystrokes("shift-enter");
+    cx.update(|window, cx| {
+        let view = app.view.read(cx);
+        assert_eq!(view.filter.read(cx).value(), "author:alice");
+        assert_eq!(view.history_state.request.query, "author:alice");
+        assert!(view.focus.is_focused(window));
+    });
+}
+
+#[gpui_kit::test]
+fn metadata_search_highlights_qualifiers_shows_errors_and_recovers(cx: &mut TestAppContext) {
     let fixture = Fixture::new();
     fixture.commit("needle");
     fixture.commit("other");
@@ -2940,7 +3041,8 @@ fn metadata_search_shows_badges_errors_and_recovers(cx: &mut TestAppContext) {
     cx.simulate_input("author:fixture message:needle path:file.txt contents:needle");
     until(cx, |cx| {
         cx.update(|window, cx| {
-            window.try_find("search-filter-0").is_some()
+            window.try_find("search-filter-0").is_none()
+                && app.view.read(cx).filter.read(cx).decorations().len() == 8
                 && app
                     .view
                     .read(cx)
@@ -2951,6 +3053,25 @@ fn metadata_search_shows_badges_errors_and_recovers(cx: &mut TestAppContext) {
                         s.visible == 1 && s.rows[0].commit.summary() == "needle" && !s.filtering
                     })
         })
+    });
+    cx.update(|window, cx| {
+        let input = app.view.read(cx).filter.read(cx);
+        let value = input.value();
+        let tags: Vec<_> = input
+            .decorations()
+            .iter()
+            .filter(|d| d.style.font_weight.is_some())
+            .map(|d| &value[d.range.clone()])
+            .collect();
+        assert_eq!(tags, ["author:", "message:", "path:", "contents:"]);
+        assert!(window.try_find("All filters:").is_none());
+        assert!(
+            input
+                .decorations()
+                .iter()
+                .filter(|d| d.style.font_weight.is_some())
+                .all(|d| d.style.font_weight == Some(gpui_kit::FontWeight::SEMIBOLD))
+        );
     });
     cx.simulate_keystrokes("ctrl-a ctrl-k");
     cx.simulate_input("before:nope");
