@@ -68,7 +68,7 @@ fn open_with_state<'a>(
     cx.update(|cx| {
         gpui_kit::init(cx);
         gpui_kit::component::Theme::change(ThemeMode::Dark, None, cx);
-        bind_keys(cx);
+        shortcuts::bind_keys(cx);
     });
     let mut view = None;
     let preferences_directory = tempfile::tempdir().unwrap();

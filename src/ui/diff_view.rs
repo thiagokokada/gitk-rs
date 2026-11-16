@@ -1002,30 +1002,3 @@ impl Render for DiffPane {
             })
     }
 }
-
-pub(super) fn bind_keys(cx: &mut App) {
-    cx.bind_keys([
-        KeyBinding::new("ctrl-c", Copy, Some("Diff")),
-        KeyBinding::new("ctrl-shift-c", CopyCode, Some("Diff")),
-        KeyBinding::new("ctrl-a", SelectAll, Some("Diff")),
-        KeyBinding::new("space", PageDown, Some("GitHistory && !Input && !Dialog")),
-        KeyBinding::new("backspace", PageUp, Some("GitHistory && !Input && !Dialog")),
-        KeyBinding::new("delete", PageUp, Some("GitHistory && !Input && !Dialog")),
-        KeyBinding::new("shift-b", PageUp, Some("GitHistory && !Input && !Dialog")),
-        KeyBinding::new("shift-u", LinesUp, Some("GitHistory && !Input && !Dialog")),
-        KeyBinding::new(
-            "shift-d",
-            LinesDown,
-            Some("GitHistory && !Input && !Dialog"),
-        ),
-        KeyBinding::new("b", PageUp, Some("GitHistory && !Input && !Dialog")),
-        KeyBinding::new("u", LinesUp, Some("GitHistory && !Input && !Dialog")),
-        KeyBinding::new("d", LinesDown, Some("GitHistory && !Input && !Dialog")),
-    ]);
-    #[cfg(target_os = "macos")]
-    cx.bind_keys([
-        KeyBinding::new("cmd-c", Copy, Some("Diff")),
-        KeyBinding::new("cmd-shift-c", CopyCode, Some("Diff")),
-        KeyBinding::new("cmd-a", SelectAll, Some("Diff")),
-    ]);
-}

@@ -8,6 +8,7 @@ mod diff_view;
 mod filter_completion;
 mod filter_highlight;
 mod preference_dialog;
+mod shortcuts;
 mod system_fonts;
 
 use branch_dialog::BranchDialog;
@@ -51,12 +52,6 @@ use std::{
     ops::Range,
     sync::Arc,
     time::{Duration, Instant},
-};
-
-const REGEX_SHORTCUT: &str = if cfg!(target_os = "macos") {
-    "Option+R"
-} else {
-    "Alt+R"
 };
 
 actions!(
@@ -1296,8 +1291,8 @@ impl Render for HistoryWindow {
                     .child("Filter:")
                     .child(self.filter_input(window, cx))
                     .child(Checkbox::new("search-regex")
-                        .label(format!("Regex ({REGEX_SHORTCUT})"))
-                        .tooltip(format!("Toggle regex with {REGEX_SHORTCUT}. Turn off for literal text and path searches."))
+                        .label(format!("Regex ({})", shortcuts::REGEX.label()))
+                        .tooltip(format!("Toggle regex with {}. Turn off for literal text and path searches.", shortcuts::REGEX.label()))
                         .checked(self.history_state.request.regex)
                         .on_click(cx.listener(|this, checked: &bool, _, cx| this.set_search_regex(*checked, cx))))
                     .child(
@@ -1479,148 +1474,6 @@ impl Render for HistoryWindow {
     }
 }
 
-fn bind_keys(cx: &mut App) {
-    diff_view::bind_keys(cx);
-    cx.bind_keys([
-        KeyBinding::new(
-            "ctrl-c",
-            CopyCommit,
-            Some("GitHistory && !Input && !Diff && !Dialog"),
-        ),
-        KeyBinding::new("ctrl-q", Quit, None),
-        KeyBinding::new("ctrl-,", OpenPreferences, Some("GitHistory && !Dialog")),
-        KeyBinding::new("ctrl-enter", ApplyPreferences, Some("Dialog")),
-        KeyBinding::new(
-            "alt-t",
-            ToggleTheme,
-            Some("GitHistory && !Input && !Dialog"),
-        ),
-        KeyBinding::new("alt-r", ToggleRegex, Some("GitHistory && !Dialog")),
-        KeyBinding::new(
-            "ctrl-a",
-            gpui_kit::component::input::MoveHome,
-            Some("Input"),
-        ),
-        KeyBinding::new("ctrl-e", gpui_kit::component::input::MoveEnd, Some("Input")),
-        KeyBinding::new(
-            "ctrl-b",
-            gpui_kit::component::input::MoveLeft,
-            Some("Input"),
-        ),
-        KeyBinding::new(
-            "ctrl-f",
-            gpui_kit::component::input::MoveRight,
-            Some("Input"),
-        ),
-        KeyBinding::new(
-            "ctrl-w",
-            gpui_kit::component::input::DeleteToPreviousWordStart,
-            Some("Input"),
-        ),
-        KeyBinding::new(
-            "ctrl-u",
-            gpui_kit::component::input::DeleteToBeginningOfLine,
-            Some("Input"),
-        ),
-        KeyBinding::new(
-            "ctrl-k",
-            gpui_kit::component::input::DeleteToEndOfLine,
-            Some("Input"),
-        ),
-        KeyBinding::new("ctrl-d", gpui_kit::component::input::Delete, Some("Input")),
-        KeyBinding::new("ctrl-o", OpenRepository, Some("GitHistory && !Dialog")),
-        KeyBinding::new(
-            "ctrl-shift-o",
-            OpenRepositoryPath,
-            Some("GitHistory && !Dialog"),
-        ),
-        KeyBinding::new(
-            "ctrl-b",
-            OpenBranches,
-            Some("GitHistory && !Input && !Dialog"),
-        ),
-        KeyBinding::new("f1", Help, Some("GitHistory && !Dialog")),
-        KeyBinding::new("?", Help, Some("GitHistory && !Input && !Dialog")),
-        KeyBinding::new("up", HelpScrollUp, Some("HelpDialog")),
-        KeyBinding::new("down", HelpScrollDown, Some("HelpDialog")),
-        KeyBinding::new("pageup", HelpPageUp, Some("HelpDialog")),
-        KeyBinding::new("pagedown", HelpPageDown, Some("HelpDialog")),
-        KeyBinding::new("home", HelpTop, Some("HelpDialog")),
-        KeyBinding::new("end", HelpBottom, Some("HelpDialog")),
-        KeyBinding::new("escape", CloseDialog, Some("Dialog")),
-        KeyBinding::new("escape", CloseDialog, Some("Dialog > Input && !Select")),
-        KeyBinding::new("escape", BlurFilter, Some("Input && !Dialog")),
-        KeyBinding::new("up", BranchUp, Some("BranchDialog")),
-        KeyBinding::new("down", BranchDown, Some("BranchDialog")),
-        KeyBinding::new("down", BranchDown, Some("BranchDialog > Input")),
-        KeyBinding::new("up", BranchUp, Some("BranchDialog > Input")),
-        KeyBinding::new("alt-j", BranchDown, Some("BranchDialog > Input")),
-        KeyBinding::new("alt-k", BranchUp, Some("BranchDialog > Input")),
-        KeyBinding::new("alt-j", Next, Some("GitHistory && !Dialog")),
-        KeyBinding::new("alt-k", Previous, Some("GitHistory && !Dialog")),
-        KeyBinding::new("ctrl-n", BranchDown, Some("BranchDialog > Input")),
-        KeyBinding::new("ctrl-p", BranchUp, Some("BranchDialog > Input")),
-        KeyBinding::new("enter", BranchAccept, Some("BranchDialog")),
-        KeyBinding::new("f5", Reload, None),
-        KeyBinding::new("shift-f5", ForceReload, None),
-        KeyBinding::new(
-            "ctrl-pageup",
-            HistoryPageUp,
-            Some("GitHistory && !Input && !Dialog"),
-        ),
-        KeyBinding::new(
-            "ctrl-pagedown",
-            HistoryPageDown,
-            Some("GitHistory && !Input && !Dialog"),
-        ),
-        KeyBinding::new("/", FocusFilter, Some("GitHistory && !Input && !Dialog")),
-        KeyBinding::new("escape", BlurFilter, Some("GitHistory && !Dialog")),
-        KeyBinding::new("down", Next, Some("GitHistory && !Input && !Dialog")),
-        KeyBinding::new("j", Next, Some("GitHistory && !Input && !Dialog")),
-        KeyBinding::new("n", Next, Some("GitHistory && !Input && !Dialog")),
-        KeyBinding::new("up", Previous, Some("GitHistory && !Input && !Dialog")),
-        KeyBinding::new("k", Previous, Some("GitHistory && !Input && !Dialog")),
-        KeyBinding::new("p", Previous, Some("GitHistory && !Input && !Dialog")),
-        KeyBinding::new("home", First, Some("GitHistory && !Input && !Dialog")),
-        KeyBinding::new("g g", First, Some("GitHistory && !Input && !Dialog")),
-        KeyBinding::new("end", Last, Some("GitHistory && !Input && !Dialog")),
-        KeyBinding::new("shift-g", Last, Some("GitHistory && !Input && !Dialog")),
-    ]);
-    // Keep Control bindings available on macOS, including Emacs input editing.
-    #[cfg(target_os = "macos")]
-    cx.bind_keys([
-        KeyBinding::new(
-            "cmd-c",
-            CopyCommit,
-            Some("GitHistory && !Input && !Diff && !Dialog"),
-        ),
-        KeyBinding::new("cmd-q", Quit, None),
-        KeyBinding::new("cmd-,", OpenPreferences, Some("GitHistory && !Dialog")),
-        KeyBinding::new("cmd-enter", ApplyPreferences, Some("Dialog")),
-        KeyBinding::new("cmd-o", OpenRepository, Some("GitHistory && !Dialog")),
-        KeyBinding::new(
-            "cmd-shift-o",
-            OpenRepositoryPath,
-            Some("GitHistory && !Dialog"),
-        ),
-        KeyBinding::new(
-            "cmd-b",
-            OpenBranches,
-            Some("GitHistory && !Input && !Dialog"),
-        ),
-        KeyBinding::new(
-            "cmd-pageup",
-            HistoryPageUp,
-            Some("GitHistory && !Input && !Dialog"),
-        ),
-        KeyBinding::new(
-            "cmd-pagedown",
-            HistoryPageDown,
-            Some("GitHistory && !Input && !Dialog"),
-        ),
-    ]);
-}
-
 pub fn run(mut config: Config, preferences: Preferences, launched: Instant) {
     let system_fonts = system_fonts::SystemFonts::load();
     config.repository = std::path::absolute(&config.repository).unwrap_or(config.repository);
@@ -1676,7 +1529,7 @@ pub fn run(mut config: Config, preferences: Preferences, launched: Instant) {
                 None,
                 cx,
             );
-            bind_keys(cx);
+            shortcuts::bind_keys(cx);
             cx.on_window_closed(|cx, _| {
                 if cx.windows().is_empty() {
                     // Native X11 close still holds its client borrow during App::defer.
