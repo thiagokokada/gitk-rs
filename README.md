@@ -33,10 +33,11 @@ with Metal support.
 
 Press F1 or ? to open Help, including keyboard shortcuts and search syntax.
 
-Filter commits with words or metadata, for example `author:alice path:ci.yml
-after:2026-01-01`. Enable Regex beside the filter for regular expressions;
-leave it off for literal searches. See [commit search](docs/search.md) for
-qualifiers, including `contents:` for added or removed text, and matching rules.
+Filter commits with words or metadata, for example
+`author:alice path:ci.yml after:2026-01-01`. Enable Regex beside the filter for
+regular expressions; leave it off for literal searches. See
+[commit search](docs/search.md) for qualifiers, including `contents:` for added
+or removed text, and matching rules.
 
 History streams in the background until the whole repository history is loaded.
 For lower memory use, `--limit N` opts into loading history on demand in batches
@@ -67,6 +68,7 @@ syntax = true
 watch = true
 # batch = 1000 # Omit to stream all history.
 ```
+
 UI state configuration is remembered automatically in a separate
 `gitk-rs/state.toml` file.
 
@@ -119,9 +121,12 @@ cargo clippy --all-targets --locked -- -D warnings
 cargo test --all-targets --locked
 ```
 
-Run `nix flake check` for Rust and Nix formatting, Clippy, Ruff linting and
-formatting, and Python script tests. Run `nix build` to build the package and
-run its Rust tests.
+Run `nix flake check` for Rust, Nix, and Markdown formatting, Clippy, Ruff
+linting and formatting, and Python script tests. Run `nix build` to build the
+package and run its Rust tests.
+
+Format Markdown with `nix develop --command mdformat .`; add `--check` to verify
+without changing files. Prose wraps at 80 columns.
 
 For the optional GUI test in an isolated NixOS VM with IceWM, run
 `nix build .#gui-smoke --print-build-logs` on a Linux builder with KVM. See

@@ -68,7 +68,7 @@ fn open_with_state<'a>(
     cx.update(|cx| {
         gpui_kit::init(cx);
         gpui_kit::component::Theme::change(ThemeMode::Dark, None, cx);
-        bind_keys(cx);
+        shortcuts::bind_keys(cx);
     });
     let mut view = None;
     let preferences_directory = tempfile::tempdir().unwrap();
@@ -90,7 +90,7 @@ fn open_with_state<'a>(
                 cx,
             );
             // Even a failing validation regression must never write user settings.
-            view.preferences_path = Some(preferences_path.clone());
+            view.preference_dialog.path = Some(preferences_path.clone());
             view
         });
         view = Some(entity.clone());
@@ -585,7 +585,7 @@ fn deep_reload_keeps_selected_commit_and_top_visible_commit(cx: &mut TestAppCont
     fixture.git(&["checkout", "-q", "main"]);
     cx.simulate_keystrokes("ctrl-b");
     until(cx, |cx| {
-        cx.update(|_, cx| !app.view.read(cx).branches.is_empty())
+        cx.update(|_, cx| !app.view.read(cx).branch_dialog.branches.is_empty())
     });
     cx.simulate_input("side");
     cx.simulate_keystrokes("enter");
@@ -845,7 +845,7 @@ fn preferences_toggle_watching_and_refresh_history(cx: &mut TestAppContext) {
     let head = fixture.commit("base");
     let (app, cx) = open(&fixture, cx);
     app.view.update(cx, |view, _| {
-        view.preferences_path = Some(settings.path().join("preferences.toml"));
+        view.preference_dialog.path = Some(settings.path().join("preferences.toml"));
     });
     until(cx, |cx| {
         selected(&app.view, cx).as_deref() == Some(head.as_str())
@@ -859,7 +859,7 @@ fn preferences_toggle_watching_and_refresh_history(cx: &mut TestAppContext) {
             cx.update(|_, cx| {
                 let view = app.view.read(cx);
                 view.config.watch == enabled
-                    && !view.preferences_save_pending
+                    && !view.preference_dialog.save_pending
                     && view.history_state.reload_selection.is_none()
             })
         });
@@ -1050,7 +1050,7 @@ fn branch_protection_and_selected_ancestor_survive_switch(cx: &mut TestAppContex
     });
     cx.simulate_keystrokes("ctrl-b");
     until(cx, |cx| {
-        cx.update(|_, cx| !app.view.read(cx).branches.is_empty())
+        cx.update(|_, cx| !app.view.read(cx).branch_dialog.branches.is_empty())
     });
     cx.simulate_input("side");
     cx.simulate_keystrokes("enter");
@@ -1077,7 +1077,8 @@ fn branch_protection_and_selected_ancestor_survive_switch(cx: &mut TestAppContex
     cx.simulate_keystrokes("ctrl-b");
     until(cx, |cx| {
         cx.update(|_, cx| {
-            !app.view.read(cx).branches.is_empty() && app.view.read(cx).pending_operation.is_none()
+            !app.view.read(cx).branch_dialog.branches.is_empty()
+                && app.view.read(cx).pending_operation.is_none()
         })
     });
     cx.simulate_input("side");
@@ -1177,7 +1178,7 @@ fn branch_switch_message_timer_preserves_newer_operations(cx: &mut TestAppContex
         until(cx, |cx| {
             cx.update(|_, cx| {
                 let view = app.view.read(cx);
-                !view.branches.is_empty() && view.pending_operation.is_none()
+                !view.branch_dialog.branches.is_empty() && view.pending_operation.is_none()
             })
         });
         cx.simulate_input(branch);
@@ -1470,14 +1471,15 @@ fn command_aliases_open_repositories_and_respect_input_and_dialog_focus(cx: &mut
     assert!(cx.update(|_, cx| app.view.read(cx).dialog.is_none()));
     cx.simulate_keystrokes("escape cmd-b");
     until(cx, |cx| {
-        cx.update(|_, cx| !app.view.read(cx).branches.is_empty())
+        cx.update(|_, cx| !app.view.read(cx).branch_dialog.branches.is_empty())
     });
     assert!(cx.update(|_, cx| matches!(app.view.read(cx).dialog, Some(DialogKind::Branches))));
     cx.simulate_keystrokes("escape cmd-,");
     assert!(cx.update(|_, cx| matches!(app.view.read(cx).dialog, Some(DialogKind::Preferences))));
     // Invalid preferences exercise Cmd+Enter without writing user preferences.
     app.view.update_in(cx, |view, window, cx| {
-        view.font_size_input
+        view.preference_dialog
+            .font_size_input
             .update(cx, |input, cx| input.focus(window, cx));
     });
     cx.simulate_keystrokes("ctrl-a ctrl-k cmd-enter");
@@ -1576,7 +1578,7 @@ fn dialog_scrollbars_and_wheel_events_are_isolated_from_history(cx: &mut TestApp
         cx.simulate_keystrokes(keys);
         if keys == "ctrl-b" {
             until(cx, |cx| {
-                cx.update(|_, cx| app.view.read(cx).branches.len() == 61)
+                cx.update(|_, cx| app.view.read(cx).branch_dialog.branches.len() == 61)
             });
         }
         cx.refresh().unwrap();
@@ -1585,7 +1587,7 @@ fn dialog_scrollbars_and_wheel_events_are_isolated_from_history(cx: &mut TestApp
             if keys == "f1" {
                 view.help_scroll.clone()
             } else {
-                view.branch_scroll.0.borrow().base_handle.clone()
+                view.branch_dialog.scroll.0.borrow().base_handle.clone()
             }
         });
         assert_eq!(handle.offset().y, px(0.));
@@ -1839,32 +1841,47 @@ fn alt_list_navigation_preserves_filter_focus_and_emacs_editing(cx: &mut TestApp
     );
     cx.simulate_keystrokes("escape ctrl-b");
     until(cx, |cx| {
-        cx.update(|_, cx| !app.view.read(cx).branches.is_empty())
+        cx.update(|_, cx| !app.view.read(cx).branch_dialog.branches.is_empty())
     });
     cx.simulate_input("match");
     assert_eq!(
-        cx.update(|_, cx| app.view.read(cx).filtered_branches.len()),
+        cx.update(|_, cx| app.view.read(cx).branch_dialog.filtered.len()),
         2
     );
     cx.simulate_keystrokes(down);
-    assert_eq!(cx.update(|_, cx| app.view.read(cx).branch_index), 1);
+    assert_eq!(cx.update(|_, cx| app.view.read(cx).branch_dialog.index), 1);
     cx.simulate_keystrokes(up);
-    assert_eq!(cx.update(|_, cx| app.view.read(cx).branch_index), 0);
+    assert_eq!(cx.update(|_, cx| app.view.read(cx).branch_dialog.index), 0);
     assert!(cx.update(|window, cx| {
         app.view
             .read(cx)
-            .branch_filter
+            .branch_dialog
+            .filter
             .read(cx)
             .focus_handle(cx)
             .is_focused(window)
     }));
     assert_eq!(
-        cx.update(|_, cx| app.view.read(cx).branch_filter.read(cx).value().to_string()),
+        cx.update(|_, cx| app
+            .view
+            .read(cx)
+            .branch_dialog
+            .filter
+            .read(cx)
+            .value()
+            .to_string()),
         "match"
     );
     cx.simulate_keystrokes("ctrl-a ctrl-k");
     assert_eq!(
-        cx.update(|_, cx| app.view.read(cx).branch_filter.read(cx).value().to_string()),
+        cx.update(|_, cx| app
+            .view
+            .read(cx)
+            .branch_dialog
+            .filter
+            .read(cx)
+            .value()
+            .to_string()),
         ""
     );
     cx.simulate_keystrokes("escape ctrl-shift-o ctrl-a ctrl-k");
@@ -1890,11 +1907,12 @@ fn preferences_apply_shortcuts_work_from_initial_font_selector_focus(cx: &mut Te
     let (app, cx) = open(&fixture, cx);
     cx.simulate_keystrokes("ctrl-,");
     until(cx, |cx| {
-        cx.update(|_, cx| app.view.read(cx).font_catalog.is_some())
+        cx.update(|_, cx| app.view.read(cx).preference_dialog.font_catalog.is_some())
     });
     app.view.update_in(cx, |view, window, cx| {
-        view.preferences_path = Some(settings.path().join("preferences.toml"));
-        view.graph_columns_input
+        view.preference_dialog.path = Some(settings.path().join("preferences.toml"));
+        view.preference_dialog
+            .graph_columns_input
             .update(cx, |input, cx| input.set_value("0", window, cx));
     });
     cx.refresh().unwrap();
@@ -1942,7 +1960,7 @@ fn application_preferences_replace_flags_apply_and_persist(cx: &mut TestAppConte
     .unwrap();
     app.view.update(cx, |view, _| {
         view.config = config;
-        view.preferences_path = Some(path.clone());
+        view.preference_dialog.path = Some(path.clone());
     });
     let generation = cx.update(|_, cx| app.view.read(cx).history_state.request.generation);
     cx.simulate_keystrokes("ctrl-,");
@@ -1994,7 +2012,7 @@ fn application_preferences_replace_flags_apply_and_persist(cx: &mut TestAppConte
 
     cx.update(|window, cx| window.click("apply-preferences", cx));
     until(cx, |cx| {
-        cx.update(|_, cx| !app.view.read(cx).preferences_save_pending)
+        cx.update(|_, cx| !app.view.read(cx).preference_dialog.save_pending)
             && selected(&app.view, cx).as_deref() == Some(&tip)
     });
     let saved = Preferences::load_from(&path).unwrap();
@@ -2021,7 +2039,7 @@ fn application_preferences_replace_flags_apply_and_persist(cx: &mut TestAppConte
     cx.update(|window, cx| window.click("on-demand-setting", cx));
     cx.update(|window, cx| window.click("apply-preferences", cx));
     until(cx, |cx| {
-        cx.update(|_, cx| !app.view.read(cx).preferences_save_pending)
+        cx.update(|_, cx| !app.view.read(cx).preference_dialog.save_pending)
     });
     assert_eq!(Preferences::load_from(&path).unwrap().batch, None);
     assert!(cx.update(|_, cx| app.view.read(cx).history_state.request.batch.is_none()));
@@ -2039,8 +2057,9 @@ fn application_preferences_cancel_invalid_values_and_report_save_failure(cx: &mu
     let original = cx.update(|_, cx| app.view.read(cx).preferences.clone());
     original.save_to(&path).unwrap();
     let bytes = std::fs::read(&path).unwrap();
-    app.view
-        .update(cx, |view, _| view.preferences_path = Some(path.clone()));
+    app.view.update(cx, |view, _| {
+        view.preference_dialog.path = Some(path.clone())
+    });
     let generation = cx.update(|_, cx| app.view.read(cx).history_state.request.generation);
     cx.simulate_keystrokes("ctrl-,");
     scroll_preferences_to("syntax-setting", cx);
@@ -2060,18 +2079,18 @@ fn application_preferences_cancel_invalid_values_and_report_save_failure(cx: &mu
     assert_eq!(std::fs::read(&path).unwrap(), bytes);
     cx.simulate_keystrokes("escape ctrl-,");
     assert_eq!(
-        cx.update(|_, cx| app.view.read(cx).draft_preferences(cx)),
+        cx.update(|_, cx| app.view.read(cx).preference_dialog.draft_preferences(cx)),
         original
     );
     // A directory is a deterministic failed destination, even when running as root.
     app.view.update(cx, |view, _| {
-        view.preferences_path = Some(settings.path().into())
+        view.preference_dialog.path = Some(settings.path().into())
     });
     scroll_preferences_to("text-graph-setting", cx);
     cx.update(|window, cx| window.click("text-graph-setting", cx));
     cx.update(|window, cx| window.click("apply-preferences", cx));
     until(cx, |cx| {
-        cx.update(|_, cx| !app.view.read(cx).preferences_save_pending)
+        cx.update(|_, cx| !app.view.read(cx).preference_dialog.save_pending)
     });
     assert!(cx.update(|_, cx| {
         let view = app.view.read(cx);
@@ -2094,7 +2113,7 @@ fn searchable_font_selectors_preview_drafts_and_cancel_restores_preferences(
     until(cx, |cx| selected(&app.view, cx).as_deref() == Some(&tip));
     let original = cx.update(|_, cx| app.view.read(cx).preferences.clone());
     app.view.update(cx, |view, _| {
-        view.font_catalog = Some(vec![
+        view.preference_dialog.font_catalog = Some(vec![
             original.ui_font.clone().into(),
             original.fixed_font.clone().into(),
             ".SystemUIFont".into(),
@@ -2119,7 +2138,7 @@ fn searchable_font_selectors_preview_drafts_and_cancel_restores_preferences(
         cx.simulate_keystrokes("enter");
         until(cx, |cx| {
             cx.update(|_, cx| {
-                let draft = app.view.read(cx).draft_preferences(cx);
+                let draft = app.view.read(cx).preference_dialog.draft_preferences(cx);
                 if is_ui {
                     draft.ui_font == query
                 } else {
@@ -2150,11 +2169,25 @@ fn searchable_font_selectors_preview_drafts_and_cancel_restores_preferences(
         original,
         "preview must not apply or save the draft"
     );
-    assert!(cx.update(|_, cx| app.view.read(cx).draft_preferences(cx).validate().is_ok()));
+    assert!(cx.update(|_, cx| {
+        app.view
+            .read(cx)
+            .preference_dialog
+            .draft_preferences(cx)
+            .validate()
+            .is_ok()
+    }));
     cx.simulate_keystrokes("ctrl-a ctrl-k");
     cx.simulate_input("NaN");
     cx.refresh().unwrap();
-    assert!(cx.update(|_, cx| app.view.read(cx).draft_preferences(cx).validate().is_err()));
+    assert!(cx.update(|_, cx| {
+        app.view
+            .read(cx)
+            .preference_dialog
+            .draft_preferences(cx)
+            .validate()
+            .is_err()
+    }));
     cx.update(|window, cx| window.click("apply-preferences", cx));
     assert!(cx.update(|_, cx| {
         let view = app.view.read(cx);
@@ -2164,7 +2197,7 @@ fn searchable_font_selectors_preview_drafts_and_cancel_restores_preferences(
     }));
     cx.simulate_keystrokes("escape ctrl-,");
     assert_eq!(
-        cx.update(|_, cx| app.view.read(cx).draft_preferences(cx)),
+        cx.update(|_, cx| app.view.read(cx).preference_dialog.draft_preferences(cx)),
         original
     );
     cx.update(|window, cx| window.click("ui-font-select", cx));
@@ -2190,7 +2223,7 @@ fn font_size_steps_with_buttons_and_keyboard_within_bounds(cx: &mut TestAppConte
     let original = cx.update(|_, cx| app.view.read(cx).preferences.clone());
     cx.simulate_keystrokes("ctrl-,");
     until(cx, |cx| {
-        cx.update(|_, cx| app.view.read(cx).font_catalog.is_some())
+        cx.update(|_, cx| app.view.read(cx).preference_dialog.font_catalog.is_some())
     });
     cx.update(|window, cx| window.click("font-size-input", cx));
     cx.simulate_keystrokes("ctrl-a ctrl-k");
@@ -2200,23 +2233,43 @@ fn font_size_steps_with_buttons_and_keyboard_within_bounds(cx: &mut TestAppConte
     cx.update(|window, cx| window.within("font-size-input").click("increment", cx));
     cx.refresh().unwrap();
     assert_eq!(
-        cx.update(|_, cx| app.view.read(cx).draft_preferences(cx).font_size),
+        cx.update(|_, cx| app
+            .view
+            .read(cx)
+            .preference_dialog
+            .draft_preferences(cx)
+            .font_size),
         13.
     );
     assert!(cx.update(|window, _| window.find("ui-font-preview").bounds().size.height) > height);
     cx.update(|window, cx| window.within("font-size-input").click("decrement", cx));
     assert_eq!(
-        cx.update(|_, cx| app.view.read(cx).draft_preferences(cx).font_size),
+        cx.update(|_, cx| app
+            .view
+            .read(cx)
+            .preference_dialog
+            .draft_preferences(cx)
+            .font_size),
         12.
     );
     cx.simulate_keystrokes("up");
     assert_eq!(
-        cx.update(|_, cx| app.view.read(cx).draft_preferences(cx).font_size),
+        cx.update(|_, cx| app
+            .view
+            .read(cx)
+            .preference_dialog
+            .draft_preferences(cx)
+            .font_size),
         13.
     );
     cx.simulate_keystrokes("down");
     assert_eq!(
-        cx.update(|_, cx| app.view.read(cx).draft_preferences(cx).font_size),
+        cx.update(|_, cx| app
+            .view
+            .read(cx)
+            .preference_dialog
+            .draft_preferences(cx)
+            .font_size),
         12.
     );
     for (value, key, button) in [("24", "up", "increment"), ("8", "down", "decrement")] {
@@ -2226,7 +2279,12 @@ fn font_size_steps_with_buttons_and_keyboard_within_bounds(cx: &mut TestAppConte
         cx.refresh().unwrap();
         cx.update(|window, cx| window.within("font-size-input").click(button, cx));
         assert_eq!(
-            cx.update(|_, cx| app.view.read(cx).draft_preferences(cx).font_size),
+            cx.update(|_, cx| app
+                .view
+                .read(cx)
+                .preference_dialog
+                .draft_preferences(cx)
+                .font_size),
             value.parse::<f32>().unwrap()
         );
     }
@@ -2244,19 +2302,20 @@ fn font_catalog_loading_rejects_closed_and_superseded_preferences(cx: &mut TestA
     let (app, cx) = open(&fixture, cx);
     cx.simulate_keystrokes("ctrl-,");
     until(cx, |cx| {
-        cx.update(|_, cx| app.view.read(cx).font_catalog.is_some())
+        cx.update(|_, cx| app.view.read(cx).preference_dialog.font_catalog.is_some())
     });
-    let old = cx.update(|_, cx| app.view.read(cx).font_catalog_generation);
+    let old = cx.update(|_, cx| app.view.read(cx).preference_dialog.font_catalog_generation);
     cx.simulate_keystrokes("escape ctrl-,");
-    let current = cx.update(|_, cx| app.view.read(cx).font_catalog_generation);
+    let current = cx.update(|_, cx| app.view.read(cx).preference_dialog.font_catalog_generation);
     assert_ne!(old, current);
-    let original = cx.update(|_, cx| app.view.read(cx).draft_preferences(cx));
+    let original = cx.update(|_, cx| app.view.read(cx).preference_dialog.draft_preferences(cx));
     app.view.update_in(cx, |view, window, cx| {
         view.accept_font_catalog(old, vec!["stale font".into()], window, cx)
     });
     assert!(!cx.update(|_, cx| {
         app.view
             .read(cx)
+            .preference_dialog
             .font_catalog
             .as_ref()
             .unwrap()
@@ -2267,7 +2326,7 @@ fn font_catalog_loading_rejects_closed_and_superseded_preferences(cx: &mut TestA
         view.accept_font_catalog(current, vec!["Newly installed font".into()], window, cx)
     });
     assert_eq!(
-        cx.update(|_, cx| app.view.read(cx).draft_preferences(cx)),
+        cx.update(|_, cx| app.view.read(cx).preference_dialog.draft_preferences(cx)),
         original
     );
     cx.simulate_keystrokes("escape");
@@ -2277,6 +2336,7 @@ fn font_catalog_loading_rejects_closed_and_superseded_preferences(cx: &mut TestA
     assert!(!cx.update(|_, cx| {
         app.view
             .read(cx)
+            .preference_dialog
             .font_catalog
             .as_ref()
             .unwrap()
@@ -2295,7 +2355,7 @@ fn font_preferences_keep_actions_visible_with_large_fonts_in_a_small_window(
     app.view.update_in(cx, |view, window, cx| {
         view.preferences.font_size = 24.;
         apply_fonts(&view.preferences, cx);
-        view.font_catalog = Some(vec![
+        view.preference_dialog.font_catalog = Some(vec![
             view.preferences.ui_font.clone().into(),
             view.preferences.fixed_font.clone().into(),
         ]);
@@ -2552,11 +2612,12 @@ fn repository_title_and_inline_filter_clear_controls(cx: &mut TestAppContext) {
             .update(cx, |view, cx| view.open_branches(window, cx))
     });
     until(cx, |cx| {
-        cx.update(|_, cx| app.view.read(cx).branches.len() == 2)
+        cx.update(|_, cx| app.view.read(cx).branch_dialog.branches.len() == 2)
     });
     cx.update(|window, cx| {
         app.view.update(cx, |view, cx| {
-            view.branch_filter
+            view.branch_dialog
+                .filter
                 .update(cx, |input, cx| input.set_value("another", window, cx));
         })
     });
@@ -2565,9 +2626,17 @@ fn repository_title_and_inline_filter_clear_controls(cx: &mut TestAppContext) {
     });
     let clear = cx.update(|window, _| window.find("clean").bounds());
     cx.simulate_click(clear.center(), gpui_kit::Modifiers::default());
-    assert!(cx.update(|_, cx| app.view.read(cx).branch_filter.read(cx).value().is_empty()));
+    assert!(cx.update(|_, cx| {
+        app.view
+            .read(cx)
+            .branch_dialog
+            .filter
+            .read(cx)
+            .value()
+            .is_empty()
+    }));
     assert_eq!(
-        cx.update(|_, cx| app.view.read(cx).filtered_branches.len()),
+        cx.update(|_, cx| app.view.read(cx).branch_dialog.filtered.len()),
         2
     );
 }

@@ -17,10 +17,10 @@ working-tree changes refresh status and local diffs.
 
 ## Linear updates
 
-When HEAD changes, the worker starts a separate Git stream at the new commit.
-It follows an exact chain of single-parent commits until the parent is the
-previous HEAD. New entries and their graph rows are prepared provisionally; the
-old history remains intact until the entire chain has been verified.
+When HEAD changes, the worker starts a separate Git stream at the new commit. It
+follows an exact chain of single-parent commits until the parent is the previous
+HEAD. New entries and their graph rows are prepared provisionally; the old
+history remains intact until the entire chain has been verified.
 
 Verification yields after 256 commits or reaching a 2 MiB accounted-data
 threshold per worker step. Individual Git records have a separate size bound.
@@ -31,9 +31,9 @@ requests are processed between steps, and superseded verification is dropped.
 After verification, the new entries are prepended and retained entry ordinals
 are shifted. The first old graph row gains an incoming edge. Because the prefix
 is a single-parent chain, the remaining graph geometry and the old stream's
-graph-builder state can be reused. If the old history was only partially
-loaded, that stream continues from its existing position without skipping or
-duplicating commits.
+graph-builder state can be reused. If the old history was only partially loaded,
+that stream continues from its existing position without skipping or duplicating
+commits.
 
 ## Searches and viewport restoration
 
@@ -57,21 +57,26 @@ The window retains focus handling, graph painting, and execution of those
 effects.
 
 When the selected local-change row disappears, the view reloads at the top and
-selects the first matching commit. It keeps following the top through
-subsequent HEAD refreshes until the user explicitly selects a row or changes
-the filter. This lets a newly created commit replace the local diff even when
-status and HEAD changes arrive in separate refreshes. Explicit commit
-selections retain the normal bookmark restoration behavior.
+selects the first matching commit. It keeps following the top through subsequent
+HEAD refreshes until the user explicitly selects a row or changes the filter.
+This lets a newly created commit replace the local diff even when status and
+HEAD changes arrive in separate refreshes. Explicit commit selections retain the
+normal bookmark restoration behavior.
 
 A reload that supersedes unfinished prefix filtering restarts the search over
 retained commits. Changing the query also replaces unfinished search work.
+
+`history::search::HistorySearch` owns query compilation, pending candidates,
+worker polling, and prefix reconciliation. Query changes and superseded prefix
+work share the progress-reset transition; the session retains traversal, commit
+entries, graph state, and reload bookmarks.
 
 ## Full reloads and resource costs
 
 The worker starts a fresh session for merges in the new prefix, divergence,
 rewinds, transitions to or from an unborn HEAD, repository or graph
-configuration changes, and failed history or query operations. A failed query
-is retried on reload even when HEAD is unchanged.
+configuration changes, and failed history or query operations. A failed query is
+retried on reload even when HEAD is unchanged.
 
 Reuse is conservatively disabled for shallow history, replacement refs, grafts,
 and traversal override environment variables. These can change ancestry without
@@ -87,5 +92,5 @@ final index after verification. Reindexing the retained suffix still takes
 O(loaded commits) worker CPU in one pass and can delay subsequent requests.
 Entries referenced by the UI may be copied during reindexing; the entire old
 history is not duplicated or reparsed. Total retained history remains unbounded
-by viewport virtualization, and default loading continues to EOF. With `--limit
-N`, the existing stream pauses when browsing demand is satisfied.
+by viewport virtualization, and default loading continues to EOF. With
+`--limit N`, the existing stream pauses when browsing demand is satisfied.

@@ -21,7 +21,9 @@ mod highlight_tests;
 pub mod options;
 use highlight::HighlightCache;
 
+mod position;
 pub mod selection;
+pub use position::DiffPosition;
 pub use selection::{TextPoint, TextSelection};
 const MAX_LINES: usize = 1_000_000;
 const MAX_DIFF_BYTES: u64 = 256 * 1024 * 1024;
@@ -1004,8 +1006,7 @@ fn diff_error(page: &DiffPage, error: String) -> DiffSnapshot {
 }
 
 fn diff_worker(shared: Arc<DiffShared>) {
-    let mut document: Option<DiffDocument> = None;
-    let mut failure: Option<String> = None;
+    let mut state: Option<std::result::Result<DiffDocument, String>> = None;
     loop {
         let (selection, page, copy, cancellation, clear, options, stopped) = {
             let mut mailbox = shared.mailbox.lock().unwrap();
@@ -1039,17 +1040,15 @@ fn diff_worker(shared: Arc<DiffShared>) {
             break;
         }
         if clear {
-            document = None;
-            failure = None;
+            state = None;
         }
         if let Some(selection) = selection {
-            match DiffDocument::load(&selection, &cancellation) {
-                Ok(loaded) => document = Some(loaded),
-                Err(error) => failure = Some(format!("{error:#}")),
-            }
+            state = Some(
+                DiffDocument::load(&selection, &cancellation).map_err(|error| format!("{error:#}")),
+            );
         }
         if let Some(copy) = copy
-            && let Some(document) = &mut document
+            && let Some(Ok(document)) = &mut state
         {
             let result = document
                 .copy(copy, &cancellation)
@@ -1068,12 +1067,13 @@ fn diff_worker(shared: Arc<DiffShared>) {
         if cancellation.load(Ordering::Acquire) {
             continue;
         }
-        if let Some(error) = &failure {
-            publish_diff(&shared, diff_error(&page, error.clone()));
-            continue;
-        }
-        let Some(document) = &mut document else {
-            continue;
+        let document = match &mut state {
+            Some(Ok(document)) => document,
+            Some(Err(error)) => {
+                publish_diff(&shared, diff_error(&page, error.clone()));
+                continue;
+            }
+            None => continue,
         };
         let mut snapshot = match document.page(&page) {
             Ok(snapshot) => snapshot,
@@ -1383,6 +1383,47 @@ mod tests {
         assert!(display_width_bound(&line) >= selection::DisplayText::new(&line).text.len());
         let long = "\t".repeat(MAX_DISPLAY_BYTES * 2);
         assert_eq!(display_width_bound(&long), MAX_DISPLAY_BYTES * 4);
+    }
+
+    #[test]
+    fn worker_retains_load_failure_across_pages_and_recovers_on_new_selection() {
+        let fixture = Fixture::new();
+        fixture.commit("base");
+        let invalid = tempfile::tempdir().unwrap();
+        let engine = DiffEngine::spawn();
+        let handle = engine.handle();
+        let wait = |selection: SelectionId, request: u64| {
+            let until = Instant::now() + Duration::from_secs(10);
+            loop {
+                if let Some(snapshot) = handle.take_snapshot()
+                    && snapshot.selection == selection
+                    && snapshot.request == request
+                    && !snapshot.highlighting
+                {
+                    break snapshot;
+                }
+                assert!(Instant::now() < until, "diff worker timed out");
+                thread::sleep(Duration::from_millis(5));
+            }
+        };
+        let mut selection = selected(&fixture, 1);
+        selection.repository = invalid.path().into();
+        handle.select(selection, page(1));
+        let error = wait(SelectionId(1), 1).error.unwrap();
+        let mut next = page(1);
+        next.id = 2;
+        handle.page(next);
+        assert_eq!(
+            wait(SelectionId(1), 2).error.as_deref(),
+            Some(error.as_str())
+        );
+        handle.clear(SelectionId(2));
+        handle.page(page(1));
+        assert!(handle.take_snapshot().is_none());
+        handle.select(selected(&fixture, 3), page(3));
+        let recovered = wait(SelectionId(3), 1);
+        assert!(recovered.error.is_none());
+        assert!(!recovered.lines.is_empty());
     }
 
     #[test]

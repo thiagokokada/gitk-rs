@@ -2,41 +2,46 @@
 
 Report blocked checks and unfinished behavior explicitly; never invent benchmark
 results. Commit each validated milestone, and continue with the next authorized
-milestone without waiting for confirmation. Stop only when user input is actually required.
+milestone without waiting for confirmation. Stop only when user input is
+actually required.
 
 ## Architecture
 
-- Use Rust and GPUI. Support Linux/NixOS and macOS. Keep OS integration
-  isolated so Git, history, models, and most UI logic remain portable.
+- Use Rust and GPUI. Support Linux/NixOS and macOS. Keep OS integration isolated
+  so Git, history, models, and most UI logic remain portable.
 - Keep Git process management and history data independent of GPUI. Keep state
-  transitions and display preparation pure where possible. Avoid abstraction-only
-  wrappers and speculative backend/plugin systems.
-- Use typed IDs and generation tokens for asynchronous work. Reject stale results
-  after selection, query, repository, HEAD, or theme changes.
-- Invoke Git with argument arrays, never shell interpolation. Bound stderr capture,
-  drain pipes without deadlocks, and terminate and reap children on cancellation.
+  transitions and display preparation pure where possible. Avoid
+  abstraction-only wrappers and speculative backend/plugin systems.
+- Use typed IDs and generation tokens for asynchronous work. Reject stale
+  results after selection, query, repository, HEAD, or theme changes.
+- Invoke Git with argument arrays, never shell interpolation. Bound stderr
+  capture, drain pipes without deadlocks, and terminate and reap children on
+  cancellation.
 - Branch switching must preserve Git's ordinary protections. Never automatically
   force checkout, stash, reset, or discard changes.
 
 ## Performance invariants
 
-- Never run blocking Git, filesystem scans, or highlighting in render paths
-  or on the UI thread. Never wait for a total history count before showing rows.
+- Never run blocking Git, filesystem scans, or highlighting in render paths or
+  on the UI thread. Never wait for a total history count before showing rows.
 - Virtualize history and diff lines. Paint graph geometry only for visible rows.
 - Retain loaded history in memory, stream incrementally, avoid duplicate large
   data, and keep pending batches bounded. Stream to EOF by default.
   Virtualization limits drawing work; it does not bound total retained history.
 - Do not introduce SQLite or a persistent history/parsing cache without measured
-  need and an agreed plan change. Continue one Git stream, avoiding repeated --skip
-  scans. With opt-in --limit N, pause prefetch when browsing demand is satisfied.
-- Bundle broad offline language coverage, not a small allowlist. Preserve grammar
-  licenses and detect filenames/shebangs.
+  need and an agreed plan change. Continue one Git stream, avoiding repeated
+  --skip scans. With opt-in --limit N, pause prefetch when browsing demand is
+  satisfied.
+- Bundle broad offline language coverage, not a small allowlist. Preserve
+  grammar licenses and detect filenames/shebangs.
 - Functionality and workflow parity take priority in v1. Timing/RSS numbers are
   aspirations, not release gates. Avoid obvious performance mistakes, record
   meaningful bottlenecks, and defer elaborate optimization until features work.
-- Avoid whole-worktree recursive watcher expansion on nixpkgs. Coalesce events and
-  reconcile status periodically; watch failure must leave manual reload usable.
-- Report application and child-process memory separately; never invent measurements.
+- Avoid whole-worktree recursive watcher expansion on nixpkgs. Coalesce events
+  and reconcile status periodically; watch failure must leave manual reload
+  usable.
+- Report application and child-process memory separately; never invent
+  measurements.
 
 ## Dependencies, verification, and documentation
 
@@ -44,9 +49,9 @@ milestone without waiting for confirmation. Stop only when user input is actuall
   and setup. Put implementation details, dependency versions, architecture, and
   internal workarounds in the `docs/` directory. Avoid promotional or generic
   filler, exhaustive shortcut lists, repeated caveats, and examples that imply
-  stronger limits or guarantees
-  than the implementation provides. Prefer linking to `--help` for complete
-  option details; explain only behavior needed to use a feature safely.
+  stronger limits or guarantees than the implementation provides. Prefer linking
+  to `--help` for complete option details; explain only behavior needed to use a
+  feature safely.
 - Pin GPUI and use documentation matching that release. Commit Cargo.lock and
   flake.lock. Use the Rust toolchain from pinned nixpkgs for builds and checks.
 - Keep native dependencies conditional on platform. Preserve license notices for
@@ -55,26 +60,27 @@ milestone without waiting for confirmation. Stop only when user input is actuall
   - nix develop --command cargo fmt --all -- --check
   - nix develop --command cargo clippy --all-targets -- -D warnings
   - nix develop --command cargo test --all-targets --locked
+  - nix develop --command mdformat --check .
   - nix build
   - nix flake check
 - Protect behavior fixes with regression tests at the useful boundaries: pure
   unit tests for algorithms/parsing, tests/ workflows for real Git and worker
   integration, and headless GPUI tests for view, input and focus interactions.
 - cargo test --all-targets must run all Rust tests, including GPUI, headlessly.
-  Use deterministic temporary Git fixtures; keep native desktop smoke and million-
-  commit benchmarks opt-in. Smoke-test real Wayland and X11 separately.
+  Use deterministic temporary Git fixtures; keep native desktop smoke and
+  million-commit benchmarks opt-in. Smoke-test real Wayland and X11 separately.
 - Run checks relevant to the increment. Documentation-only changes need link,
   checklist, consistency, and ASCII checks, not application tests.
-- Keep AGENTS.md ASCII-only and concise. Document observed sandbox, network, build,
-  and display limitations with the command and actual error. Do not weaken checks
-  or claim completion to work around an unavailable environment.
+- Keep AGENTS.md ASCII-only and concise. Document observed sandbox, network,
+  build, and display limitations with the command and actual error. Do not
+  weaken checks or claim completion to work around an unavailable environment.
 - Do not rewrite existing Git history without an explicit user request.
 
 ## Opt-in history memory probe
 
 - `GITK_PROFILE_REPOSITORY`: required repository path; the probe only reads it.
-- `GITK_PROFILE_COMMITS`: prefetch target, defaults to 100000; must be an integer
-  greater than 64 that fits usize. Stops earlier if Git reaches EOF.
+- `GITK_PROFILE_COMMITS`: prefetch target, defaults to 100000; must be an
+  integer greater than 64 that fits usize. Stops earlier if Git reaches EOF.
 - `GITK_PROFILE_READERS`: reader count, defaults to 4; integer from 1 to 8.
 - Run explicitly; this test is ignored by ordinary test runs:
 
@@ -85,26 +91,32 @@ nix develop --command env \
   cargo test --lib profile_retained_history --locked -- --ignored --nocapture
 ```
 
-- Compare the same repository HEAD, loaded count, reader count, and graph lane cap
-  (default 256, configurable with --graph-cols up to 1024; printed by the probe).
-  Accounted retained bytes exclude allocator/runtime overhead. Linux RSS reports
-  the history-only test process and live children separately; these are neither
-  desktop nor peak-memory measurements. Git may have exited at EOF.
+- Compare the same repository HEAD, loaded count, reader count, and graph lane
+  cap (default 256, configurable with --graph-cols up to 1024; printed by the
+  probe). Accounted retained bytes exclude allocator/runtime overhead. Linux RSS
+  reports the history-only test process and live children separately; these are
+  neither desktop nor peak-memory measurements. Git may have exited at EOF.
 
 ## Local environment limitations
 
 - On macOS, sandboxed `nix develop --command rustc --version` failed with
-  `attempt to write a readonly database` in `fetcher-cache-v4.sqlite`.
-  Approved Nix cache access succeeded; use it for validation.
-- Sandboxed `ps -axo pid,etime,command` failed with `operation not permitted: ps`.
-  Native process memory sampling requires approved process inspection.
-- Sandboxed `git restore --source=269f2ba --worktree -- src/ui.rs src/ui/tests.rs src/ui/diff_view.rs`
-  failed creating `.git/index.lock`: `Operation not permitted`.
-  Approved Git index access succeeded.
+  `attempt to write a readonly database` in `fetcher-cache-v4.sqlite`. Approved
+  Nix cache access succeeded; use it for validation.
+
+- Sandboxed `ps -axo pid,etime,command` failed with
+  `operation not permitted: ps`. Native process memory sampling requires
+  approved process inspection.
+
+- Sandboxed
+  `git restore --source=269f2ba --worktree -- src/ui.rs src/ui/tests.rs src/ui/diff_view.rs`
+  failed creating `.git/index.lock`: `Operation not permitted`. Approved Git
+  index access succeeded.
 
 - Sandboxed `nix eval --raw --inputs-from . crane#outPath` failed with
   `executing SQLite statement 'pragma synchronous = off': unable to open database file`
   for the Nix fetcher cache. Run Nix validation with approved cache access.
+
 - Sandboxed `git add src/history.rs src/ui/tests.rs docs/incremental-reload.md`
-  failed with `fatal: Unable to create '/home/thiagoko/Projects/gitk-rs/.git/index.lock': Read-only file system`.
+  failed with
+  `fatal: Unable to create '/home/thiagoko/Projects/gitk-rs/.git/index.lock': Read-only file system`.
   Run milestone commits with approved Git index access.

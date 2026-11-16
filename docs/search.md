@@ -9,34 +9,34 @@ message:"update dependencies" merge:false
 contents:"old function name" path:src/
 ```
 
-Open Help with F1 or ? for the syntax reference. Recognized qualifiers appear
-as badges below the input. Invalid filters show an explanation there; correct
-the input to resume searching. Press Enter in the filter to apply pending edits
-and return keyboard focus to history. The status bar reports matching and
-loaded counts and shows `filtering` while results are incomplete. Results
-arrive incrementally; zero matches while filtering is still in progress does
-not mean the search is complete.
+Open Help with F1 or ? for the syntax reference. Recognized qualifiers appear as
+badges below the input. Invalid filters show an explanation there; correct the
+input to resume searching. Press Enter in the filter to apply pending edits and
+return keyboard focus to history. The status bar reports matching and loaded
+counts and shows `filtering` while results are incomplete. Results arrive
+incrementally; zero matches while filtering is still in progress does not mean
+the search is complete.
 
-| Qualifier | Matches |
-| --- | --- |
-| `author:text` | Author name or email substring |
-| `committer:text` | Committer name or email substring |
-| `message:text` | Full commit message substring |
-| `hash:text` | Commit hash substring |
-| `contents:text` | Added or removed text line containing the literal text |
-| `path:text` | Changed path containing the literal text, including directory components |
-| `before:YYYY-MM-DD` | Author's recorded calendar date on or before this day |
-| `after:YYYY-MM-DD` | Author's recorded calendar date on or after this day |
-| `merge:true` / `merge:false` | Commits with multiple parents / other commits |
+| Qualifier                    | Matches                                                                  |
+| ---------------------------- | ------------------------------------------------------------------------ |
+| `author:text`                | Author name or email substring                                           |
+| `committer:text`             | Committer name or email substring                                        |
+| `message:text`               | Full commit message substring                                            |
+| `hash:text`                  | Commit hash substring                                                    |
+| `contents:text`              | Added or removed text line containing the literal text                   |
+| `path:text`                  | Changed path containing the literal text, including directory components |
+| `before:YYYY-MM-DD`          | Author's recorded calendar date on or before this day                    |
+| `after:YYYY-MM-DD`           | Author's recorded calendar date on or after this day                     |
+| `merge:true` / `merge:false` | Commits with multiple parents / other commits                            |
 
 Unqualified text searches the hash, author name/email, and full message as one
-contiguous phrase, preserving the original plain-text filter behavior. By default,
-all text, path, and contents metacharacters are literal.
+contiguous phrase, preserving the original plain-text filter behavior. By
+default, all text, path, and contents metacharacters are literal.
 
 Enable **Regex** next to the filter box, or press **Option+R** on macOS
-(**Alt+R** on Linux), to interpret text,
-path, and contents values as regular expressions. The shortcut also works while
-typing in the filter box. For example:
+(**Alt+R** on Linux), to interpret text, path, and contents values as regular
+expressions. The shortcut also works while typing in the filter box. For
+example:
 
 ```text
 author:Alice|Bob path:\.ya?ml$ message:^fix
@@ -68,10 +68,10 @@ incrementally.
 
 A function present in the current file only appears in contents results when a
 commit adds or removes a matching line. Searching a large history for an older
-change can take time. Add metadata qualifiers such as `author:` or `after:`
-when you know them to reduce the commits whose diffs need searching. A `path:`
-filter narrows results but currently does not skip generating unrelated
-candidate diffs.
+change can take time. Add metadata qualifiers such as `author:` or `after:` when
+you know them to reduce the commits whose diffs need searching. A `path:` filter
+narrows results but currently does not skip generating unrelated candidate
+diffs.
 
 The Git workers setting in Preferences, or `--git-workers N`, controls both
 history object readers and content-search workers (1-8, default 4). Path-only

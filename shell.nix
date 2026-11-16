@@ -4,6 +4,7 @@
   checks,
   stdenv,
   git,
+  mdformat,
   python3,
   ruff,
   gitk-rs,
@@ -16,6 +17,7 @@ craneLib.devShell (
     inputsFrom = [ gitk-rs ];
     packages = [
       git
+      (mdformat.withPlugins (ps: [ ps.mdformat-gfm ]))
       python3
       ruff
     ];

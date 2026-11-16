@@ -18,8 +18,8 @@ runs the packaged application as an unprivileged user and copies screenshots,
 failure, logs are also printed and the driver attempts to copy artifacts before
 exiting; use `--keep-failed` to retain the failed build directory.
 
-This opt-in package is available on `x86_64-linux` and `aarch64-linux`. NixOS
-VM tests require a Linux builder with KVM. To run the tests:
+This opt-in package is available on `x86_64-linux` and `aarch64-linux`. NixOS VM
+tests require a Linux builder with KVM. To run the tests:
 
 ```sh
 nix build .#packages.x86_64-linux.gui-smoke --max-jobs 0 --print-build-logs
@@ -32,16 +32,16 @@ python scripts/gui_smoke.py [BINARY] [OUTPUT_DIRECTORY]
 ```
 
 It creates disposable repositories, exercises navigation and repository
-workflows, and saves screenshots. Use `--help` for arguments; output defaults
-to a directory under `/tmp`.
+workflows, and saves screenshots. Use `--help` for arguments; output defaults to
+a directory under `/tmp`.
 
 The test needs an X11 display (XWayland works), Git, `xdotool`, `xwininfo`,
 ImageMagick's `import`, and the application's native runtime libraries. It
 checks window ownership before taking screenshots or controlling a window, and
 focus before sending input. Avoid changing focus during a run.
 
-Formatting, linting, and headless script tests are included in `nix flake
-check`. To run only these checks during development:
+Formatting, linting, and headless script tests are included in
+`nix flake check`. To run only these checks during development:
 
 ```sh
 nix develop --command ruff format --check scripts
@@ -60,13 +60,13 @@ nix run .#update-screenshot -- ~/Projects/nixpkgs
 ```
 
 The script loads all commits before applying a regex query with metadata
-filters, selects a matching commit, and captures a line diff. Dates are
-relative to HEAD. It uses isolated preferences and leaves the repository
-unchanged. Avoid changing window focus during capture.
+filters, selects a matching commit, and captures a line diff. Dates are relative
+to HEAD. It uses isolated preferences and leaves the repository unchanged. Avoid
+changing window focus during capture.
 
 Logs, configuration, and capture metadata remain in the printed `/tmp`
-directory; `screenshot.png` is replaced only after success. Use `nix run
-.#update-screenshot -- --help` to customize the query, selected row, output
-path, size, or timeout. The wrapper supplies the application and capture tools;
-running `python scripts/update_screenshot.py --help` also documents how to use
-an existing binary.
+directory; `screenshot.png` is replaced only after success. Use
+`nix run .#update-screenshot -- --help` to customize the query, selected row,
+output path, size, or timeout. The wrapper supplies the application and capture
+tools; running `python scripts/update_screenshot.py --help` also documents how
+to use an existing binary.

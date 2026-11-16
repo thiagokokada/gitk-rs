@@ -8,9 +8,9 @@ use super::{
 };
 use gitk_rs::{
     diff::{
-        CopyRequest, DiffHandle, DiffOptions, DiffPage, DiffSelection, DiffSettings, DiffSnapshot,
-        DiffSource, DiffVersion, LineKind, SelectionId, TextPoint, TextSelection, WordDiff,
-        selection::DisplayText,
+        CopyRequest, DiffHandle, DiffOptions, DiffPage, DiffPosition, DiffSelection, DiffSettings,
+        DiffSnapshot, DiffSource, DiffVersion, LineKind, SelectionId, TextPoint, TextSelection,
+        WordDiff, selection::DisplayText,
     },
     git::Commit,
 };
@@ -100,7 +100,7 @@ enum DiffIdentity {
 }
 
 pub(super) struct DiffPane {
-    restore_position: Option<(Option<PathBuf>, f64)>,
+    restore_position: Option<DiffPosition>,
     file_list_width: f32,
     options: DiffOptions,
     current: Option<DiffSelection>,
@@ -174,21 +174,8 @@ impl DiffPane {
                                 .or_else(|| snapshot.notice.clone())
                                 .unwrap_or_default();
                             this.snapshot = Some(snapshot);
-                            if let Some((path, fraction)) = this.restore_position.take() {
-                                let snapshot = this.snapshot.as_ref().unwrap();
-                                let section = path.as_ref().and_then(|path| {
-                                    snapshot.files.iter().position(|file| &file.path == path)
-                                });
-                                let start = section
-                                    .and_then(|i| snapshot.files[i].start_line)
-                                    .unwrap_or(0);
-                                let end = section
-                                    .and_then(|i| snapshot.files.get(i + 1))
-                                    .and_then(|file| file.start_line)
-                                    .unwrap_or(snapshot.count);
-                                let line = start
-                                    + ((end.saturating_sub(start + 1)) as f64 * fraction).round()
-                                        as usize;
+                            if let Some(position) = this.restore_position.take() {
+                                let line = position.restore(this.snapshot.as_ref().unwrap());
                                 this.jump(line, cx);
                             }
                             cx.notify();
@@ -363,25 +350,7 @@ impl DiffPane {
             let position = self
                 .snapshot
                 .as_ref()
-                .map(|snapshot| {
-                    let section = snapshot.files.iter().rposition(|file| {
-                        file.start_line
-                            .is_some_and(|line| line <= self.viewport.start)
-                    });
-                    let start = section
-                        .and_then(|i| snapshot.files[i].start_line)
-                        .unwrap_or(0);
-                    let end = section
-                        .and_then(|i| snapshot.files.get(i + 1))
-                        .and_then(|file| file.start_line)
-                        .unwrap_or(snapshot.count);
-                    let fraction = self.viewport.start.saturating_sub(start) as f64
-                        / end.saturating_sub(start + 1).max(1) as f64;
-                    (
-                        section.map(|i| snapshot.files[i].path.clone()),
-                        fraction.clamp(0., 1.),
-                    )
-                })
+                .map(|snapshot| DiffPosition::capture(snapshot, self.viewport.start))
                 .or_else(|| self.restore_position.clone());
             let identity = self.identity.take();
             self.clear("Loading diff…", cx);
@@ -1032,31 +1001,4 @@ impl Render for DiffPane {
                 }
             })
     }
-}
-
-pub(super) fn bind_keys(cx: &mut App) {
-    cx.bind_keys([
-        KeyBinding::new("ctrl-c", Copy, Some("Diff")),
-        KeyBinding::new("ctrl-shift-c", CopyCode, Some("Diff")),
-        KeyBinding::new("ctrl-a", SelectAll, Some("Diff")),
-        KeyBinding::new("space", PageDown, Some("GitHistory && !Input && !Dialog")),
-        KeyBinding::new("backspace", PageUp, Some("GitHistory && !Input && !Dialog")),
-        KeyBinding::new("delete", PageUp, Some("GitHistory && !Input && !Dialog")),
-        KeyBinding::new("shift-b", PageUp, Some("GitHistory && !Input && !Dialog")),
-        KeyBinding::new("shift-u", LinesUp, Some("GitHistory && !Input && !Dialog")),
-        KeyBinding::new(
-            "shift-d",
-            LinesDown,
-            Some("GitHistory && !Input && !Dialog"),
-        ),
-        KeyBinding::new("b", PageUp, Some("GitHistory && !Input && !Dialog")),
-        KeyBinding::new("u", LinesUp, Some("GitHistory && !Input && !Dialog")),
-        KeyBinding::new("d", LinesDown, Some("GitHistory && !Input && !Dialog")),
-    ]);
-    #[cfg(target_os = "macos")]
-    cx.bind_keys([
-        KeyBinding::new("cmd-c", Copy, Some("Diff")),
-        KeyBinding::new("cmd-shift-c", CopyCode, Some("Diff")),
-        KeyBinding::new("cmd-a", SelectAll, Some("Diff")),
-    ]);
 }
