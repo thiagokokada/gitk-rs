@@ -1,6 +1,7 @@
 #[cfg(test)]
 mod tests;
 
+mod branch_dialog;
 mod colors;
 mod dialogs;
 mod diff_view;
@@ -9,6 +10,7 @@ mod filter_highlight;
 mod preference_dialog;
 mod system_fonts;
 
+use branch_dialog::BranchDialog;
 use colors::Palette;
 use gitk_rs::{
     cli::{Config, Theme},
@@ -44,7 +46,7 @@ use gpui_kit::{
     TitlebarOptions, UniformListDecoration, UniformListScrollHandle, Window, WindowBounds,
     WindowOptions, actions, canvas, div, fill, point, prelude::*, px, rgb, size, uniform_list,
 };
-use preference_dialog::{FontCatalogGeneration, FontChoices};
+use preference_dialog::PreferencesDialog;
 use std::{
     ops::Range,
     sync::Arc,
@@ -136,20 +138,7 @@ struct HistoryWindow {
     title: String,
     config: Config,
     preferences: Preferences,
-    preferences_draft: Preferences,
-    graph_columns_input: Entity<InputState>,
-    batch_input: Entity<InputState>,
-    git_workers_input: Entity<InputState>,
-    preferences_path: Option<std::path::PathBuf>,
-    preferences_save_generation: u64,
-    preferences_save_pending: bool,
-    ui_font_select: Entity<SelectState<FontChoices>>,
-    fixed_font_select: Entity<SelectState<FontChoices>>,
-    _font_subscriptions: Vec<Subscription>,
-    font_catalog: Option<Vec<SharedString>>,
-    font_catalog_generation: FontCatalogGeneration,
-    _font_catalog_task: Option<Task<()>>,
-    font_size_input: Entity<InputState>,
+    preference_dialog: PreferencesDialog,
     focus: FocusHandle,
     timing: Timing,
     history: HistoryHandle,
@@ -162,14 +151,9 @@ struct HistoryWindow {
     restore_focus: bool,
     restore_repository_focus: bool,
     repository_prompt_pending: bool,
-    branches: Vec<String>,
-    filtered_branches: Vec<usize>,
-    branch_filter: Entity<InputState>,
-    _branch_subscription: Subscription,
+    branch_dialog: BranchDialog,
     repository_input: Entity<InputState>,
     _repository_subscription: Subscription,
-    branch_index: usize,
-    branch_scroll: UniformListScrollHandle,
     help_scroll: ScrollHandle,
     operation_id: OperationId,
     pending_operation: Option<OperationId>,
@@ -218,63 +202,8 @@ impl HistoryWindow {
             request.id += 1;
             history.request(request.clone());
         }
-        let ui_font_select = cx.new(|cx| {
-            SelectState::new(
-                SearchableVec::new(vec![SharedString::from(preferences.ui_font.clone())]),
-                Some(gpui_kit::component::IndexPath::new(0)),
-                window,
-                cx,
-            )
-            .searchable(true)
-        });
-        let fixed_font_select = cx.new(|cx| {
-            SelectState::new(
-                SearchableVec::new(vec![SharedString::from(preferences.fixed_font.clone())]),
-                Some(gpui_kit::component::IndexPath::new(0)),
-                window,
-                cx,
-            )
-            .searchable(true)
-        });
-        let font_size_input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .default_value(preferences.font_size.to_string())
-                .step(1.)
-                .min(8.)
-                .max(24.)
-        });
-        let graph_columns_input = cx.new(|cx| InputState::new(window, cx));
-        let batch_input = cx.new(|cx| InputState::new(window, cx));
-        let git_workers_input = cx.new(|cx| InputState::new(window, cx));
-        let mut font_subscriptions = Vec::new();
-        for selector in [&ui_font_select, &fixed_font_select] {
-            font_subscriptions.push(
-                cx.subscribe(selector, |_, _, _: &SelectEvent<FontChoices>, cx| {
-                    cx.notify()
-                }),
-            );
-        }
-        font_subscriptions.push(
-            cx.subscribe(&font_size_input, |_, _, event: &InputEvent, cx| {
-                if matches!(event, InputEvent::Change) {
-                    cx.notify();
-                }
-            }),
-        );
-        for input in [&graph_columns_input, &batch_input, &git_workers_input] {
-            font_subscriptions.push(cx.subscribe(input, |_, _, _: &InputEvent, cx| cx.notify()));
-        }
-        let branch_filter =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Filter local branches"));
-        let branch_subscription = cx.subscribe_in(
-            &branch_filter,
-            window,
-            |this, _, event, _, cx| match event {
-                InputEvent::Change => this.filter_branches(cx),
-                InputEvent::PressEnter { .. } => this.switch_branch(this.branch_index, cx),
-                _ => {}
-            },
-        );
+        let preference_dialog = PreferencesDialog::new(&preferences, window, cx);
+        let branch_dialog = BranchDialog::new(window, cx);
         let repository_input = cx.new(|cx| InputState::new(window, cx));
         let repository_subscription =
             cx.subscribe_in(&repository_input, window, |this, _, event, _, cx| {
@@ -366,21 +295,8 @@ impl HistoryWindow {
         });
         Self {
             title: String::new(),
-            preferences_draft: preferences.clone(),
-            graph_columns_input,
-            batch_input,
-            git_workers_input,
-            preferences_path: None,
-            preferences_save_generation: 0,
-            preferences_save_pending: false,
             preferences,
-            ui_font_select,
-            fixed_font_select,
-            _font_subscriptions: font_subscriptions,
-            font_catalog: None,
-            font_catalog_generation: FontCatalogGeneration(0),
-            _font_catalog_task: None,
-            font_size_input,
+            preference_dialog,
             diff,
             workspace,
             workspace_generation: WorkspaceGeneration(1),
@@ -390,14 +306,9 @@ impl HistoryWindow {
             restore_focus: false,
             restore_repository_focus: false,
             repository_prompt_pending: false,
-            branches: Vec::new(),
-            filtered_branches: Vec::new(),
-            branch_filter,
-            _branch_subscription: branch_subscription,
+            branch_dialog,
             repository_input,
             _repository_subscription: repository_subscription,
-            branch_index: 0,
-            branch_scroll: UniformListScrollHandle::new(),
             help_scroll: ScrollHandle::new(),
             operation_id: OperationId::default(),
             pending_operation: None,
@@ -573,9 +484,7 @@ impl HistoryWindow {
             self.pending_operation = None;
             match result.result {
                 Ok(OperationOutcome::Branches(branches)) => {
-                    self.branches = branches;
-                    self.filter_branches(cx);
-                    self.branch_index = 0;
+                    self.branch_dialog.set_branches(branches, cx);
                     self.operation_message.clear();
                 }
                 Ok(OperationOutcome::BranchSwitched) => {
@@ -1341,20 +1250,15 @@ impl Render for HistoryWindow {
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &BranchUp, _, cx| {
-                this.branch_index = this.branch_index.saturating_sub(1);
-                this.branch_scroll
-                    .scroll_to_item(this.branch_index, ScrollStrategy::Center);
+                this.branch_dialog.move_selection(false);
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &BranchDown, _, cx| {
-                this.branch_index =
-                    (this.branch_index + 1).min(this.filtered_branches.len().saturating_sub(1));
-                this.branch_scroll
-                    .scroll_to_item(this.branch_index, ScrollStrategy::Center);
+                this.branch_dialog.move_selection(true);
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &BranchAccept, _, cx| {
-                this.switch_branch(this.branch_index, cx)
+                this.switch_branch(this.branch_dialog.index, cx)
             }))
             .on_action(cx.listener(|this, _: &Reload, _, cx| this.reload(cx)))
             .on_action(cx.listener(|this, _: &ForceReload, _, cx| this.force_reload(cx)))

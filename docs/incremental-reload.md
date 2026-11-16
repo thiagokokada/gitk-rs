@@ -66,6 +66,11 @@ selections retain the normal bookmark restoration behavior.
 A reload that supersedes unfinished prefix filtering restarts the search over
 retained commits. Changing the query also replaces unfinished search work.
 
+`history::search::HistorySearch` owns query compilation, pending candidates,
+worker polling, and prefix reconciliation. Query changes and superseded prefix
+work share the progress-reset transition; the session retains traversal, commit
+entries, graph state, and reload bookmarks.
+
 ## Full reloads and resource costs
 
 The worker starts a fresh session for merges in the new prefix, divergence,
