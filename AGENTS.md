@@ -1,10 +1,5 @@
 # Contributor instructions
 
-Report blocked checks and unfinished behavior explicitly; never invent benchmark
-results. Commit each validated milestone, and continue with the next authorized
-milestone without waiting for confirmation. Stop only when user input is
-actually required.
-
 ## Architecture
 
 - Use Rust and GPUI. Support Linux/NixOS and macOS. Keep OS integration isolated
@@ -29,38 +24,31 @@ actually required.
   data, and keep pending batches bounded. Stream to EOF by default.
   Virtualization limits drawing work; it does not bound total retained history.
 - Do not introduce SQLite or a persistent history/parsing cache without measured
-  need and an agreed plan change. Continue one Git stream, avoiding repeated
-  --skip scans. With opt-in --limit N, pause prefetch when browsing demand is
-  satisfied.
-- Bundle broad offline language coverage, not a small allowlist. Preserve
-  grammar licenses and detect filenames/shebangs.
-- Functionality and workflow parity take priority in v1. Timing/RSS numbers are
-  aspirations, not release gates. Avoid obvious performance mistakes, record
-  meaningful bottlenecks, and defer elaborate optimization until features work.
-- Avoid whole-worktree recursive watcher expansion on nixpkgs. Coalesce events
-  and reconcile status periodically; watch failure must leave manual reload
-  usable.
+  need and an agreed plan change.
+- Avoid whole-worktree recursive watcher expansion. Coalesce events and
+  reconcile status periodically; watch failure must leave manual reload usable.
 - Report application and child-process memory separately; never invent
   measurements.
 
 ## Dependencies, verification, and documentation
 
 - Keep README.md concise and factual, focused on user-facing features, usage,
-  and setup. Put implementation details, dependency versions, architecture, and
-  internal workarounds in the `docs/` directory. Avoid promotional or generic
-  filler, exhaustive shortcut lists, repeated caveats, and examples that imply
-  stronger limits or guarantees than the implementation provides. Prefer linking
-  to `--help` for complete option details; explain only behavior needed to use a
-  feature safely.
-- Pin GPUI and use documentation matching that release. Commit Cargo.lock and
-  flake.lock. Use the Rust toolchain from pinned nixpkgs for builds and checks.
-- Keep native dependencies conditional on platform. Preserve license notices for
-  ported code and bundled grammars, fonts, icons, and other assets.
-- Once scaffolding exists, use these reproducible commands:
+  and setup. Put implementation details, architecture, and internal workarounds
+  in the `docs/` directory. Avoid promotional or generic filler, exhaustive
+  shortcut lists, repeated caveats, and examples that imply stronger limits or
+  guarantees than the implementation provides. Prefer linking to `--help` for
+  complete option details; explain only behavior needed to use a feature safely.
+- Do not duplicate configurable default values in documentation. Refer to
+  generated help or the implementation; keep historical measurement settings
+  explicitly tied to the measurement.
+- Pin GPUI Kit and use documentation matching its release and GPUI backend.
+  Commit Cargo.lock and flake.lock. Use the Rust toolchain from pinned nixpkgs
+  for reproducible builds and checks.
+- Keep native dependencies conditional on platform.
+- Use these reproducible commands as relevant to the change:
   - nix develop --command cargo fmt --all -- --check
-  - nix develop --command cargo clippy --all-targets -- -D warnings
+  - nix develop --command cargo clippy --all-targets --locked -- -D warnings
   - nix develop --command cargo test --all-targets --locked
-  - nix develop --command mdformat --check .
   - nix build
   - nix flake check
 - Protect behavior fixes with regression tests at the useful boundaries: pure
@@ -70,66 +58,11 @@ actually required.
   existing coverage and remove obsolete checks. Do not add tests or assertions
   solely to prove removed functionality is absent; keep negative checks that
   verify current requirements, such as error handling and data protection.
-- cargo test --all-targets must run all Rust tests, including GPUI, headlessly.
-  Use deterministic temporary Git fixtures; keep native desktop smoke and
-  million-commit benchmarks opt-in. Smoke-test real Wayland and X11 separately.
-- Run checks relevant to the increment. Documentation-only changes need link,
-  checklist, consistency, and ASCII checks, not application tests.
-- Keep AGENTS.md ASCII-only and concise. Document observed sandbox, network,
-  build, and display limitations with the command and actual error. Do not
-  weaken checks or claim completion to work around an unavailable environment.
+- cargo test --all-targets must run all non-ignored Rust tests for the current
+  platform, including GPUI, headlessly. Use deterministic temporary Git
+  fixtures; keep native desktop smoke and large-history benchmarks opt-in. The
+  automated [GUI smoke test](scripts/README.md) covers X11; validate Wayland
+  separately.
+- Keep AGENTS.md ASCII-only and concise. Do not weaken checks or claim
+  completion to work around an unavailable environment.
 - Do not rewrite existing Git history without an explicit user request.
-
-## Opt-in history memory probe
-
-- `GITK_PROFILE_REPOSITORY`: required repository path; the probe only reads it.
-- `GITK_PROFILE_COMMITS`: prefetch target, defaults to 100000; must be an
-  integer greater than 64 that fits usize. Stops earlier if Git reaches EOF.
-- `GITK_PROFILE_READERS`: reader count, defaults to 4; integer from 1 to 8.
-- Run explicitly; this test is ignored by ordinary test runs:
-
-```sh
-nix develop --command env \
-  GITK_PROFILE_REPOSITORY="$HOME/Projects/nixpkgs" \
-  GITK_PROFILE_COMMITS=100000 \
-  cargo test --lib profile_retained_history --locked -- --ignored --nocapture
-```
-
-- Compare the same repository HEAD, loaded count, reader count, and graph lane
-  cap (default 256, configurable with --graph-cols up to 1024; printed by the
-  probe). Accounted retained bytes exclude allocator/runtime overhead. Linux RSS
-  reports the history-only test process and live children separately; these are
-  neither desktop nor peak-memory measurements. Git may have exited at EOF.
-
-## Local environment limitations
-
-- On macOS, sandboxed `nix develop --command rustc --version` failed with
-  `attempt to write a readonly database` in `fetcher-cache-v4.sqlite`. Approved
-  Nix cache access succeeded; use it for validation.
-
-- Sandboxed `ps -axo pid,etime,command` failed with
-  `operation not permitted: ps`. Native process memory sampling requires
-  approved process inspection.
-
-- Sandboxed
-  `git restore --source=269f2ba --worktree -- src/ui.rs src/ui/tests.rs src/ui/diff_view.rs`
-  failed creating `.git/index.lock`: `Operation not permitted`. Approved Git
-  index access succeeded.
-
-- Sandboxed `nix eval --raw --inputs-from . crane#outPath` failed with
-  `executing SQLite statement 'pragma synchronous = off': unable to open database file`
-  for the Nix fetcher cache. Run Nix validation with approved cache access.
-
-- Sandboxed `git add src/history.rs src/ui/tests.rs docs/incremental-reload.md`
-  failed with
-  `fatal: Unable to create '/home/thiagoko/Projects/gitk-rs/.git/index.lock': Read-only file system`.
-  Run milestone commits with approved Git index access.
-
-- On Linux, sandboxed `nix develop --command rustc --version` failed opening
-  `~/.cache/nix/fetcher-locks/*.lock` with `Read-only file system`. Approved Nix
-  cache access succeeded; use it for validation.
-
-- `nix develop --command mdformat --check .` also scans generated dependency
-  Markdown under `target/native-ci/` and reports unformatted third-party files.
-  Check tracked Markdown files separately; do not reformat generated
-  dependencies.

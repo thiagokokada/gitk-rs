@@ -41,9 +41,9 @@ or removed text, and matching rules.
 
 History streams in the background until the whole repository history is loaded.
 For lower memory use, `--limit N` opts into loading history on demand in batches
-of N commits. Git uses four workers per pool by default. Set the worker count
-(1-8) in Preferences or with `--git-workers N` for history loading and content
-search; larger pools increase Git process memory.
+of N commits. Set the worker count (1-8) in Preferences or with
+`--git-workers N` for history loading and content search; larger pools increase
+Git process memory.
 
 For more command-line options:
 
@@ -52,24 +52,8 @@ For more command-line options:
 ```
 
 Apply in Preferences saves `gitk-rs/preferences.toml` in the OS configuration
-directory (`~/.config` on Linux or `~/Library/Application Support` on macOS).
-For example:
-
-```toml
-# Default options in Linux
-ui_font = "DejaVu Sans"
-fixed_font = "DejaVu Sans Mono"
-font_size = 13.0
-theme = "dark"
-graph_columns = 256
-git_workers = 2
-text_graph = false
-syntax = true
-watch = true
-# batch = 1000 # Omit to stream all history.
-```
-
-UI state configuration is remembered automatically in a separate
+directory (`~/.config` on Linux or `~/Library/Application Support` on macOS). UI
+state configuration is remembered automatically in a separate
 `gitk-rs/state.toml` file.
 
 ## Development

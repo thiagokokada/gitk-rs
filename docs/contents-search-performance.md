@@ -4,8 +4,8 @@
 
 Content search uses long-lived `git diff-tree --stdin` workers. The Git workers
 setting in Preferences, `--git-workers N`, and the `git_workers` preferences key
-control both history object readers and content-search workers (1-8, default 4).
-Path-only searches use one diff worker.
+control both history object readers and content-search workers (1-8). Path-only
+searches use one diff worker.
 
 The pool splits metadata candidates into batches of 64, distributes them
 round-robin, and drains results in submission order. The session-wide candidate
