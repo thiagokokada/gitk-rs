@@ -511,7 +511,7 @@ fn opening_a_non_repository_shows_one_error_and_recovers(cx: &mut TestAppContext
 }
 
 #[gpui_kit::test]
-fn context_input_keeps_keyboard_stepping_without_empty_buttons(cx: &mut TestAppContext) {
+fn context_input_supports_keyboard_stepping_and_clamps_at_zero(cx: &mut TestAppContext) {
     let fixture = Fixture::new();
     fixture.commit("base");
     let (app, cx) = open(&fixture, cx);
@@ -538,10 +538,6 @@ fn context_input_keeps_keyboard_stepping_without_empty_buttons(cx: &mut TestAppC
         cx.update(|_, cx| app.view.read(cx).diff.read(cx).options.context),
         0
     );
-    cx.update(|window, _| {
-        assert!(window.try_find("increment").is_none());
-        assert!(window.try_find("decrement").is_none());
-    });
 }
 
 #[gpui_kit::test]

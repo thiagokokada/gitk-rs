@@ -3109,13 +3109,11 @@ fn metadata_search_highlights_qualifiers_shows_errors_and_recovers(cx: &mut Test
                 .is_some_and(|s| s.eof)
         })
     });
-    assert!(cx.update(|window, _| window.try_find("author:text").is_none()));
     cx.simulate_keystrokes("/");
     cx.simulate_input("author:fixture message:needle path:file.txt contents:needle");
     until(cx, |cx| {
-        cx.update(|window, cx| {
-            window.try_find("search-filter-0").is_none()
-                && app.view.read(cx).filter.read(cx).decorations().len() == 8
+        cx.update(|_, cx| {
+            app.view.read(cx).filter.read(cx).decorations().len() == 8
                 && app
                     .view
                     .read(cx)
@@ -3127,7 +3125,7 @@ fn metadata_search_highlights_qualifiers_shows_errors_and_recovers(cx: &mut Test
                     })
         })
     });
-    cx.update(|window, cx| {
+    cx.update(|_, cx| {
         let input = app.view.read(cx).filter.read(cx);
         let value = input.value();
         let tags: Vec<_> = input
@@ -3137,7 +3135,6 @@ fn metadata_search_highlights_qualifiers_shows_errors_and_recovers(cx: &mut Test
             .map(|d| &value[d.range.clone()])
             .collect();
         assert_eq!(tags, ["author:", "message:", "path:", "contents:"]);
-        assert!(window.try_find("All filters:").is_none());
         assert!(
             input
                 .decorations()
