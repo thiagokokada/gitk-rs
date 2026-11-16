@@ -553,13 +553,13 @@ impl HistoryWindow {
                 Ok(OperationOutcome::BranchSwitched) => {
                     self.dialog = None;
                     self.restore_focus = true;
-                    self.operation_message = "branch switched".into();
+                    self.operation_message = "Branch switched".into();
                     let generation = self.workspace_generation;
                     let operation_id = result.id;
                     self.expire_status_notice(cx, move |this| {
                         if this.workspace_generation != generation
                             || this.operation_id != operation_id
-                            || this.operation_message != "branch switched"
+                            || this.operation_message != "Branch switched"
                         {
                             return false;
                         }
@@ -762,31 +762,44 @@ impl HistoryWindow {
                     .and_then(|s| s.error.as_ref())
             });
         let mut status = self.history_activity_text().unwrap_or_else(|| {
-            repository_error.cloned().unwrap_or_else(|| {
-                self.history_state.snapshot.as_ref().map_or_else(
-                    || "loading commits…".into(),
-                    |s| {
-                        format!(
-                            "showing {} / {} loaded commits on {}{}",
-                            s.visible,
-                            s.loaded,
-                            s.branch,
-                            if !s.eof {
-                                " — more available".to_owned()
-                            } else if self.show_end_of_history
-                                && self.end_of_history_generation == Some(s.generation)
-                            {
-                                format!(
-                                    " — end of history ({:.2} s)",
-                                    s.load_duration.as_secs_f64()
-                                )
-                            } else {
-                                String::new()
-                            }
-                        )
-                    },
-                )
-            })
+            repository_error
+                .map(|error| {
+                    if self
+                        .history_state
+                        .snapshot
+                        .as_ref()
+                        .is_some_and(|s| s.query_error.is_some())
+                    {
+                        format!("Invalid filter: {error}")
+                    } else {
+                        error.clone()
+                    }
+                })
+                .unwrap_or_else(|| {
+                    self.history_state.snapshot.as_ref().map_or_else(
+                        || "Loading commits…".into(),
+                        |s| {
+                            format!(
+                                "Showing {} / {} loaded commits on {}{}",
+                                s.visible,
+                                s.loaded,
+                                s.branch,
+                                if !s.eof {
+                                    " — More available".to_owned()
+                                } else if self.show_end_of_history
+                                    && self.end_of_history_generation == Some(s.generation)
+                                {
+                                    format!(
+                                        " — End of history ({:.2} s)",
+                                        s.load_duration.as_secs_f64()
+                                    )
+                                } else {
+                                    String::new()
+                                }
+                            )
+                        },
+                    )
+                })
         });
         if !self.operation_message.is_empty()
             && self.dialog.is_none()
@@ -1361,7 +1374,7 @@ impl Render for HistoryWindow {
                                         .menu("Open repository…", Box::new(OpenRepository))
                                         .menu("Switch local branch…", Box::new(OpenBranches))
                                         .menu("Reload", Box::new(Reload))
-                                        .menu("Force Reload", Box::new(ForceReload))
+                                        .menu("Force reload", Box::new(ForceReload))
                                         .separator()
                                         .menu("Copy commit reference", Box::new(CopyCommit))
                                         .menu("Preferences…", Box::new(OpenPreferences))
@@ -1806,7 +1819,7 @@ fn search_feedback(
                         .id("search-error")
                         .test_support()
                         .text_color(rgb(palette.removed_text))
-                        .child(error.to_string()),
+                        .child(format!("Invalid filter: {error}")),
                 )
                 .into_any_element(),
         ),

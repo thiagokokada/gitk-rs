@@ -780,8 +780,8 @@ fn status_messages_keep_one_line_at_narrow_widths(cx: &mut TestAppContext) {
     until(cx, |cx| selected(&app.view, cx).as_deref() == Some(&tip));
     let height = cx.update(|window, _| window.find("history-status").bounds().size.height);
     for message in [
-        "branch switched".to_owned(),
-        "preferences saved".to_owned(),
+        "Branch switched".to_owned(),
+        "Preferences saved".to_owned(),
         "Git failed: /CaseSensitive/Repository.git".to_owned(),
         "Long operation message ".repeat(30),
     ] {
@@ -793,7 +793,7 @@ fn status_messages_keep_one_line_at_narrow_widths(cx: &mut TestAppContext) {
         });
         cx.update(|_, cx| {
             let status = app.view.read(cx).status_text();
-            assert!(status.starts_with("showing "));
+            assert!(status.starts_with("Showing "));
             assert!(status.ends_with(&message));
         });
         cx.simulate_resize(size(px(740.), px(850.)));
@@ -1094,7 +1094,7 @@ fn branch_protection_and_selected_ancestor_survive_switch(cx: &mut TestAppContex
         })
     });
     assert_eq!(selected(&app.view, cx).as_deref(), Some(ancestor.as_str()));
-    assert!(cx.update(|_, cx| app.view.read(cx).status_text().ends_with("branch switched")));
+    assert!(cx.update(|_, cx| app.view.read(cx).status_text().ends_with("Branch switched")));
     cx.simulate_keystrokes("home");
     assert_eq!(selected(&app.view, cx).as_deref(), Some(tip.as_str()));
     cx.background_executor.advance_clock(Duration::from_secs(4));
@@ -1107,7 +1107,7 @@ fn end_of_history_notice_expires_without_changing_eof_or_repeating(cx: &mut Test
     let fixture = history_fixture(20);
     let (app, cx) = open(&fixture, cx);
     until(cx, |cx| {
-        cx.update(|_, cx| app.view.read(cx).status_text().contains("end of history"))
+        cx.update(|_, cx| app.view.read(cx).status_text().contains("End of history"))
     });
     app.view.update(cx, |view, _| {
         let original = view.history_state.snapshot.as_ref().unwrap().load_duration;
@@ -1119,7 +1119,7 @@ fn end_of_history_notice_expires_without_changing_eof_or_repeating(cx: &mut Test
             view.history_state.snapshot.as_mut().unwrap().load_duration = duration;
             assert!(
                 view.status_text()
-                    .contains(&format!("end of history ({expected} s)"))
+                    .contains(&format!("End of history ({expected} s)"))
             );
         }
         view.history_state.snapshot.as_mut().unwrap().load_duration = original;
@@ -1132,18 +1132,18 @@ fn end_of_history_notice_expires_without_changing_eof_or_repeating(cx: &mut Test
         cx.update(|_, cx| {
             let view = app.view.read(cx);
             view.end_of_history_generation != Some(generation)
-                && view.status_text().contains("end of history")
+                && view.status_text().contains("End of history")
         })
     });
     cx.background_executor.advance_clock(Duration::from_secs(1));
     cx.run_until_parked();
-    assert!(cx.update(|_, cx| app.view.read(cx).status_text().contains("end of history")));
+    assert!(cx.update(|_, cx| app.view.read(cx).status_text().contains("End of history")));
     cx.background_executor.advance_clock(Duration::from_secs(3));
     cx.run_until_parked();
     app.view.update(cx, |view, _| {
         assert!(view.history_state.snapshot.as_ref().unwrap().eof);
-        assert!(!view.status_text().contains("end of history"));
-        assert!(!view.status_text().contains("more available"));
+        assert!(!view.status_text().contains("End of history"));
+        assert!(!view.status_text().contains("More available"));
         view.submit();
     });
     until(cx, |cx| {
@@ -1155,7 +1155,7 @@ fn end_of_history_notice_expires_without_changing_eof_or_repeating(cx: &mut Test
                 .is_some_and(|s| s.request_id == view.history_state.request.id)
         })
     });
-    assert!(cx.update(|_, cx| !app.view.read(cx).status_text().contains("end of history")));
+    assert!(cx.update(|_, cx| !app.view.read(cx).status_text().contains("End of history")));
 }
 
 #[gpui_kit::test]
@@ -1178,7 +1178,7 @@ fn branch_switch_message_timer_preserves_newer_operations(cx: &mut TestAppContex
             cx.update(|_, cx| {
                 let view = app.view.read(cx);
                 view.dialog.is_none()
-                    && view.operation_message == "branch switched"
+                    && view.operation_message == "Branch switched"
                     && view.pending_operation.is_none()
             })
         });
@@ -1189,7 +1189,7 @@ fn branch_switch_message_timer_preserves_newer_operations(cx: &mut TestAppContex
     }
     cx.background_executor.advance_clock(Duration::from_secs(1));
     cx.run_until_parked();
-    assert!(cx.update(|_, cx| app.view.read(cx).operation_message == "branch switched"));
+    assert!(cx.update(|_, cx| app.view.read(cx).operation_message == "Branch switched"));
     app.view.update(cx, |view, _| {
         view.operation_message = "newer operation failed".into()
     });
@@ -1217,7 +1217,7 @@ fn repository_path_dialog_replaces_history_and_restores_navigation(cx: &mut Test
         app.view
             .read(cx)
             .status_text()
-            .ends_with("enter a repository directory")
+            .ends_with("Enter a repository directory")
     }));
     cx.simulate_keystrokes("ctrl-shift-o ctrl-a ctrl-k");
     cx.simulate_input(second.root().to_str().unwrap());
@@ -1705,7 +1705,7 @@ fn status_and_idle_lane_tooltips_wrap_inside_the_window(cx: &mut TestAppContext)
     let mut probe = None;
     let (_, cx) = cx.add_window_view(|window, cx| {
         let view = cx.new(|_| TooltipProbe {
-            status: "branch switched; details for /CaseSensitive/Repository.git ".repeat(6),
+            status: "Branch switched; details for /CaseSensitive/Repository.git ".repeat(6),
         });
         probe = Some(view.clone());
         gpui_kit::base::Root::new(view, window, cx)
@@ -2069,7 +2069,7 @@ fn application_preferences_cancel_invalid_values_and_report_save_failure(cx: &mu
         let view = app.view.read(cx);
         view.dialog.is_none()
             && view.config.text_graph
-            && view.operation_message.contains("save preferences:")
+            && view.operation_message.contains("Save preferences:")
     }));
     assert_eq!(std::fs::read(&path).unwrap(), bytes);
     cx.simulate_keystrokes("alt-j");

@@ -524,7 +524,7 @@ fn workspace_worker(shared: Arc<WorkShared>) {
                         Ok(created) => watcher = Some(created),
                         Err(error) => {
                             watcher_error = Some(format!(
-                                "file watching unavailable: {error}; periodic refresh remains active"
+                                "File watching unavailable: {error}; periodic refresh remains active"
                             ))
                         }
                     }
@@ -560,7 +560,7 @@ fn workspace_worker(shared: Arc<WorkShared>) {
         }
         if watch_failed.swap(false, Ordering::AcqRel) {
             watcher_error = Some(
-                "file watcher failed; periodic refresh remains active; F5 is available".into(),
+                "File watcher failed; periodic refresh remains active; F5 is available".into(),
             );
             force = true;
         }
@@ -620,7 +620,7 @@ fn workspace_worker(shared: Arc<WorkShared>) {
                         Ok(()) => watched.push(path),
                         Err(error) => {
                             watcher_error = Some(format!(
-                                "watch {}: {error}; periodic refresh remains active",
+                                "Watch {}: {error}; periodic refresh remains active",
                                 path.display()
                             ))
                         }

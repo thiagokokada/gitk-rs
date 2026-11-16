@@ -26,14 +26,14 @@ impl HistoryWindow {
                     Ok(Ok(None)) => {}
                     Ok(Err(error)) => {
                         this.operation_message = format!(
-                            "desktop picker unavailable: {error:#}; enter a repository path below"
+                            "Desktop picker unavailable: {error:#}; enter a repository path below"
                         );
                         this.dialog = Some(DialogKind::OpenRepository);
                         this.restore_repository_focus = true;
                     }
                     Err(error) => {
                         this.operation_message = format!(
-                            "desktop picker unavailable: {error}; enter a repository path below"
+                            "Desktop picker unavailable: {error}; enter a repository path below"
                         );
                         this.dialog = Some(DialogKind::OpenRepository);
                         this.restore_repository_focus = true;
@@ -71,7 +71,7 @@ impl HistoryWindow {
     pub(super) fn apply_repository_path(&mut self, cx: &mut Context<Self>) {
         let path = self.repository_input.read(cx).value().to_string();
         if path.is_empty() {
-            self.operation_message = "enter a repository directory".into();
+            self.operation_message = "Enter a repository directory".into();
             cx.notify();
             return;
         }
@@ -88,7 +88,7 @@ impl HistoryWindow {
         self.branch_index = 0;
         self.branch_filter
             .update(cx, |input, cx| input.focus(window, cx));
-        self.operation_message = "loading local branches…".into();
+        self.operation_message = "Loading local branches…".into();
         self.operation_id.value += 1;
         if self.workspace.operate(
             self.workspace_generation,
@@ -97,7 +97,7 @@ impl HistoryWindow {
         ) {
             self.pending_operation = Some(self.operation_id);
         } else {
-            self.operation_message = "a repository operation is already pending".into();
+            self.operation_message = "A repository operation is already pending".into();
         }
         cx.notify();
     }
@@ -114,7 +114,7 @@ impl HistoryWindow {
             return;
         };
         self.operation_id.value += 1;
-        self.operation_message = format!("switching to {branch}…");
+        self.operation_message = format!("Switching to {branch}…");
         if self.config.verbose {
             eprintln!("gitk-rs: {}", self.operation_message);
         }
@@ -587,7 +587,7 @@ impl HistoryWindow {
         }
         let preferences = self.draft_preferences(cx);
         if let Err(error) = preferences.validate() {
-            self.operation_message = error.to_string();
+            self.operation_message = format!("Invalid preferences: {error}");
             cx.notify();
             return;
         }
@@ -656,8 +656,8 @@ impl HistoryWindow {
                 }
                 this.preferences_save_pending = false;
                 this.operation_message = result.err().map_or_else(
-                    || "preferences saved".into(),
-                    |error| format!("save preferences: {error}"),
+                    || "Preferences saved".into(),
+                    |error| format!("Save preferences: {error}"),
                 );
                 cx.notify();
             });

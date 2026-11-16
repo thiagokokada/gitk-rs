@@ -97,7 +97,7 @@ impl HistoryWindow {
                             .size_full(),
                     ),
             )
-            .child(format!("Git workers (1-{})", gitk_rs::git::MAX_GIT_WORKERS))
+            .child(format!("Git workers (1–{})", gitk_rs::git::MAX_GIT_WORKERS))
             .child(
                 div()
                     .id("git-workers-input")
