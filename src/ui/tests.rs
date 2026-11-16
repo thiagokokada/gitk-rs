@@ -1082,6 +1082,15 @@ fn branch_protection_and_selected_ancestor_survive_switch(cx: &mut TestAppContex
     });
     cx.simulate_input("side");
     cx.simulate_keystrokes("enter");
+    // The success notice expires on the UI clock, independently of the real
+    // Git worker restoring history. Check it when the operation completes.
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            let view = app.view.read(cx);
+            view.dialog.is_none() && view.pending_operation.is_none()
+        })
+    });
+    assert!(cx.update(|_, cx| app.view.read(cx).status_text().ends_with("Branch switched")));
     until(cx, |cx| {
         cx.update(|_, cx| {
             let v = app.view.read(cx);
@@ -1094,7 +1103,6 @@ fn branch_protection_and_selected_ancestor_survive_switch(cx: &mut TestAppContex
         })
     });
     assert_eq!(selected(&app.view, cx).as_deref(), Some(ancestor.as_str()));
-    assert!(cx.update(|_, cx| app.view.read(cx).status_text().ends_with("Branch switched")));
     cx.simulate_keystrokes("home");
     assert_eq!(selected(&app.view, cx).as_deref(), Some(tip.as_str()));
     cx.background_executor.advance_clock(Duration::from_secs(4));

@@ -18,7 +18,7 @@ use gpui_kit::component::{
     Sizable,
     button::Button,
     checkbox::Checkbox,
-    input::{Input, InputEvent, InputState},
+    input::{InputEvent, InputState, NumberInput},
     menu::{ContextMenuExt, DropdownMenu, PopupMenuItem},
     radio::Radio,
     resizable::{h_resizable, resizable_panel},
@@ -431,11 +431,16 @@ impl DiffPane {
         bar = bar.child("Lines of context:");
         if let Some(input) = &self.context_input {
             bar = bar.child(
-                div().w(px(80.)).child(
-                    gpui_kit::base::NumberInput::new(input)
-                        .controls_right()
-                        .input(Input::new(input).small()),
-                ),
+                div()
+                    .id("diff-context-input")
+                    .test_support()
+                    .w(px(80.))
+                    .child(
+                        NumberInput::new(input)
+                            .accessibility_label("Lines of context")
+                            .stepper(false)
+                            .small(),
+                    ),
             );
         }
         bar.child(

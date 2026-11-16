@@ -508,6 +508,40 @@ fn opening_a_non_repository_shows_one_error_and_recovers(cx: &mut TestAppContext
 }
 
 #[gpui_kit::test]
+fn context_input_keeps_keyboard_stepping_without_empty_buttons(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    fixture.commit("base");
+    let (app, cx) = open(&fixture, cx);
+    until(cx, |cx| {
+        cx.update(|window, _| window.try_find("diff-context-input").is_some())
+    });
+    cx.update(|window, cx| window.click("diff-context-input", cx));
+    cx.simulate_keystrokes("ctrl-a ctrl-k");
+    cx.simulate_input("7");
+    cx.simulate_keystrokes("up");
+    assert_eq!(
+        cx.update(|_, cx| app.view.read(cx).diff.read(cx).options.context),
+        8
+    );
+    cx.simulate_keystrokes("down");
+    assert_eq!(
+        cx.update(|_, cx| app.view.read(cx).diff.read(cx).options.context),
+        7
+    );
+    cx.simulate_keystrokes("ctrl-a ctrl-k");
+    cx.simulate_input("0");
+    cx.simulate_keystrokes("down");
+    assert_eq!(
+        cx.update(|_, cx| app.view.read(cx).diff.read(cx).options.context),
+        0
+    );
+    cx.update(|window, _| {
+        assert!(window.try_find("increment").is_none());
+        assert!(window.try_find("decrement").is_none());
+    });
+}
+
+#[gpui_kit::test]
 fn diff_options_restore_and_save_independently_of_preferences(cx: &mut TestAppContext) {
     use gitk_rs::diff::{DiffEngine, DiffSettings, options};
     let root = tempfile::tempdir().unwrap();
