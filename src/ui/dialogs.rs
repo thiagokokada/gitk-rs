@@ -239,7 +239,11 @@ impl HistoryWindow {
                             .items_center()
                             .gap_2()
                             .when(self.pending_operation.is_some(), |status| {
-                                status.child(Spinner::new().color(rgb(palette.foreground).into()))
+                                status.child(
+                                    Spinner::new()
+                                        .icon(gpui_kit::assets::IconName::LoaderCircle)
+                                        .color(rgb(palette.foreground).into()),
+                                )
                             })
                             .child(self.operation_message.clone()),
                     );

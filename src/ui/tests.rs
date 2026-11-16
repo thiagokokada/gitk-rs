@@ -2719,6 +2719,7 @@ fn history_activity_covers_pending_filters_progress_errors_and_reload(cx: &mut T
                 && view.history_activity_text().is_none()
         })
     });
+    let status_height = cx.update(|window, _| window.find("history-status").bounds().size.height);
     cx.update(|_, cx| {
         app.view.update(cx, |view, cx| {
             view.apply_filter("message:needle".into(), cx);
@@ -2726,10 +2727,16 @@ fn history_activity_covers_pending_filters_progress_errors_and_reload(cx: &mut T
                 view.history_activity_text().as_deref(),
                 Some("Filtering commits…")
             );
+            assert_eq!(view.status_text(), "Filtering commits…");
         });
     });
     cx.refresh().unwrap();
-    assert!(cx.update(|window, _| window.try_find("history-activity").is_some()));
+    cx.update(|window, _| {
+        let status = window.find("history-status").bounds();
+        let spinner = window.find("history-activity").bounds();
+        assert_eq!(status.size.height, status_height);
+        assert!(spinner.top() >= status.top() && spinner.bottom() <= status.bottom());
+    });
     until(cx, |cx| {
         cx.update(|_, cx| {
             let view = app.view.read(cx);
@@ -2751,11 +2758,26 @@ fn history_activity_covers_pending_filters_progress_errors_and_reload(cx: &mut T
                 view.history_activity_text().as_deref(),
                 Some("Filtering commits… 1 matching / 2 loaded commits")
             );
+            assert_eq!(
+                view.status_text(),
+                "Filtering commits… 1 matching / 2 loaded commits"
+            );
             cx.notify();
         });
     });
     cx.refresh().unwrap();
     assert!(cx.update(|window, _| window.try_find("history-activity").is_some()));
+    // Check frame scheduling as well as the presence of the spinner. GPUI
+    // intentionally stops decorative animation when Reduce Motion is enabled.
+    assert!(cx.update(|window, cx| window.simulate_next_frame(cx)) > 0);
+    cx.run_until_parked();
+    assert!(cx.update(|window, cx| window.simulate_next_frame(cx)) > 0);
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    cx.refresh().unwrap();
+    cx.update(|window, cx| window.simulate_next_frame(cx));
+    cx.run_until_parked();
+    assert_eq!(cx.update(|window, cx| window.simulate_next_frame(cx)), 0);
+    cx.update(|_, cx| cx.set_reduce_motion(false));
     cx.update(|_, cx| {
         app.view.update(cx, |view, cx| {
             let snapshot = view.history_state.snapshot.as_mut().unwrap();

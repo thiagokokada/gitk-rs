@@ -761,28 +761,32 @@ impl HistoryWindow {
                     .as_ref()
                     .and_then(|s| s.error.as_ref())
             });
-        let mut status = repository_error.cloned().unwrap_or_else(|| {
-            self.history_state.snapshot.as_ref().map_or_else(
-                || "loading commits…".into(),
-                |s| {
-                    format!(
-                        "showing {} / {} loaded commits on {}{}{}",
-                        s.visible,
-                        s.loaded,
-                        s.branch,
-                        if !s.eof {
-                            " — more available".to_owned()
-                        } else if self.show_end_of_history
-                            && self.end_of_history_generation == Some(s.generation)
-                        {
-                            format!(" — end of history ({:.2} s)", s.load_duration.as_secs_f64())
-                        } else {
-                            String::new()
-                        },
-                        if s.filtering { " — filtering…" } else { "" }
-                    )
-                },
-            )
+        let mut status = self.history_activity_text().unwrap_or_else(|| {
+            repository_error.cloned().unwrap_or_else(|| {
+                self.history_state.snapshot.as_ref().map_or_else(
+                    || "loading commits…".into(),
+                    |s| {
+                        format!(
+                            "showing {} / {} loaded commits on {}{}",
+                            s.visible,
+                            s.loaded,
+                            s.branch,
+                            if !s.eof {
+                                " — more available".to_owned()
+                            } else if self.show_end_of_history
+                                && self.end_of_history_generation == Some(s.generation)
+                            {
+                                format!(
+                                    " — end of history ({:.2} s)",
+                                    s.load_duration.as_secs_f64()
+                                )
+                            } else {
+                                String::new()
+                            }
+                        )
+                    },
+                )
+            })
         });
         if !self.operation_message.is_empty()
             && self.dialog.is_none()
@@ -1371,15 +1375,6 @@ impl Render for HistoryWindow {
                     )
             )
             .children(search_feedback(self.filter.read(cx).value().as_ref(), self.history_state.request.regex, self.query_error(cx), palette))
-            .when_some(self.history_activity_text(), |view, message| {
-                view.child(
-                    div().id("history-activity").test_support()
-                        .flex().items_center().gap_2().px_2().py_1()
-                        .bg(rgb(palette.header_line))
-                        .child(Spinner::new().color(rgb(palette.foreground).into()))
-                        .child(message),
-                )
-            })
             .child(
                 div().flex_1().min_h_0().child(
                     v_resizable("main-split")
@@ -1489,10 +1484,20 @@ impl Render for HistoryWindow {
                     .id("history-status")
                     .test_support()
                     .flex_shrink_0()
-                    .truncate()
+                    .flex()
+                    .items_center()
+                    .gap_2()
                     .px_2()
                     .py_1()
-                    .child(status.clone())
+                    .when(self.history_activity_text().is_some(), |bar| {
+                        bar.child(
+                            div().id("history-activity").test_support().flex_shrink_0()
+                                .child(Spinner::new()
+                                    .icon(gpui_kit::assets::IconName::LoaderCircle)
+                                    .color(rgb(palette.foreground).into())),
+                        )
+                    })
+                    .child(div().min_w_0().truncate().child(status.clone()))
                     .hoverable_tooltip(move |window, cx| {
                         wrapped_tooltip(status.clone(), window, cx)
                     }),
