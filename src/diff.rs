@@ -21,7 +21,9 @@ mod highlight_tests;
 pub mod options;
 use highlight::HighlightCache;
 
+mod position;
 pub mod selection;
+pub use position::DiffPosition;
 pub use selection::{TextPoint, TextSelection};
 const MAX_LINES: usize = 1_000_000;
 const MAX_DIFF_BYTES: u64 = 256 * 1024 * 1024;
