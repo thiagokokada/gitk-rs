@@ -2294,6 +2294,75 @@ fn font_size_steps_with_buttons_and_keyboard_within_bounds(cx: &mut TestAppConte
 }
 
 #[gpui_kit::test]
+fn graph_and_worker_preferences_step_within_bounds_and_show_help(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    fixture.commit("tip");
+    let (app, cx) = open(&fixture, cx);
+    let original = cx.update(|_, cx| app.view.read(cx).preferences.clone());
+    cx.simulate_keystrokes("ctrl-,");
+    until(cx, |cx| {
+        cx.update(|_, cx| app.view.read(cx).preference_dialog.font_catalog.is_some())
+    });
+    for (id, max) in [
+        ("git-workers-input", gitk_rs::git::MAX_GIT_WORKERS),
+        ("graph-columns-input", MAX_GRAPH_LANES),
+    ] {
+        scroll_preferences_to(id, cx);
+        cx.update(|window, cx| window.click(id, cx));
+        cx.simulate_keystrokes("ctrl-a ctrl-k");
+        cx.simulate_input("2");
+        let value = |cx: &mut VisualTestContext| {
+            cx.update(|_, cx| {
+                let draft = app.view.read(cx).preference_dialog.draft_preferences(cx);
+                if id == "git-workers-input" {
+                    draft.git_workers
+                } else {
+                    draft.graph_columns
+                }
+            })
+        };
+        cx.refresh().unwrap();
+        cx.update(|window, cx| window.within(id).click("increment", cx));
+        assert_eq!(value(cx), 3);
+        cx.update(|window, cx| window.within(id).click("decrement", cx));
+        assert_eq!(value(cx), 2);
+        cx.simulate_keystrokes("up");
+        assert_eq!(value(cx), 3);
+        cx.simulate_keystrokes("down");
+        assert_eq!(value(cx), 2);
+        for (limit, key, button) in [(1, "down", "decrement"), (max, "up", "increment")] {
+            cx.simulate_keystrokes("ctrl-a ctrl-k");
+            cx.simulate_input(&limit.to_string());
+            cx.simulate_keystrokes(key);
+            cx.refresh().unwrap();
+            cx.update(|window, cx| window.within(id).click(button, cx));
+            assert_eq!(value(cx), limit);
+        }
+    }
+    for label in [
+        "history-batch-label",
+        "git-workers-label",
+        "graph-columns-label",
+    ] {
+        scroll_preferences_to(label, cx);
+        cx.update(|window, cx| window.hover(label, cx));
+        until(cx, |cx| {
+            cx.update(|window, _| window.try_find("tooltip-text").is_some())
+        });
+        cx.update(|window, _| {
+            assert!(window.find("tooltip-text").bounds().size.height > px(24.));
+        });
+        cx.simulate_mouse_move(point(px(1.), px(1.)), None, gpui_kit::Modifiers::default());
+        cx.background_executor.advance_clock(Duration::from_secs(1));
+        cx.run_until_parked();
+    }
+    assert_eq!(
+        cx.update(|_, cx| app.view.read(cx).preferences.clone()),
+        original
+    );
+}
+
+#[gpui_kit::test]
 fn font_catalog_loading_rejects_closed_and_superseded_preferences(cx: &mut TestAppContext) {
     let fixture = Fixture::new();
     fixture.commit("tip");

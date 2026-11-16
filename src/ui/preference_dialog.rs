@@ -66,9 +66,19 @@ impl PreferencesDialog {
                 .min(8.)
                 .max(24.)
         });
-        let graph_columns_input = cx.new(|cx| InputState::new(window, cx));
+        let graph_columns_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .step(1.)
+                .min(1.)
+                .max(MAX_GRAPH_LANES as f64)
+        });
         let batch_input = cx.new(|cx| InputState::new(window, cx));
-        let git_workers_input = cx.new(|cx| InputState::new(window, cx));
+        let git_workers_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .step(1.)
+                .min(1.)
+                .max(gitk_rs::git::MAX_GIT_WORKERS as f64)
+        });
         let mut font_subscriptions = Vec::new();
         for selector in [&ui_font_select, &fixed_font_select] {
             font_subscriptions.push(
@@ -202,7 +212,7 @@ impl PreferencesDialog {
     ) -> gpui_kit::Stateful<gpui_kit::Div> {
         let palette = Palette::for_theme(theme);
         let draft = self.draft_preferences(cx);
-        let options = self.options(cx);
+        let options = self.options(palette, cx);
         let preview_size = preview_size(draft.font_size, preferences.font_size);
         body.h(px(640.))
             .overflow_hidden()
@@ -250,61 +260,13 @@ impl PreferencesDialog {
                                 form.child("Loading installed fonts…")
                             })
                             .child("Font size (8–24 pixels)")
-                            .child(
-                                div()
-                                    .id("font-size-input")
-                                    .test_support()
-                                    .h_8()
-                                    .flex_shrink_0()
-                                    .track_focus(&self.font_size_input.read(cx).focus_handle(cx))
-                                    .rounded_md()
-                                    .border_1()
-                                    .border_color(rgb(palette.border))
-                                    .focus(|input| input.border_color(rgb(colors::SOLID_SELECTION)))
-                                    .bg(rgb(palette.row))
-                                    .text_color(rgb(palette.foreground))
-                                    .child(
-                                        gpui_kit::base::NumberInput::new(&self.font_size_input)
-                                            .accessibility_label("Font size in pixels")
-                                            .controls_right()
-                                            .size_full()
-                                            .input(
-                                                Input::new(&self.font_size_input)
-                                                    .appearance(false)
-                                                    .h_full()
-                                                    .w_full()
-                                                    .text_align(gpui_kit::TextAlign::Left),
-                                            )
-                                            .increment_button(move |button| {
-                                                button
-                                                    .accessibility_label("Increase font size")
-                                                    .w_8()
-                                                    .text_size(px(12.))
-                                                    .line_height(px(12.))
-                                                    .flex()
-                                                    .items_center()
-                                                    .justify_center()
-                                                    .hover(move |button| {
-                                                        button.bg(rgb(palette.dialog_button))
-                                                    })
-                                                    .child("+")
-                                            })
-                                            .decrement_button(move |button| {
-                                                button
-                                                    .accessibility_label("Decrease font size")
-                                                    .w_8()
-                                                    .text_size(px(12.))
-                                                    .line_height(px(12.))
-                                                    .flex()
-                                                    .items_center()
-                                                    .justify_center()
-                                                    .hover(move |button| {
-                                                        button.bg(rgb(palette.dialog_button))
-                                                    })
-                                                    .child("−")
-                                            }),
-                                    ),
-                            )
+                            .child(numeric_preference_input(
+                                "font-size-input",
+                                "Font size in pixels",
+                                &self.font_size_input,
+                                palette,
+                                cx,
+                            ))
                             .child(
                                 div()
                                     .flex()
@@ -384,7 +346,7 @@ impl PreferencesDialog {
             )
     }
 
-    fn options(&self, cx: &mut Context<HistoryWindow>) -> AnyElement {
+    fn options(&self, palette: &'static Palette, cx: &mut Context<HistoryWindow>) -> AnyElement {
         let draft = &self.draft;
         let mut form = div()
             .flex()
@@ -431,7 +393,15 @@ impl PreferencesDialog {
             ));
         }
         form = form
-            .child("History batch size (when loading on demand)")
+            .child(
+                div()
+                    .id("history-batch-label")
+                    .test_support()
+                    .child("History batch size ⓘ")
+                    .hoverable_tooltip(|window, cx| {
+                        wrapped_tooltip("Used when loading history on demand. Sets how many commits to load ahead in each batch; browsing further loads more. Loaded commits stay in memory, so this does not limit the total history retained. When loading on demand is off, all history streams automatically.", window, cx)
+                    }),
+            )
             .child(
                 div()
                     .id("history-batch-input")
@@ -444,23 +414,41 @@ impl PreferencesDialog {
                             .size_full(),
                     ),
             )
-            .child(format!("Git workers (1–{})", gitk_rs::git::MAX_GIT_WORKERS))
             .child(
                 div()
-                    .id("git-workers-input")
+                    .id("git-workers-label")
                     .test_support()
-                    .h_8()
-                    .flex_shrink_0()
-                    .child(Input::new(&self.git_workers_input).size_full()),
+                    .child(format!("Git workers (1–{}) ⓘ", gitk_rs::git::MAX_GIT_WORKERS))
+                    .hoverable_tooltip(|window, cx| {
+                        wrapped_tooltip("Git workers read commit data and search changed file contents in parallel. This sets the worker count for each pool. More workers can speed up loading and searches, but use more CPU and memory. Applying a change restarts history loading.", window, cx)
+                    }),
             )
-            .child(format!("Logical graph columns (1–{MAX_GRAPH_LANES})"))
+            .child(
+                numeric_preference_input(
+                    "git-workers-input",
+                    "Git workers",
+                    &self.git_workers_input,
+                    palette,
+                    cx,
+                ),
+            )
             .child(
                 div()
-                    .id("graph-columns-input")
+                    .id("graph-columns-label")
                     .test_support()
-                    .h_8()
-                    .flex_shrink_0()
-                    .child(Input::new(&self.graph_columns_input).size_full()),
+                    .child(format!("Logical graph columns (1–{MAX_GRAPH_LANES}) ⓘ"))
+                    .hoverable_tooltip(|window, cx| {
+                        wrapped_tooltip("Columns are lanes for lines of history in the commit graph. This caps the number of logical lanes before idle lanes are grouped for display. Higher values keep more complex branch and merge paths separate; lower values can make paths share a lane. The visible graph may use fewer columns.", window, cx)
+                    }),
+            )
+            .child(
+                numeric_preference_input(
+                    "graph-columns-input",
+                    "Logical graph columns",
+                    &self.graph_columns_input,
+                    palette,
+                    cx,
+                ),
             );
         form.into_any_element()
     }
@@ -523,6 +511,64 @@ impl PreferencesDialog {
             });
         }
     }
+}
+
+fn numeric_preference_input(
+    id: &'static str,
+    label: &'static str,
+    input: &Entity<InputState>,
+    palette: &'static Palette,
+    cx: &App,
+) -> impl IntoElement {
+    div()
+        .id(id)
+        .test_support()
+        .h_8()
+        .flex_shrink_0()
+        .track_focus(&input.read(cx).focus_handle(cx))
+        .rounded_md()
+        .border_1()
+        .border_color(rgb(palette.border))
+        .focus(|input| input.border_color(rgb(colors::SOLID_SELECTION)))
+        .bg(rgb(palette.row))
+        .text_color(rgb(palette.foreground))
+        .child(
+            gpui_kit::base::NumberInput::new(input)
+                .accessibility_label(label)
+                .controls_right()
+                .size_full()
+                .input(
+                    Input::new(input)
+                        .appearance(false)
+                        .h_full()
+                        .w_full()
+                        .text_align(gpui_kit::TextAlign::Left),
+                )
+                .increment_button(move |button| {
+                    button
+                        .accessibility_label(format!("Increase {label}"))
+                        .w_8()
+                        .text_size(px(12.))
+                        .line_height(px(12.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .hover(move |button| button.bg(rgb(palette.dialog_button)))
+                        .child("+")
+                })
+                .decrement_button(move |button| {
+                    button
+                        .accessibility_label(format!("Decrease {label}"))
+                        .w_8()
+                        .text_size(px(12.))
+                        .line_height(px(12.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .hover(move |button| button.bg(rgb(palette.dialog_button)))
+                        .child("−")
+                }),
+        )
 }
 
 fn font_choices(mut installed: Vec<SharedString>, ui: &str, fixed: &str) -> Vec<SharedString> {
