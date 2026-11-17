@@ -10,7 +10,7 @@ use std::{
     fs::File,
     io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write},
     ops::Range,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{Arc, Condvar, Mutex, atomic::Ordering},
     thread::{self, JoinHandle},
 };
@@ -58,6 +58,10 @@ pub struct FileSection {
 #[derive(Clone)]
 pub enum DiffSource {
     Commit(Arc<Commit>),
+    Blame {
+        revision: crate::git::CommitId,
+        path: PathBuf,
+    },
     Parent {
         commit: Arc<Commit>,
         parent: crate::git::CommitId,
@@ -161,6 +165,7 @@ pub struct DiffLine {
 
 #[derive(Clone, Debug)]
 pub struct DiffSnapshot {
+    pub attributions: Arc<std::collections::HashMap<usize, crate::blame::Attribution>>,
     /// Absolute worktree root for resolving repository-relative file paths.
     pub worktree_root: Option<PathBuf>,
     pub selection: SelectionId,
@@ -199,6 +204,7 @@ struct LineIndex {
 }
 
 pub struct DiffDocument {
+    attributions: Arc<std::collections::HashMap<usize, crate::blame::Attribution>>,
     worktree_root: PathBuf,
     reader: BufReader<File>,
     position: u64,
@@ -216,6 +222,9 @@ pub struct DiffDocument {
 
 impl DiffDocument {
     pub fn load(selection: &DiffSelection, cancellation: &Cancellation) -> Result<Self> {
+        if let DiffSource::Blame { revision, path } = &selection.source {
+            return Self::load_blame(selection, revision, path, cancellation);
+        }
         // Git's untracked enumeration is relative to its working directory.
         // Resolve once so a repository opened through a subdirectory still shows
         // all files and uses repository-relative paths throughout this document.
@@ -240,6 +249,7 @@ impl DiffDocument {
         let mut offset = 0;
         let mut max_width = 0;
         let header = match &selection.source {
+            DiffSource::Blame { .. } => unreachable!("blame has its own document loader"),
             DiffSource::Commit(commit) | DiffSource::File { commit, .. } => commit_header(commit),
             DiffSource::Parent { commit, parent } => format!(
                 "Changes relative to parent {}\n{}\n",
@@ -421,6 +431,7 @@ impl DiffDocument {
         let mut file = output.into_inner()?;
         file.seek(SeekFrom::Start(0))?;
         Ok(Self {
+            attributions: Arc::default(),
             worktree_root: selection.repository.clone(),
             reader: BufReader::new(file),
             position: 0,
@@ -434,6 +445,77 @@ impl DiffDocument {
             word_spans,
             word_markup: selection.options.words == WordDiff::Markup,
             old_version: selection.options.version == DiffVersion::Old,
+        })
+    }
+
+    fn load_blame(
+        selection: &DiffSelection,
+        revision: &crate::git::CommitId,
+        path: &Path,
+        cancellation: &Cancellation,
+    ) -> Result<Self> {
+        let root = command_path(
+            &selection.repository,
+            &["rev-parse", "--show-toplevel"],
+            cancellation,
+        )?;
+        let mut stream =
+            crate::blame::BlameStream::open(&root, revision, path, cancellation.clone())?;
+        let mut output = BufWriter::new(tempfile::tempfile()?);
+        let mut index = Vec::new();
+        let mut offset = 0;
+        let mut max_width = 0;
+        let mut attributions = std::collections::HashMap::new();
+        write_line(
+            &mut output,
+            &mut index,
+            &mut offset,
+            &format!(
+                "Blame {}:{}",
+                revision,
+                path.to_string_lossy().escape_debug()
+            ),
+            LineKind::Metadata,
+            None,
+            0,
+        )?;
+        while let Some(line) = stream.next_line()? {
+            let text = format!(" {}", line.text);
+            max_width = max_width.max(display_width_bound(&text));
+            attributions.insert(index.len(), line.attribution);
+            write_line(
+                &mut output,
+                &mut index,
+                &mut offset,
+                &text,
+                LineKind::Context,
+                Some(0),
+                1,
+            )?;
+        }
+        let mut file = output.into_inner()?;
+        file.seek(SeekFrom::Start(0))?;
+        Ok(Self {
+            worktree_root: root,
+            reader: BufReader::new(file),
+            position: 0,
+            index,
+            files: Arc::new(vec![FileSection {
+                path: path.to_owned(),
+                old_path: None,
+                added: None,
+                removed: None,
+                start_line: Some(1),
+            }]),
+            attributions: Arc::new(attributions),
+            notice: None,
+            max_width,
+            added: 0,
+            removed: 0,
+            highlight_cache: None,
+            old_version: false,
+            word_markup: false,
+            word_spans: Default::default(),
         })
     }
 
@@ -495,6 +577,7 @@ impl DiffDocument {
             });
         }
         Ok(DiffSnapshot {
+            attributions: self.attributions.clone(),
             worktree_root: Some(self.worktree_root.clone()),
             selection: request.selection,
             request: request.id,
@@ -672,6 +755,7 @@ fn diff_args(source: &DiffSource, numstat: bool) -> Vec<OsString> {
             args.push(base.id.to_hex().into());
             args.push(target.id.to_hex().into());
         }
+        DiffSource::Blame { .. } => unreachable!("blame has its own document loader"),
         DiffSource::Local { staged: true } => args.push("--cached".into()),
         DiffSource::Local { staged: false } => args.push("--ours".into()),
     }
@@ -1039,6 +1123,7 @@ fn publish_diff(shared: &DiffShared, snapshot: DiffSnapshot) {
 
 fn diff_error(page: &DiffPage, error: String) -> DiffSnapshot {
     DiffSnapshot {
+        attributions: Arc::default(),
         worktree_root: None,
         selection: page.selection,
         request: page.id,

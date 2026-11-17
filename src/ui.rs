@@ -138,6 +138,9 @@ enum DialogKind {
 }
 
 struct BrowseLocation {
+    detail: Option<diff_view::DiffLocation>,
+    parent_index: usize,
+    parent_commit: Option<gitk_rs::git::CommitId>,
     request: Request,
     restore: gitk_rs::history::Restore,
 }
@@ -153,10 +156,19 @@ struct HistoryWindow {
     comparison_base: Option<Arc<gitk_rs::git::Commit>>,
     comparison: Option<Comparison>,
     file_origin: Option<BrowseLocation>,
+    file_comparison: Option<Comparison>,
+    blame_comparison: Option<Comparison>,
     parent_index: usize,
     parent_commit: Option<gitk_rs::git::CommitId>,
     parent_origin: Option<(BrowseLocation, usize)>,
+    parent_metadata: Vec<gitk_rs::git::Commit>,
+    parent_cancellation: gitk_rs::git::Cancellation,
+    parent_task: Option<Task<()>>,
     _file_subscription: Subscription,
+    _blame_subscription: Subscription,
+    blame_active: bool,
+    blame_origin: Option<(BrowseLocation, diff_view::DiffLocation)>,
+    attribution_origin: Option<(BrowseLocation, diff_view::DiffLocation)>,
     config: Config,
     preferences: Preferences,
     preference_dialog: PreferencesDialog,
@@ -173,7 +185,7 @@ struct HistoryWindow {
     restore_repository_focus: bool,
     repository_prompt_pending: bool,
     branch_dialog: BranchDialog,
-    preceding_scope: Option<HistoryScope>,
+    scope_locations: Vec<BrowseLocation>,
     restore_range_focus: bool,
     _range_subscriptions: Vec<Subscription>,
     range_base: Entity<InputState>,
@@ -339,10 +351,35 @@ impl HistoryWindow {
             &diff,
             window,
             |this, _, action: &diff_view::FileAction, window, cx| {
-                if this.file_origin.is_none() {
-                    this.file_origin = Some(this.browse_location());
+                if action.blame {
+                    if this.blame_origin.is_none()
+                        && let Some(location) = this.diff.read(cx).location()
+                    {
+                        this.blame_origin = Some((this.browse_location(cx), location));
+                    }
+                    this.blame_active = true;
+                    if this.comparison.is_some() {
+                        this.blame_comparison = this.comparison.take();
+                    }
+                    this.diff.update(cx, |diff, cx| {
+                        diff.load_blame(
+                            this.config.repository.clone(),
+                            action.revision.clone(),
+                            action.path.clone(),
+                            cx,
+                        )
+                    });
+                    this.diff.update(cx, |diff, cx| diff.focus(window, cx));
+                    cx.notify();
+                    return;
                 }
-                this.comparison = None;
+                this.blame_active = false;
+                if this.file_origin.is_none() {
+                    this.file_origin = Some(this.browse_location(cx));
+                }
+                if this.comparison.is_some() {
+                    this.file_comparison = this.comparison.take();
+                }
                 this.history_state.request.source.scope = HistoryScope::File {
                     revision: action.revision.clone(),
                     path: action.path.clone(),
@@ -351,6 +388,28 @@ impl HistoryWindow {
                 this.history_state.request.restore = None;
                 this.history_state.selected = None;
                 this.history_state.snapshot = None;
+                this.filter
+                    .update(cx, |input, cx| input.set_value("", window, cx));
+                this.reload(cx);
+                this.focus.focus(window, cx);
+            },
+        );
+        let blame_subscription = cx.subscribe_in(
+            &diff,
+            window,
+            |this, _, event: &diff_view::OpenAttribution, window, cx| {
+                if let Some(location) = this.diff.read(cx).location() {
+                    this.attribution_origin = Some((this.browse_location(cx), location));
+                }
+                this.blame_active = false;
+                this.history_state.request.source.scope = HistoryScope::File {
+                    revision: event.0.commit.clone(),
+                    path: event.0.path.as_ref().clone(),
+                };
+                this.history_state.request.query.clear();
+                this.history_state.selected = None;
+                this.history_state.snapshot = None;
+                this.history_state.request.restore = None;
                 this.filter
                     .update(cx, |input, cx| input.set_value("", window, cx));
                 this.reload(cx);
@@ -373,12 +432,21 @@ impl HistoryWindow {
             comparison_base: None,
             comparison: None,
             file_origin: None,
+            file_comparison: None,
+            blame_comparison: None,
             parent_index: 0,
             parent_commit: None,
             parent_origin: None,
+            parent_metadata: Vec::new(),
+            parent_cancellation: Default::default(),
+            parent_task: None,
             _file_subscription: file_subscription,
+            _blame_subscription: blame_subscription,
+            blame_active: false,
+            blame_origin: None,
+            attribution_origin: None,
             branch_dialog,
-            preceding_scope: None,
+            scope_locations: Vec::new(),
             restore_range_focus: false,
             _range_subscriptions: range_subscriptions,
             range_base,
@@ -418,6 +486,10 @@ impl HistoryWindow {
     }
 
     fn apply_filter(&mut self, query: String, cx: &mut Context<Self>) {
+        if self.history_state.request.query == query && self.history_state.request.restore.is_some()
+        {
+            return;
+        }
         self.pending_history_activity = Some("Filtering commits…");
         self.history_state.begin_filter(query);
         self.detail = "Filtering commits…".into();
@@ -472,9 +544,24 @@ impl HistoryWindow {
         let Some(snapshot) = self.history.take_snapshot() else {
             return;
         };
+        let unavailable = snapshot.error.is_none()
+            && snapshot
+                .restored
+                .as_ref()
+                .is_some_and(|r| !r.pending && r.selected.is_none())
+            && self
+                .history_state
+                .request
+                .restore
+                .as_ref()
+                .is_some_and(|r| r.selected.is_some());
         let Some(update) = self.history_state.consume_snapshot(snapshot) else {
             return;
         };
+        if unavailable {
+            self.operation_message =
+                "The previous selection is unavailable in this scope or filter.".into();
+        }
         self.pending_history_activity = None;
         let snapshot = self.history_state.snapshot.as_ref().unwrap();
         if self.config.verbose {
@@ -502,7 +589,7 @@ impl HistoryWindow {
             }
             .into();
         }
-        if update.clear_diff && self.comparison.is_none() {
+        if update.clear_diff && self.comparison.is_none() && !self.blame_active {
             let message = if snapshot.error.is_some() {
                 "No commit selected."
             } else {
@@ -632,7 +719,7 @@ impl HistoryWindow {
     }
 
     fn load_selection(&mut self, selection: Selection, cx: &mut Context<Self>) {
-        if self.comparison.is_some() {
+        if self.comparison.is_some() || self.blame_active {
             return;
         }
         match selection {
@@ -640,6 +727,7 @@ impl HistoryWindow {
                 if self.parent_commit.as_ref() != Some(&entry.commit.id) {
                     self.parent_commit = Some(entry.commit.id.clone());
                     self.parent_index = 0;
+                    self.load_parent_metadata(&entry.commit, cx);
                 }
                 if self.config.verbose {
                     eprintln!(
@@ -693,8 +781,11 @@ impl HistoryWindow {
         }
     }
 
-    fn browse_location(&self) -> BrowseLocation {
+    fn browse_location(&self, cx: &App) -> BrowseLocation {
         BrowseLocation {
+            detail: self.diff.read(cx).location(),
+            parent_index: self.parent_index,
+            parent_commit: self.parent_commit.clone(),
             request: self.history_state.request.clone(),
             restore: gitk_rs::history::Restore {
                 selected: self
@@ -716,6 +807,15 @@ impl HistoryWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.filter_task = None;
+        self.parent_index = location.parent_index;
+        self.parent_commit = location.parent_commit;
+        if self.comparison.is_none()
+            && !self.blame_active
+            && let Some(detail) = location.detail
+        {
+            self.diff.update(cx, |diff, cx| diff.restore(detail, cx));
+        }
         let generation = self.history_state.request.generation.0 + 1;
         let id = self.history_state.request.id + 1;
         self.history_state.request = location.request;
@@ -750,7 +850,7 @@ impl HistoryWindow {
             .comparison
             .take()
             .map(|c| c.origin)
-            .unwrap_or_else(|| self.browse_location());
+            .unwrap_or_else(|| self.browse_location(cx));
         self.comparison = Some(Comparison {
             base,
             target,
@@ -774,6 +874,44 @@ impl HistoryWindow {
         if let Some(comparison) = self.comparison.take() {
             self.restore_location(comparison.origin, window, cx);
         }
+    }
+
+    fn load_parent_metadata(&mut self, commit: &gitk_rs::git::Commit, cx: &mut Context<Self>) {
+        use std::sync::atomic::Ordering;
+        self.parent_cancellation.store(true, Ordering::Release);
+        self.parent_task = None;
+        self.parent_cancellation = Default::default();
+        self.parent_metadata.clear();
+        if commit.parents.len() < 2 {
+            return;
+        }
+        let cancel = self.parent_cancellation.clone();
+        let repository = self.config.repository.clone();
+        let expected_repository = repository.clone();
+        let expected = commit.id.clone();
+        let generation = self.history_state.request.generation;
+        let parents = commit.parents.to_vec();
+        let worker = cx
+            .background_executor()
+            .spawn(async move { gitk_rs::git::read_commits(&repository, &parents, &cancel) });
+        self.parent_task = Some(cx.spawn(async move |this, cx| {
+            let result = worker.await;
+            let _ = this.update(cx, |this, cx| {
+                if this.config.repository != expected_repository
+                    || this.parent_commit.as_ref() != Some(&expected)
+                    || this.history_state.request.generation != generation
+                {
+                    return;
+                }
+                match result {
+                    Ok(parents) => this.parent_metadata = parents,
+                    Err(error) => {
+                        this.operation_message = format!("Parent summaries unavailable: {error:#}")
+                    }
+                }
+                cx.notify();
+            });
+        }));
     }
 
     fn choose_parent(&mut self, index: usize, cx: &mut Context<Self>) {
@@ -802,9 +940,16 @@ impl HistoryWindow {
                 .enumerate()
                 .map(|(i, id)| {
                     let snapshot = self.history_state.snapshot.as_ref();
-                    let summary = snapshot
-                        .and_then(|s| s.rows.iter().find(|e| &e.commit.id == id))
-                        .map(|e| e.commit.summary())
+                    let summary = self
+                        .parent_metadata
+                        .iter()
+                        .find(|commit| &commit.id == id)
+                        .map(|commit| commit.summary())
+                        .or_else(|| {
+                            snapshot
+                                .and_then(|s| s.rows.iter().find(|e| &e.commit.id == id))
+                                .map(|e| e.commit.summary())
+                        })
                         .unwrap_or_default();
                     let labels = snapshot
                         .and_then(|s| s.refs.get(id))
@@ -854,7 +999,8 @@ impl HistoryWindow {
                     Button::new("go-parent")
                         .label("Go to parent (reveal ancestry)")
                         .on_click(cx.listener(move |this, _, window, cx| {
-                            this.parent_origin = Some((this.browse_location(), this.parent_index));
+                            this.parent_origin =
+                                Some((this.browse_location(cx), this.parent_index));
                             this.history_state.request.source.scope =
                                 HistoryScope::Ref(parent.to_hex());
                             this.history_state.request.query.clear();
@@ -938,7 +1084,7 @@ impl HistoryWindow {
         let update = self
             .history_state
             .reload(self.config.repository.clone(), force);
-        if update.clear_diff && self.comparison.is_none() {
+        if update.clear_diff && self.comparison.is_none() && !self.blame_active {
             let message = if force {
                 "Reloading repository…"
             } else {
@@ -1258,6 +1404,13 @@ impl HistoryWindow {
                 }
             })
             .into_any_element()
+    }
+}
+
+impl Drop for HistoryWindow {
+    fn drop(&mut self) {
+        self.parent_cancellation
+            .store(true, std::sync::atomic::Ordering::Release);
     }
 }
 
@@ -1631,12 +1784,23 @@ impl Render for HistoryWindow {
                         .label(format!("History: {}", self.history_state.request.source.scope.label()))
                         .on_click(cx.listener(|this, _, window, cx| this.open_scope(window, cx))))
                     .when(matches!(self.history_state.request.source.scope, HistoryScope::Range { .. }), |bar| bar.child(
-                        Button::new("clear-range").label("Remove range").on_click(cx.listener(|this, _, _, cx| {
-                            this.history_state.request.source.scope = this.preceding_scope.take().unwrap_or_default();
-                            this.reload(cx);
+                        Button::new("clear-range").label("Remove range").on_click(cx.listener(|this, _, window, cx| {
+                            if let Some(origin) = this.scope_locations.pop() { this.restore_location(origin, window, cx); }
+                            else { this.history_state.request.source.scope = HistoryScope::CurrentHead; this.reload(cx); }
                         }))))
+                    .when(!self.scope_locations.is_empty() && !matches!(self.history_state.request.source.scope, HistoryScope::Range { .. }), |bar| bar.child(Button::new("back-scope").label("Back to previous scope").on_click(cx.listener(|this, _, window, cx| {
+                        if let Some(origin) = this.scope_locations.pop() { this.restore_location(origin, window, cx); }
+                    }))))
                     .when(self.file_origin.is_some(), |bar| bar.child(Button::new("back-repository-history").label("Back to repository history").on_click(cx.listener(|this, _, window, cx| {
-                        if let Some(origin) = this.file_origin.take() { this.restore_location(origin, window, cx); }
+                        if let Some(origin) = this.file_origin.take() {
+                            this.comparison = this.file_comparison.take();
+                            this.restore_location(origin, window, cx);
+                            this.show_comparison(cx);
+                        }
+                    }))))
+                    .when(matches!(self.history_state.request.source.scope, HistoryScope::Ref(_)), |bar| bar.child(Button::new("go-ref-tip").label("Go to ref tip").on_click(cx.listener(|this, _, window, cx| {
+                        this.history_state.request.restore = None;
+                        this.select(this.history_state.local_rows.len(), window, cx);
                     }))))
                     .child(format!("Working tree: {}", self.workspace_snapshot.as_ref().and_then(|s| s.repository.as_ref()).map_or("loading", |r| r.branch.as_str())))
             )
@@ -1776,6 +1940,21 @@ impl Render for HistoryWindow {
                             ),
                         )
                         .child(resizable_panel().child(div().size_full().flex().flex_col()
+                            .when(self.attribution_origin.is_some(), |pane| pane.child(Button::new("back-blame").label("Back to blame").on_click(cx.listener(|this, _, window, cx| {
+                                if let Some((origin, location)) = this.attribution_origin.take() {
+                                    this.blame_active = true;
+                                    this.restore_location(origin, window, cx);
+                                    this.diff.update(cx, |diff, cx| { diff.restore(location, cx); diff.focus(window, cx); });
+                                }
+                            }))))
+                            .when(self.blame_active && self.blame_origin.is_some(), |pane| pane.child(Button::new("exit-blame").label("Back from blame").on_click(cx.listener(|this, _, window, cx| {
+                                if let Some((origin, location)) = this.blame_origin.take() {
+                                    this.blame_active = false;
+                                    this.comparison = this.blame_comparison.take();
+                                    this.restore_location(origin, window, cx);
+                                    this.diff.update(cx, |diff, cx| diff.restore(location, cx));
+                                }
+                            }))))
                             .child(self.parent_controls(cx))
                             .child(Button::new("compare-menu").label("Compare changes…").dropdown_menu({
                                 let focus = self.focus.clone();

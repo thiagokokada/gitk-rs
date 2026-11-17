@@ -34,7 +34,16 @@ use unicode_segmentation::UnicodeSegmentation;
 actions!(
     gitk_diff,
     [
-        Copy, CopyCode, SelectAll, PageDown, PageUp, LinesDown, LinesUp
+        Copy,
+        CopyCode,
+        SelectAll,
+        PageDown,
+        PageUp,
+        LinesDown,
+        LinesUp,
+        BlameUp,
+        BlameDown,
+        OpenBlameCommit
     ]
 );
 
@@ -93,21 +102,36 @@ impl UniformListDecoration for DiffViewport {
     }
 }
 
-#[derive(PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 enum DiffIdentity {
     Commit(PathBuf, gitk_rs::git::CommitId),
     File(PathBuf, CommitId, PathBuf),
+    Blame(PathBuf, CommitId, PathBuf),
     Compare(PathBuf, gitk_rs::git::CommitId, gitk_rs::git::CommitId),
     Local(PathBuf, LocalChangeKind, u64),
 }
 
 #[derive(Clone)]
 pub(super) struct FileAction {
+    pub blame: bool,
     pub revision: CommitId,
     pub path: PathBuf,
 }
 
+#[derive(Clone)]
+pub(super) struct OpenAttribution(pub gitk_rs::blame::Attribution);
+
+#[derive(Clone)]
+pub(super) struct DiffLocation {
+    selection: DiffSelection,
+    identity: Option<DiffIdentity>,
+    top: usize,
+    blame_line: usize,
+}
+
 pub(super) struct DiffPane {
+    blame_line: usize,
+    pending_line: Option<usize>,
     restore_position: Option<DiffPosition>,
     file_list_width: f32,
     options: DiffOptions,
@@ -135,6 +159,7 @@ pub(super) struct DiffPane {
 }
 
 impl EventEmitter<FileAction> for DiffPane {}
+impl EventEmitter<OpenAttribution> for DiffPane {}
 
 impl DiffPane {
     #[cfg(test)]
@@ -184,6 +209,8 @@ impl DiffPane {
                                 .or_else(|| snapshot.notice.clone())
                                 .unwrap_or_default();
                             this.snapshot = Some(snapshot);
+                            if let Some(line) = this.pending_line.take() { this.jump(line, cx); }
+
                             if let Some(position) = this.restore_position.take() {
                                 let line = position.restore(this.snapshot.as_ref().unwrap());
                                 this.jump(line, cx);
@@ -209,6 +236,8 @@ impl DiffPane {
             }
         });
         Self {
+            blame_line: 1,
+            pending_line: None,
             restore_position: None,
             options,
             file_list_width: layout.file_list_width,
@@ -288,6 +317,65 @@ impl DiffPane {
         );
     }
 
+    pub(super) fn focus(&self, window: &mut Window, cx: &mut Context<Self>) {
+        self.focus.focus(window, cx);
+    }
+
+    #[cfg(test)]
+    pub(super) fn blame_line(&self) -> usize {
+        self.blame_line
+    }
+
+    pub(super) fn location(&self) -> Option<DiffLocation> {
+        Some(DiffLocation {
+            selection: self.current.clone()?,
+            identity: self.identity.clone(),
+            top: self.viewport.start,
+            blame_line: self.blame_line,
+        })
+    }
+
+    pub(super) fn restore(&mut self, location: DiffLocation, cx: &mut Context<Self>) {
+        self.clear("Restoring investigation…", cx);
+        self.identity = location.identity;
+        let mut selection = location.selection;
+        selection.id = self.page.selection;
+        self.options = selection.options;
+        self.current = Some(selection.clone());
+        self.blame_line = location.blame_line;
+        self.pending_line = Some(location.top);
+        self.handle.select(selection, self.page.clone());
+        cx.notify();
+    }
+
+    pub(super) fn load_blame(
+        &mut self,
+        repository: PathBuf,
+        revision: CommitId,
+        path: PathBuf,
+        cx: &mut Context<Self>,
+    ) {
+        let identity = DiffIdentity::Blame(repository.clone(), revision.clone(), path.clone());
+        self.blame_line = 1;
+        self.load_source(
+            repository,
+            DiffSource::Blame { revision, path },
+            identity,
+            "Loading blame…",
+            cx,
+        );
+    }
+
+    fn move_blame_line(&mut self, delta: isize, cx: &mut Context<Self>) {
+        let count = self.snapshot.as_ref().map_or(1, |s| s.count);
+        self.blame_line = self
+            .blame_line
+            .saturating_add_signed(delta)
+            .clamp(1, count.saturating_sub(1).max(1));
+        self.jump(self.blame_line, cx);
+        cx.notify();
+    }
+
     pub(super) fn load_parent(
         &mut self,
         repository: PathBuf,
@@ -327,7 +415,11 @@ impl DiffPane {
     }
 
     fn file_versions(&self, index: usize) -> Vec<(String, FileAction)> {
-        let Some(file) = self.snapshot.as_ref().and_then(|s| s.files.get(index)) else {
+        let Some(file) = self
+            .snapshot
+            .as_ref()
+            .and_then(|s| index.checked_sub(1).and_then(|i| s.files.get(i)))
+        else {
             return Vec::new();
         };
         let Some(selection) = &self.current else {
@@ -342,6 +434,16 @@ impl DiffPane {
             }
             DiffSource::Compare { base, target } => {
                 (Some(base.id.clone()), Some(target.id.clone()))
+            }
+            DiffSource::Blame { revision, path } => {
+                return vec![(
+                    format!("Show file history: {}:{}", revision, path.to_string_lossy()),
+                    FileAction {
+                        blame: false,
+                        revision: revision.clone(),
+                        path: path.clone(),
+                    },
+                )];
             }
             DiffSource::Local { .. } => return Vec::new(),
         };
@@ -362,12 +464,25 @@ impl DiffPane {
                         path.to_string_lossy()
                     ),
                     FileAction {
+                        blame: false,
                         revision,
                         path: path.clone(),
                     },
                 ));
             }
         }
+        let blame = versions
+            .iter()
+            .map(|(label, action)| {
+                let mut action = action.clone();
+                action.blame = true;
+                (
+                    label.replace("Show file history:", "Blame this version:"),
+                    action,
+                )
+            })
+            .collect::<Vec<_>>();
+        versions.extend(blame);
         versions
     }
 
@@ -476,11 +591,16 @@ impl DiffPane {
     }
 
     fn controls(&self, cx: &mut Context<Self>) -> AnyElement {
+        let blame = matches!(
+            self.current.as_ref().map(|s| &s.source),
+            Some(DiffSource::Blame { .. })
+        );
         let mut bar = div()
             .id("diff-options")
             .test_support()
             .flex_shrink_0()
             .flex()
+            .flex_wrap()
             .items_center()
             .gap_2()
             .px_2()
@@ -491,7 +611,10 @@ impl DiffPane {
             ("diff-mode", "Diff", DiffVersion::Diff),
             ("old-mode", "Old version", DiffVersion::Old),
             ("new-mode", "New version", DiffVersion::New),
-        ] {
+        ]
+        .into_iter()
+        .filter(|_| !blame)
+        {
             bar = bar.child(
                 Radio::new(id)
                     .small()
@@ -532,6 +655,68 @@ impl DiffPane {
                     }
                 }),
         );
+        if matches!(
+            self.current.as_ref().map(|s| &s.source),
+            Some(DiffSource::Blame { .. })
+        ) {
+            bar = bar
+                .child(
+                    Button::new("blame-previous")
+                        .small()
+                        .label("Previous line")
+                        .on_click(cx.listener(|this, _, _, cx| this.move_blame_line(-1, cx))),
+                )
+                .child(
+                    Button::new("blame-next")
+                        .small()
+                        .label("Next line")
+                        .on_click(cx.listener(|this, _, _, cx| this.move_blame_line(1, cx))),
+                );
+            if let Some(attribution) = self
+                .snapshot
+                .as_ref()
+                .and_then(|s| s.attributions.get(&self.blame_line))
+                .cloned()
+            {
+                let open = attribution.clone();
+                bar = bar
+                    .child(
+                        Button::new("open-attribution")
+                            .small()
+                            .label("Open commit (reveal file history)")
+                            .on_click(cx.listener(move |_, _, _, cx| {
+                                cx.emit(OpenAttribution(open.clone()))
+                            })),
+                    )
+                    .child(format!(
+                        "{}: {}{}",
+                        attribution.author,
+                        attribution.summary,
+                        if attribution.boundary {
+                            " (history boundary)"
+                        } else {
+                            ""
+                        }
+                    ));
+                if let Some((revision, path)) = attribution.previous {
+                    bar = bar.child(
+                        Button::new("blame-parent-version")
+                            .small()
+                            .label("Blame previous version")
+                            .on_click(cx.listener(move |_, _, _, cx| {
+                                cx.emit(FileAction {
+                                    blame: true,
+                                    revision: revision.clone(),
+                                    path: path.as_ref().clone(),
+                                })
+                            })),
+                    );
+                }
+            }
+        }
+        if blame {
+            return bar.into_any_element();
+        }
         bar = bar.child("Lines of context:");
         if let Some(input) = &self.context_input {
             bar = bar.child(
@@ -722,6 +907,14 @@ impl DiffPane {
             .w(px(width))
             .min_w_full()
             .bg(rgb(background))
+            .when(
+                self.blame_line == index
+                    && self
+                        .snapshot
+                        .as_ref()
+                        .is_some_and(|s| s.attributions.contains_key(&index)),
+                |row| row.bg(rgb(palette.selection)),
+            )
             .cursor_text()
             .on_mouse_down(
                 MouseButton::Left,
@@ -788,6 +981,29 @@ impl DiffPane {
                     cx.notify();
                 }
             }))
+            .flex()
+            .when_some(
+                self.snapshot
+                    .as_ref()
+                    .and_then(|s| s.attributions.get(&index)),
+                |row, attribution| {
+                    row.child(
+                        Button::new(("attribution", index))
+                            .small()
+                            .label(format!(
+                                "{} {:.10} {}",
+                                attribution.final_line,
+                                attribution.commit.to_hex(),
+                                attribution.author
+                            ))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.focus.focus(window, cx);
+                                this.blame_line = index;
+                                cx.notify();
+                            })),
+                    )
+                },
+            )
             .child(
                 canvas(
                     move |bounds, window, _| {
@@ -905,7 +1121,12 @@ impl Render for DiffPane {
             .flex_col()
             .child(self.controls(cx))
             .track_focus(&self.focus)
-            .key_context("Diff")
+            .key_context(if matches!(self.current.as_ref().map(|s| &s.source), Some(DiffSource::Blame { .. })) { "Diff Blame" } else { "Diff" })
+            .on_action(cx.listener(|this, _: &BlameUp, _, cx| this.move_blame_line(-1, cx)))
+            .on_action(cx.listener(|this, _: &BlameDown, _, cx| this.move_blame_line(1, cx)))
+            .on_action(cx.listener(|this, _: &OpenBlameCommit, _, cx| {
+                if let Some(attribution) = this.snapshot.as_ref().and_then(|s| s.attributions.get(&this.blame_line)) { cx.emit(OpenAttribution(attribution.clone())); }
+            }))
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(|this, _, _, _| this.dragging = false),
@@ -1038,7 +1259,7 @@ impl Render for DiffPane {
                                                         (
                                                             file_label(
                                                                 path,
-                                                                file.added.zip(file.removed),
+                                                                if matches!(this.current.as_ref().map(|s| &s.source), Some(DiffSource::Blame { .. })) { Some((0, 0)) } else { file.added.zip(file.removed) },
                                                                 this.settings.dark,
                                                             ),
                                                             file.start_line,
@@ -1091,36 +1312,17 @@ impl Render for DiffPane {
                                                             },
                                                         ))
                                                         .context_menu(move |mut menu, _, _| {
+                                                            if let Some(path) = open_path.clone() {
+                                                                menu = menu.item(PopupMenuItem::new("Open file").on_click(move |_, _, cx| cx.open_with_system(&path)));
+                                                            }
+                                                            if let Some(path) = path.clone() {
+                                                                menu = menu.item(PopupMenuItem::new("Copy file path").on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(path.to_string_lossy().into_owned()))));
+                                                            }
                                                             for (label, action) in &versions {
                                                                 let entity = entity.clone(); let action = action.clone();
-                                                                menu = menu.item(PopupMenuItem::new(label.clone()).on_click(move |_, _, cx| { entity.update(cx, |_, cx| cx.emit(action.clone())); }));
+                                                                menu = menu.item(PopupMenuItem::new(label.clone()).on_click(move |_, _, cx| entity.update(cx, |_, cx| cx.emit(action.clone()))));
                                                             }
-                                                            let menu = if let Some(path) = open_path.clone() {
-                                                                menu.item(
-                                                                    PopupMenuItem::new("Open file")
-                                                                        .on_click(move |_, _, cx| {
-                                                                            cx.open_with_system(&path);
-                                                                        }),
-                                                                )
-                                                            } else {
-                                                                menu
-                                                            };
-                                                            if let Some(path) = path.clone() {
-                                                                menu.item(
-                                                                    PopupMenuItem::new(
-                                                                        "Copy file path",
-                                                                    )
-                                                                    .on_click(move |_, _, cx| {
-                                                                        cx.write_to_clipboard(
-                                                                    ClipboardItem::new_string(
-                                                                        path.to_string_lossy().into_owned(),
-                                                                    ),
-                                                                )
-                                                                    }),
-                                                                )
-                                                            } else {
-                                                                menu
-                                                            }
+                                                            menu
                                                         })
                                                 })
                                                 .collect::<Vec<_>>()

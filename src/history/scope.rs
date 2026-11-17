@@ -26,7 +26,7 @@ impl HistoryScope {
             Self::Ref(name) => name.clone(),
             Self::File { revision, path } => format!(
                 "File {} at {} (follow renames; skipped ancestry has no edges)",
-                path.to_string_lossy(),
+                path.to_string_lossy().escape_debug(),
                 revision
             ),
             Self::Range { base, target } => format!("{base}..{target}"),

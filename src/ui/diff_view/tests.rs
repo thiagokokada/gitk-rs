@@ -665,3 +665,39 @@ fn file_context_menu_keeps_copy_after_open_file(cx: &mut TestAppContext) {
             == Some(path)
     });
 }
+
+#[gpui_kit::test]
+fn first_file_actions_use_the_exact_selected_file_and_both_commit_versions(
+    cx: &mut TestAppContext,
+) {
+    let fixture = Fixture::new();
+    fixture.commit("root");
+    fixture.commit("target");
+    let (app, cx) = open(&fixture, cx);
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            app.view
+                .read(cx)
+                .diff
+                .read(cx)
+                .snapshot
+                .as_ref()
+                .is_some_and(|s| s.files.len() == 1)
+        })
+    });
+    cx.update(|_, cx| {
+        let pane = app.view.read(cx).diff.read(cx);
+        assert!(pane.file_versions(0).is_empty());
+        let versions = pane.file_versions(1);
+        assert_eq!(versions.len(), 4);
+        assert!(
+            versions
+                .iter()
+                .all(|(_, action)| action.path == std::path::Path::new("file.txt"))
+        );
+        assert_eq!(
+            versions.iter().filter(|(_, action)| action.blame).count(),
+            2
+        );
+    });
+}

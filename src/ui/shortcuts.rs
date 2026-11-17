@@ -172,6 +172,10 @@ pub(super) const GROUPS: &[ShortcutGroup] = &[
         title: "Diff view",
         qualifiers: &[],
         shortcuts: &[
+            shortcut!("Select previous / next blame line";
+                [Some("Blame && !Input")], diff_view::BlameUp => [key("up")];
+                [Some("Blame && !Input")], diff_view::BlameDown => [key("down")]),
+            shortcut!("Open selected blame commit"; [Some("Blame && !Input")], diff_view::OpenBlameCommit => [key("enter")]),
             shortcut!("Scroll diff up one page"; [HISTORY], diff_view::PageUp => [key("delete"), key("backspace"), key("b"), key("shift-b")]),
             shortcut!("Scroll diff down one page"; [HISTORY], diff_view::PageDown => [key("space")]),
             shortcut!("Scroll diff up 18 lines"; [HISTORY], diff_view::LinesUp => [key("u"), key("shift-u")]),

@@ -44,3 +44,23 @@ ancestry with filters cleared. **Back to merge** restores the previous scope,
 query, viewport, selection and chosen parent. Changing the displayed parent does
 not change the first-parent semantics of path/content searches. Root commits
 continue to use Git's root diff, without hard-coding an empty-tree object ID.
+
+## Blame and line investigation
+
+**File actions… > Blame this version** opens the complete committed file with
+attribution beside each line. Choose the base/parent or target version
+explicitly. Attribution identifies the source commit, original filename and
+original line, even when the selected version has a different filename. Select
+attribution to see its summary. Use Up/Down in the blame pane or the visible
+line buttons to select lines; Enter or **Open commit** reveals that commit's
+file history. **Back to blame** restores the file version, viewport and selected
+line. **Back from blame** restores the preceding diff and repository position.
+
+**Blame previous version** uses the previous revision/path reported by Git and
+opens that complete snapshot. It does not guess a matching line in the parent.
+For merges, open the commit and choose a parent explicitly. Attribution
+describes committed snapshots, including files subsequently deleted, rather than
+working tree edits. Binary content is unsupported; missing objects and shallow
+history are reported by Git or marked as history boundaries. Invalid UTF-8 file
+contents are displayed with replacement characters; paths retain their original
+bytes.

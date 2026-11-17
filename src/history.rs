@@ -327,6 +327,7 @@ fn run(shared: Arc<Shared>) {
                     publish(&shared, snapshot);
                     if let Some(session) = session.as_mut() {
                         session.stream = None;
+                        session.file_stream = None;
                     }
                     failed = true;
                 }
@@ -906,8 +907,6 @@ impl Session {
                 ] {
                     if let Some(target) = target {
                         bookmark.ordinal = self.entries.iter().position(|e| &e.commit.id == target);
-                        // Avoid streaming an unrelated branch to EOF just to find
-                        // a bookmark which is no longer reachable from HEAD.
                         // Scope membership is established by the traversal, including
                         // disconnected roots and excluded range ancestry.
                         bookmark.reachable = bookmark.ordinal.is_some() || !self.eof;

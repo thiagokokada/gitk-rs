@@ -1082,3 +1082,119 @@ fn file_history_follows_multiple_renames_with_raw_paths_and_isolated_graph_rows(
     );
     assert!(snapshot.rows.iter().all(|e| !e.graph.incoming));
 }
+
+#[test]
+fn blame_preserves_source_commit_original_path_and_line_through_rename() {
+    use gitk_rs::{
+        blame::BlameStream,
+        git::{Cancellation, CommitId},
+    };
+    let fixture = Fixture::new();
+    let old = "old\tfile\n.txt";
+    fs::write(fixture.root().join(old), "root first\nroot second\n").unwrap();
+    fixture.git(&["add", "."]);
+    fixture.git(&["commit", "-qm", "root"]);
+    let root = fixture.git(&["rev-parse", "HEAD"]);
+    fixture.git(&["mv", "--", old, "new.txt"]);
+    fixture.git(&["commit", "-qm", "rename"]);
+    fs::write(
+        fixture.root().join("new.txt"),
+        "root first\nchanged second\n",
+    )
+    .unwrap();
+    fixture.git(&["commit", "-qam", "edit"]);
+    let tip = fixture.git(&["rev-parse", "HEAD"]);
+    let mut stream = BlameStream::open(
+        fixture.root(),
+        &CommitId::parse(&tip).unwrap(),
+        std::path::Path::new("new.txt"),
+        Cancellation::default(),
+    )
+    .unwrap();
+    let first = stream.next_line().unwrap().unwrap();
+    let second = stream.next_line().unwrap().unwrap();
+    assert!(stream.next_line().unwrap().is_none());
+    assert_eq!(first.attribution.commit.to_hex(), root);
+    assert_eq!(first.attribution.path.as_ref(), std::path::Path::new(old));
+    assert_eq!(first.attribution.original_line, 1);
+    assert_eq!(second.attribution.commit.to_hex(), tip);
+    assert_eq!(second.attribution.original_line, 2);
+    assert_eq!(second.attribution.final_line, 2);
+    assert_eq!(second.text, "changed second");
+    assert_eq!(&*second.attribution.summary, "edit");
+    assert!(second.attribution.previous.is_some());
+}
+
+#[test]
+fn branch_scope_browses_other_tips_with_unborn_or_detached_head() {
+    use gitk_rs::history::HistoryScope;
+    let fixture = Fixture::new();
+    let root = fixture.commit("root");
+    fixture.git(&["update-ref", "refs/remotes/origin/main", &root]);
+    fixture.git(&["symbolic-ref", "HEAD", "refs/heads/unborn"]);
+    let mut request = history_request(&fixture);
+    request.source.scope = HistoryScope::AllBranches;
+    let engine = HistoryEngine::spawn(request.clone());
+    let handle = engine.handle();
+    let snapshot = wait(|| {
+        handle
+            .take_snapshot()
+            .filter(|s| s.eof || s.error.is_some())
+    });
+    assert!(snapshot.error.is_none(), "{:?}", snapshot.error);
+    assert_eq!(snapshot.loaded, 1);
+    fixture.git(&["checkout", "--detach", &root]);
+    request.source.scope = HistoryScope::Ref("refs/remotes/origin/main".into());
+    request.generation.0 += 1;
+    request.id += 1;
+    handle.request(request.clone());
+    let snapshot = wait(|| {
+        handle
+            .take_snapshot()
+            .filter(|s| s.generation == request.generation && s.eof)
+    });
+    assert_eq!(snapshot.rows[0].commit.id.to_hex(), root);
+    assert_eq!(snapshot.branch, "HEAD");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn file_history_and_blame_preserve_non_utf8_path_identity() {
+    use gitk_rs::{
+        blame::BlameStream,
+        git::{Cancellation, CommitId},
+        history::HistoryScope,
+    };
+    use std::{ffi::OsString, os::unix::ffi::OsStringExt, path::PathBuf};
+    let fixture = Fixture::new();
+    let old = PathBuf::from(OsString::from_vec(b"old-\xff\t\n.txt".to_vec()));
+    let new = PathBuf::from(OsString::from_vec(b"new-\xfe.txt".to_vec()));
+    fs::write(fixture.root().join(&old), "original\n").unwrap();
+    fixture.git(&["add", "."]);
+    fixture.git(&["commit", "-qm", "add raw path"]);
+    let root = fixture.git(&["rev-parse", "HEAD"]);
+    fs::rename(fixture.root().join(&old), fixture.root().join(&new)).unwrap();
+    fixture.git(&["add", "."]);
+    fixture.git(&["commit", "-qm", "rename raw path"]);
+    let revision = CommitId::parse(&fixture.git(&["rev-parse", "HEAD"])).unwrap();
+    let mut request = history_request(&fixture);
+    request.source.scope = HistoryScope::File {
+        revision: revision.clone(),
+        path: new.clone(),
+    };
+    let engine = HistoryEngine::spawn(request);
+    let snapshot = wait(|| {
+        engine
+            .handle()
+            .take_snapshot()
+            .filter(|s| s.eof || s.error.is_some())
+    });
+    assert!(snapshot.error.is_none(), "{:?}", snapshot.error);
+    assert_eq!(snapshot.rows[0].file.as_ref().unwrap().path, new);
+    assert_eq!(snapshot.rows[1].file.as_ref().unwrap().path, old);
+    let mut blame =
+        BlameStream::open(fixture.root(), &revision, &new, Cancellation::default()).unwrap();
+    let line = blame.next_line().unwrap().unwrap();
+    assert_eq!(line.attribution.commit.to_hex(), root);
+    assert_eq!(*line.attribution.path, old);
+}

@@ -95,3 +95,7 @@ direction. Remove range restores the preceding scope. This is commit membership,
 distinct from a tree-to-tree comparison of net file changes. CLI `--base` and
 `--target` must be used together and cannot be combined with other scope
 options.
+
+**Back to previous scope** restores the query, selected commit and viewport
+saved before a scope change. **Go to ref tip** explicitly jumps to the browsed
+ref without changing checkout.

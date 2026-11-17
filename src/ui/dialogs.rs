@@ -50,12 +50,21 @@ impl HistoryWindow {
         self.history_state.reset_repository();
         self.comparison = None;
         self.file_origin = None;
+        self.file_comparison = None;
+        self.blame_comparison = None;
+        self.blame_active = false;
+        self.blame_origin = None;
+        self.attribution_origin = None;
         self.parent_origin = None;
         self.parent_commit = None;
+        self.parent_cancellation
+            .store(true, std::sync::atomic::Ordering::Release);
+        self.parent_task = None;
+        self.parent_metadata.clear();
         self.parent_index = 0;
         self.comparison_base = None;
         self.history_state.request.source.scope = HistoryScope::CurrentHead;
-        self.preceding_scope = None;
+        self.scope_locations.clear();
         self.pending_operation = None;
         self.operation_message.clear();
         self.dialog = None;
@@ -123,7 +132,7 @@ impl HistoryWindow {
             self.history_state.request.source.scope,
             HistoryScope::Range { .. }
         ) {
-            self.preceding_scope = Some(self.history_state.request.source.scope.clone());
+            self.scope_locations.push(self.browse_location(cx));
         }
         self.history_state.request.source.scope = HistoryScope::Range { base, target };
         self.dialog = None;
@@ -159,6 +168,7 @@ impl HistoryWindow {
                 cx.notify();
                 return;
             }
+            self.scope_locations.push(self.browse_location(cx));
             self.history_state.request.source.scope = match name.as_str() {
                 "Current HEAD" => HistoryScope::CurrentHead,
                 "All branches (local + remote)" => HistoryScope::AllBranches,
@@ -280,7 +290,7 @@ impl HistoryWindow {
                 );
             }
             Some(DialogKind::Help) => {
-                body = body.child("History scope changes browsing without checkout. Filters apply within that scope; merge searches use the first parent.");
+                body = body.child("History scope changes browsing without checkout. Filters apply within that scope; merge searches use the first parent. Compare changes pins two trees. File actions offer rename-following history and committed-version blame.");
                 body = body.h(gpui_kit::relative(0.9)).overflow_hidden().child(
                     div()
                         .relative()

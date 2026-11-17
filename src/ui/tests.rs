@@ -3519,6 +3519,23 @@ fn scope_picker_browses_refs_with_keyboard_and_restores_focus(cx: &mut TestAppCo
             HistoryScope::Ref("refs/heads/side".into())
         );
     });
+    cx.update(|window, cx| window.click("back-scope", cx));
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            app.view
+                .read(cx)
+                .history_state
+                .snapshot
+                .as_ref()
+                .is_some_and(|s| s.eof && s.loaded == 1)
+        })
+    });
+    cx.update(|_, cx| {
+        assert_eq!(
+            app.view.read(cx).history_state.request.source.scope,
+            HistoryScope::CurrentHead
+        )
+    });
     assert_eq!(fixture.git(&["rev-parse", "HEAD"]), root);
 }
 
@@ -3642,6 +3659,7 @@ fn file_history_action_returns_to_repository_selection_and_focus(cx: &mut TestAp
         let diff = app.view.read(cx).diff.clone();
         diff.update(cx, |_, cx| {
             cx.emit(diff_view::FileAction {
+                blame: false,
                 revision: gitk_rs::git::CommitId::parse(&tip).unwrap(),
                 path: "file.txt".into(),
             })
@@ -3679,6 +3697,9 @@ fn merge_parent_selection_reveals_parent_and_returns_to_chosen_parent(cx: &mut T
     let merge = fixture.git(&["rev-parse", "HEAD"]);
     let (app, cx) = open(&fixture, cx);
     until(cx, |cx| selected(&app.view, cx).as_deref() == Some(&merge));
+    until(cx, |cx| {
+        cx.update(|_, cx| app.view.read(cx).parent_metadata.len() == 2)
+    });
     let initial = cx.update(|_, cx| app.view.read(cx).diff.read(cx).selection_id());
     cx.update(|_, cx| app.view.update(cx, |view, cx| view.choose_parent(1, cx)));
     until(cx, |cx| {
@@ -3693,4 +3714,43 @@ fn merge_parent_selection_reveals_parent_and_returns_to_chosen_parent(cx: &mut T
         assert_eq!(app.view.read(cx).parent_index, 1);
         assert!(app.view.read(cx).focus.is_focused(window));
     });
+}
+
+#[gpui_kit::test]
+fn blame_opens_attributed_file_and_returns_to_same_version_and_line(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let root = fixture.commit("root\nsecond\n");
+    let tip = fixture.commit("root\nchanged\n");
+    let (app, cx) = open(&fixture, cx);
+    until(cx, |cx| selected(&app.view, cx).as_deref() == Some(&tip));
+    until(cx, |cx| {
+        cx.update(|_, cx| app.view.read(cx).diff.read(cx).has_loaded_selection())
+    });
+    cx.update(|_, cx| {
+        let diff = app.view.read(cx).diff.clone();
+        diff.update(cx, |_, cx| {
+            cx.emit(diff_view::FileAction {
+                blame: true,
+                revision: gitk_rs::git::CommitId::parse(&tip).unwrap(),
+                path: "file.txt".into(),
+            })
+        });
+    });
+    until(cx, |cx| {
+        cx.update(|_, cx| app.view.read(cx).diff.read(cx).has_loaded_selection())
+    });
+    cx.simulate_keystrokes("down");
+    cx.update(|_, cx| assert_eq!(app.view.read(cx).diff.read(cx).blame_line(), 2));
+    cx.simulate_keystrokes("up");
+    cx.update(|window, cx| window.click("open-attribution", cx));
+    until(cx, |cx| selected(&app.view, cx).as_deref() == Some(&root));
+    cx.update(|window, cx| window.click("back-blame", cx));
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            app.view.read(cx).blame_active && app.view.read(cx).diff.read(cx).has_loaded_selection()
+        })
+    });
+    cx.update(|window, cx| window.click("exit-blame", cx));
+    until(cx, |cx| selected(&app.view, cx).as_deref() == Some(&tip));
+    cx.update(|_, cx| assert!(!app.view.read(cx).blame_active));
 }

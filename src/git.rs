@@ -227,6 +227,27 @@ impl Repository {
     }
 }
 
+/// Read metadata for a bounded set of explicitly identified commits on a worker.
+pub fn read_commits(root: &Path, ids: &[CommitId], cancel: &Cancellation) -> Result<Vec<Commit>> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut args = vec![
+        "show".to_string(),
+        "--no-patch".into(),
+        "--no-notes".into(),
+        LOG_FORMAT.into(),
+    ];
+    args.extend(ids.iter().map(CommitId::to_hex));
+    args.push("--".into());
+    let bytes = run_bytes(root, &args, cancel, &[0])?;
+    bytes
+        .split(|b| *b == 0)
+        .filter(|record| record.iter().any(|b| !b.is_ascii_whitespace()))
+        .map(parse_commit)
+        .collect()
+}
+
 fn trim_newline(bytes: &[u8]) -> &[u8] {
     bytes.strip_suffix(b"\n").unwrap_or(bytes)
 }

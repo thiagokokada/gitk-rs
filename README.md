@@ -16,6 +16,8 @@ A lightweight Git history explorer for Linux and macOS, written in Rust with
 - Diff, old/new sides, adjustable context, whitespace filtering and word diffs
 - File list to jump between changes, with text selection and copying
 - Staged, unstaged and untracked changes
+- Branch/tag browsing, revision ranges and fixed commit comparisons
+- Rename-following file history, merge-parent inspection and historical blame
 - Branch switching, automatic refresh and keyboard navigation
 
 ## Usage
@@ -31,7 +33,9 @@ with Metal support.
 ./gitk-rs ~/Projects/nixpkgs
 ```
 
-Press F1 or ? to open Help, including keyboard shortcuts and search syntax.
+Press F1 or ? to open Help, including keyboard shortcuts and search syntax. See
+[history exploration](docs/history-exploration.md) for browsing, comparisons and
+file investigation.
 
 Filter commits with words or metadata, for example
 `author:alice path:ci.yml after:2026-01-01`. Enable Regex beside the filter for
