@@ -3836,6 +3836,9 @@ fn comparison_context_actions_and_compact_menu_work_at_narrow_widths(cx: &mut Te
         cx.update(|window, _| {
             let bar = window.find("comparison-controls").bounds();
             let menu = window.find("compare-menu").bounds();
+            let label = window.find("comparison-menu-label").bounds();
+            assert!(f32::from(label.center().x - menu.center().x).abs() <= 1.);
+            assert!(f32::from(label.center().y - menu.center().y).abs() <= 1.);
             assert!(menu.size.width < px(200.));
             assert!(bar.size.height <= px(40.));
             assert!(menu.right() <= bar.right());

@@ -922,7 +922,14 @@ impl HistoryWindow {
                 .child(
                     Button::new("compare-menu")
                         .small()
-                        .label("Comparison")
+                        .accessibility_label("Comparison actions")
+                        .child(
+                            div()
+                                .id("comparison-menu-label")
+                                .test_support()
+                                .line_height(gpui_kit::relative(1.))
+                                .child("Comparison actions…"),
+                        )
                         .flex_shrink_0()
                         .dropdown_menu(move |menu, _, _| {
                             let mut menu = menu.action_context(focus.clone());
