@@ -117,8 +117,7 @@ impl HistoryWindow {
         refs.insert(0, "Current HEAD".into());
         refs.push("Commits between…".into());
         self.branch_dialog.set_branches(refs, cx);
-        self.operation_message =
-            "Browse without changing checkout. Tags must resolve to commits.".into();
+        self.operation_message.clear();
         cx.notify();
     }
 

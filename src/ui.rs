@@ -544,24 +544,9 @@ impl HistoryWindow {
         let Some(snapshot) = self.history.take_snapshot() else {
             return;
         };
-        let unavailable = snapshot.error.is_none()
-            && snapshot
-                .restored
-                .as_ref()
-                .is_some_and(|r| !r.pending && r.selected.is_none())
-            && self
-                .history_state
-                .request
-                .restore
-                .as_ref()
-                .is_some_and(|r| r.selected.is_some());
         let Some(update) = self.history_state.consume_snapshot(snapshot) else {
             return;
         };
-        if unavailable {
-            self.operation_message =
-                "The previous selection is unavailable in this scope or filter.".into();
-        }
         self.pending_history_activity = None;
         let snapshot = self.history_state.snapshot.as_ref().unwrap();
         if self.config.verbose {
