@@ -65,4 +65,6 @@
   separately.
 - Keep AGENTS.md ASCII-only and concise. Do not weaken checks or claim
   completion to work around an unavailable environment.
+- Use plain imperative commit subjects matching repository history, such as
+  "Add branch browsing". Do not use Conventional Commit prefixes.
 - Do not rewrite existing Git history without an explicit user request.
