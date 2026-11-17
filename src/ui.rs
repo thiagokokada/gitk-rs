@@ -1008,18 +1008,23 @@ impl HistoryWindow {
                                 menu = menu
                                     .menu("Swap endpoints", Box::new(SwapComparison))
                                     .menu("Exit comparison", Box::new(ExitComparison));
-                            } else if has_range {
-                                menu = menu.menu("Swap endpoints", Box::new(SwapHistoryRange));
+                                if has_target {
+                                    menu = menu.separator();
+                                }
                             }
-                            let menu = menu.menu("Clear base", Box::new(ClearComparisonBase));
                             if has_target {
-                                menu.menu(
+                                menu = menu.menu(
                                     "Show commits between base and selection",
                                     Box::new(ShowCommitsWithBase),
-                                )
-                            } else {
-                                menu
+                                );
                             }
+                            if !comparing && has_range {
+                                menu = menu.menu("Swap endpoints", Box::new(SwapHistoryRange));
+                            }
+                            if comparing || has_target || has_range {
+                                menu = menu.separator();
+                            }
+                            menu.menu("Clear base", Box::new(ClearComparisonBase))
                         }),
                 )
                 .into_any_element(),

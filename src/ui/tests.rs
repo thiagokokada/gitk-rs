@@ -3897,9 +3897,17 @@ fn comparison_context_actions_and_compact_menu_work_at_narrow_widths(cx: &mut Te
     cx.simulate_keystrokes("down down enter");
     until(cx, |cx| {
         cx.update(|_, cx| app.view.read(cx).comparison.is_none())
+            && selected(&app.view, cx).as_deref() == Some(tip.as_str())
     });
     cx.update(|window, cx| window.click("compare-menu", cx));
-    cx.simulate_keystrokes("down enter");
+    cx.update(|window, _| {
+        let show = window
+            .find_by_label("Show commits between base and selection")
+            .bounds();
+        let clear = window.find_by_label("Clear base").bounds();
+        assert!(show.bottom() < clear.top());
+    });
+    cx.simulate_keystrokes("down down enter");
     until(cx, |cx| {
         cx.update(|_, cx| app.view.read(cx).comparison_base.is_none())
     });
@@ -3956,7 +3964,17 @@ fn context_menu_sets_range_endpoints_and_removal_restores_repository_position(
     });
     let return_depth = cx.update(|_, cx| app.view.read(cx).scope_locations.len());
     cx.update(|window, cx| window.click("compare-menu", cx));
-    cx.simulate_keystrokes("down enter");
+    cx.update(|window, _| {
+        let show = window
+            .find_by_label("Show commits between base and selection")
+            .bounds();
+        let swap = window.find_by_label("Swap endpoints").bounds();
+        let clear = window.find_by_label("Clear base").bounds();
+        assert!(show.bottom() < swap.top());
+        assert!(swap.bottom() < clear.top());
+        assert!(clear.top() - swap.bottom() > swap.top() - show.bottom());
+    });
+    cx.simulate_keystrokes("down down enter");
     until(cx, |cx| {
         cx.update(|_, cx| {
             let view = app.view.read(cx);
