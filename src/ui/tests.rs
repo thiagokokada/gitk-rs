@@ -3520,3 +3520,64 @@ fn scope_picker_browses_refs_with_keyboard_and_restores_focus(cx: &mut TestAppCo
     });
     assert_eq!(fixture.git(&["rev-parse", "HEAD"]), root);
 }
+
+#[gpui_kit::test]
+fn range_picker_applies_direction_and_restores_preceding_scope(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let root = fixture.commit("root");
+    let tip = fixture.commit("tip");
+    let (app, cx) = open(&fixture, cx);
+    until(cx, |cx| selected(&app.view, cx).as_deref() == Some(&tip));
+    cx.update(|window, cx| {
+        app.view.update(cx, |view, cx| {
+            view.open_scope(window, cx);
+            let index = view
+                .branch_dialog
+                .branches
+                .iter()
+                .position(|s| s == "Commits between…")
+                .unwrap();
+            view.switch_branch(index, cx);
+        })
+    });
+    cx.refresh().unwrap();
+    cx.update(|window, cx| {
+        app.view.update(cx, |view, cx| {
+            assert!(view.range_base.read(cx).focus_handle(cx).is_focused(window));
+            view.range_base
+                .update(cx, |input, cx| input.set_value(root, window, cx));
+            view.range_target.update(cx, |input, cx| {
+                input.set_value("HEAD", window, cx);
+                input.focus(window, cx);
+            });
+        })
+    });
+    cx.simulate_keystrokes("enter");
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            app.view
+                .read(cx)
+                .history_state
+                .snapshot
+                .as_ref()
+                .is_some_and(|s| s.eof && s.loaded == 1)
+        })
+    });
+    cx.update(|window, cx| window.click("clear-range", cx));
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            app.view
+                .read(cx)
+                .history_state
+                .snapshot
+                .as_ref()
+                .is_some_and(|s| s.eof && s.loaded == 2)
+        })
+    });
+    cx.update(|_, cx| {
+        assert_eq!(
+            app.view.read(cx).history_state.request.source.scope,
+            HistoryScope::CurrentHead
+        )
+    });
+}

@@ -88,3 +88,10 @@ commits; a removed ref produces an error until you choose another scope or
 restore the ref. The working-tree rows always describe the actual checkout shown
 above history. Use the separate **Switch local branch** menu action to change
 checkout. CLI scope options are listed in `gitk-rs --help`.
+
+**Commits between…** takes Base and Target: `base..target` includes commits
+reachable from Target and excludes Base's ancestry. Swap reverses that
+direction. Remove range restores the preceding scope. This is commit membership,
+distinct from a tree-to-tree comparison of net file changes. CLI `--base` and
+`--target` must be used together and cannot be combined with other scope
+options.

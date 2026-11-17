@@ -977,3 +977,62 @@ fn scoped_history_deduplicates_roots_refreshes_refs_and_preserves_worktree() {
         b"dirty working file"
     );
 }
+
+#[test]
+fn revision_ranges_resolve_endpoints_and_search_only_target_exclusive_commits() {
+    use gitk_rs::history::HistoryScope;
+    let fixture = Fixture::new();
+    let root = fixture.commit("root");
+    let main = fixture.commit("main exclusive");
+    fixture.git(&["checkout", "-qb", "feature", &root]);
+    let feature = fixture.commit("feature exclusive");
+    let mut request = history_request(&fixture);
+    request.source.scope = HistoryScope::Range {
+        base: "main".into(),
+        target: "feature".into(),
+    };
+    let engine = HistoryEngine::spawn(request.clone());
+    let handle = engine.handle();
+    let snapshot = wait(|| handle.take_snapshot().filter(|s| s.eof));
+    assert!(snapshot.error.is_none());
+    assert_eq!(snapshot.loaded, 1);
+    assert_eq!(snapshot.rows[0].commit.id.to_hex(), feature);
+    request.source.scope = HistoryScope::Range {
+        base: "feature".into(),
+        target: "main".into(),
+    };
+    request.generation.0 += 1;
+    request.id += 1;
+    handle.request(request.clone());
+    let snapshot = wait(|| {
+        handle
+            .take_snapshot()
+            .filter(|s| s.eof && s.generation == request.generation)
+    });
+    assert_eq!(snapshot.loaded, 1);
+    assert_eq!(snapshot.rows[0].commit.id.to_hex(), main);
+    request.query = "contents:feature".into();
+    request.id += 1;
+    handle.request(request.clone());
+    let snapshot = wait(|| {
+        handle
+            .take_snapshot()
+            .filter(|s| s.eof && !s.filtering && s.request_id == request.id)
+    });
+    assert_eq!(snapshot.visible, 0);
+    request.source.scope = HistoryScope::Range {
+        base: "--all".into(),
+        target: "HEAD".into(),
+    };
+    request.generation.0 += 1;
+    request.id += 1;
+    handle.request(request.clone());
+    assert!(
+        wait(|| handle
+            .take_snapshot()
+            .filter(|s| s.generation == request.generation && s.error.is_some()))
+        .error
+        .unwrap()
+        .contains("unavailable")
+    );
+}

@@ -8,6 +8,10 @@ pub enum HistoryScope {
     CurrentHead,
     AllBranches,
     Ref(String),
+    Range {
+        base: String,
+        target: String,
+    },
 }
 
 impl HistoryScope {
@@ -16,6 +20,7 @@ impl HistoryScope {
             Self::CurrentHead => "Current HEAD".into(),
             Self::AllBranches => "All branches (local + remote)".into(),
             Self::Ref(name) => name.clone(),
+            Self::Range { base, target } => format!("{base}..{target}"),
         }
     }
 
@@ -27,6 +32,11 @@ impl HistoryScope {
         match self {
             Self::CurrentHead => Ok(repository.head.iter().map(CommitId::to_hex).collect()),
             Self::Ref(name) => Ok(vec![resolve_commit(repository, name, cancel)?.to_hex()]),
+            Self::Range { base, target } => Ok(vec![format!(
+                "{}..{}",
+                resolve_commit(repository, base, cancel)?.to_hex(),
+                resolve_commit(repository, target, cancel)?.to_hex()
+            )]),
             Self::AllBranches => {
                 let bytes = run_bytes(
                     &repository.root,

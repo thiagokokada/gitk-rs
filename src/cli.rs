@@ -66,12 +66,20 @@ struct Args {
     repository: PathBuf,
 
     /// Browse local and remote-tracking branches plus HEAD without checkout
-    #[arg(long, conflicts_with = "revision")]
+    #[arg(long, conflicts_with_all = ["revision", "base", "target"])]
     all_branches: bool,
 
     /// Browse a branch, tag, or commit without checkout
-    #[arg(long, value_name = "REF")]
+    #[arg(long, value_name = "REF", conflicts_with_all = ["base", "target"])]
     revision: Option<String>,
+
+    /// Exclude commits reachable from this revision (requires --target)
+    #[arg(long, requires = "target", value_name = "REF")]
+    base: Option<String>,
+
+    /// Show commits reachable from this revision but not --base
+    #[arg(long, requires = "base", value_name = "REF")]
+    target: Option<String>,
 
     /// Choose dark or light appearance
     #[arg(long, value_enum, default_value = "dark")]
@@ -133,7 +141,9 @@ pub fn parse_with_preferences(
         ..Config::default()
     };
     config.apply_preferences(preferences);
-    config.scope = if args.all_branches {
+    config.scope = if let (Some(base), Some(target)) = (args.base, args.target) {
+        crate::history::HistoryScope::Range { base, target }
+    } else if args.all_branches {
         crate::history::HistoryScope::AllBranches
     } else if let Some(name) = args.revision {
         crate::history::HistoryScope::Ref(name)
@@ -362,6 +372,31 @@ mod tests {
                 theme: Theme::Dark,
                 timings: false,
                 ..Config::default()
+            }
+        );
+    }
+}
+
+#[cfg(test)]
+mod scope_tests {
+    #[test]
+    fn validates_scope_combinations() {
+        let parse = |args: &[&str]| super::parse(args.iter().map(std::ffi::OsString::from));
+        for args in [
+            vec!["--base", "main"],
+            vec!["--target", "side"],
+            vec!["--all-branches", "--revision", "main"],
+            vec!["--base", "main", "--target", "side", "--revision", "HEAD"],
+        ] {
+            assert!(parse(&args).is_err(), "{args:?}");
+        }
+        assert_eq!(
+            parse(&["--base", "main", "--target", "side"])
+                .unwrap()
+                .scope,
+            crate::history::HistoryScope::Range {
+                base: "main".into(),
+                target: "side".into()
             }
         );
     }

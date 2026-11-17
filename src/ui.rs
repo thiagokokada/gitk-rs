@@ -127,6 +127,7 @@ enum DialogKind {
     About,
     Branches,
     Scope,
+    Range,
     Preferences,
     OpenRepository,
 }
@@ -149,6 +150,11 @@ struct HistoryWindow {
     restore_repository_focus: bool,
     repository_prompt_pending: bool,
     branch_dialog: BranchDialog,
+    preceding_scope: Option<HistoryScope>,
+    restore_range_focus: bool,
+    _range_subscriptions: Vec<Subscription>,
+    range_base: Entity<InputState>,
+    range_target: Entity<InputState>,
     repository_input: Entity<InputState>,
     _repository_subscription: Subscription,
     help_scroll: ScrollHandle,
@@ -201,6 +207,22 @@ impl HistoryWindow {
         }
         let preference_dialog = PreferencesDialog::new(&preferences, window, cx);
         let branch_dialog = BranchDialog::new(window, cx);
+        let range_base = cx.new(|cx| InputState::new(window, cx).placeholder("Base ref or commit"));
+        let range_target =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Target ref or commit"));
+        let range_subscriptions = [&range_base, &range_target]
+            .into_iter()
+            .map(|input| {
+                cx.subscribe_in(input, window, |this, _, event, _, cx| {
+                    if matches!(this.dialog, Some(DialogKind::Range)) {
+                        if matches!(event, InputEvent::PressEnter { .. }) {
+                            this.apply_range(cx);
+                        }
+                        cx.notify();
+                    }
+                })
+            })
+            .collect();
         let repository_input = cx.new(|cx| InputState::new(window, cx));
         let repository_subscription =
             cx.subscribe_in(&repository_input, window, |this, _, event, _, cx| {
@@ -304,6 +326,11 @@ impl HistoryWindow {
             restore_repository_focus: false,
             repository_prompt_pending: false,
             branch_dialog,
+            preceding_scope: None,
+            restore_range_focus: false,
+            _range_subscriptions: range_subscriptions,
+            range_base,
+            range_target,
             repository_input,
             _repository_subscription: repository_subscription,
             help_scroll: ScrollHandle::new(),
@@ -1112,6 +1139,10 @@ impl Render for HistoryWindow {
             self.repository_input
                 .update(cx, |input, cx| input.focus(window, cx));
         }
+        if std::mem::take(&mut self.restore_range_focus) {
+            self.range_base
+                .update(cx, |input, cx| input.focus(window, cx));
+        }
         let started = Instant::now();
         let timing = self.timing.clone();
         let history_ready = self
@@ -1296,6 +1327,11 @@ impl Render for HistoryWindow {
                     .child(Button::new("history-scope")
                         .label(format!("History: {}", self.history_state.request.source.scope.label()))
                         .on_click(cx.listener(|this, _, window, cx| this.open_scope(window, cx))))
+                    .when(matches!(self.history_state.request.source.scope, HistoryScope::Range { .. }), |bar| bar.child(
+                        Button::new("clear-range").label("Remove range").on_click(cx.listener(|this, _, _, cx| {
+                            this.history_state.request.source.scope = this.preceding_scope.take().unwrap_or_default();
+                            this.reload(cx);
+                        }))))
                     .child(format!("Working tree: {}", self.workspace_snapshot.as_ref().and_then(|s| s.repository.as_ref()).map_or("loading", |r| r.branch.as_str())))
             )
             .child(
