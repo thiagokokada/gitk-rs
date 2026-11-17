@@ -31,7 +31,7 @@ use gitk_rs::{
     },
 };
 use gpui_kit::component::{
-    ThemeMode,
+    Sizable, ThemeMode,
     button::Button,
     checkbox::Checkbox,
     input::{Input, InputEvent, InputState, TextareaState},
@@ -873,6 +873,71 @@ impl HistoryWindow {
         }
     }
 
+    fn comparison_controls(&self) -> Option<AnyElement> {
+        let base = self.comparison_base.as_ref()?;
+        let comparing = self.comparison.is_some();
+        let (id, label) = if let Some(comparison) = &self.comparison {
+            (
+                "comparison-endpoints",
+                format!(
+                    "{:.12} {} -> {:.12} {}",
+                    comparison.base.id.to_hex(),
+                    comparison.base.summary(),
+                    comparison.target.id.to_hex(),
+                    comparison.target.summary()
+                ),
+            )
+        } else {
+            (
+                "pinned-base",
+                format!("Base: {:.12} {}", base.id.to_hex(), base.summary()),
+            )
+        };
+        let tooltip = label.clone();
+        let focus = self.focus.clone();
+        Some(
+            div()
+                .id("comparison-controls")
+                .test_support()
+                .flex()
+                .flex_shrink_0()
+                .items_center()
+                .gap_2()
+                .w_full()
+                .min_w_0()
+                .px_2()
+                .py_1()
+                .child(
+                    div()
+                        .id(id)
+                        .test_support()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .child(label)
+                        .hoverable_tooltip(move |window, cx| {
+                            wrapped_tooltip(tooltip.clone(), window, cx)
+                        }),
+                )
+                .child(
+                    Button::new("compare-menu")
+                        .small()
+                        .label("Comparison")
+                        .flex_shrink_0()
+                        .dropdown_menu(move |menu, _, _| {
+                            let mut menu = menu.action_context(focus.clone());
+                            if comparing {
+                                menu = menu
+                                    .menu("Swap endpoints", Box::new(SwapComparison))
+                                    .menu("Exit comparison", Box::new(ExitComparison));
+                            }
+                            menu.menu("Clear comparison base", Box::new(ClearComparisonBase))
+                        }),
+                )
+                .into_any_element(),
+        )
+    }
+
     fn load_parent_metadata(&mut self, commit: &gitk_rs::git::Commit, cx: &mut Context<Self>) {
         use std::sync::atomic::Ordering;
         self.parent_cancellation.store(true, Ordering::Release);
@@ -1306,6 +1371,7 @@ impl HistoryWindow {
             }));
         div()
             .id(("commit", index))
+            .test_support()
             .h(px((self.preferences.font_size * 2.).max(26.)))
             .w_full()
             .flex()
@@ -1375,24 +1441,29 @@ impl HistoryWindow {
                 let base = Arc::new(entry.commit.clone());
                 let target = base.clone();
                 let view = cx.entity().downgrade();
+                let has_base = self.comparison_base.is_some();
                 move |menu, _, _| {
-                    menu.item(PopupMenuItem::new("Set as comparison base").on_click({
+                    let menu = menu.item(PopupMenuItem::new("Set as comparison base").on_click({
                         let view = view.clone();
                         let base = base.clone();
                         move |_, _, cx| {
                             let _ =
                                 view.update(cx, |this, cx| this.pin_comparison(base.clone(), cx));
                         }
-                    }))
-                    .item(PopupMenuItem::new("Compare with base").on_click({
-                        let view = view.clone();
-                        let target = target.clone();
-                        move |_, _, cx| {
-                            let _ =
-                                view.update(cx, |this, cx| this.compare_commit(target.clone(), cx));
-                        }
-                    }))
-                    .item(PopupMenuItem::new("Copy commit hash").on_click({
+                    }));
+                    let menu = if has_base {
+                        menu.item(PopupMenuItem::new("Compare with base").on_click({
+                            let view = view.clone();
+                            let target = target.clone();
+                            move |_, _, cx| {
+                                let _ = view
+                                    .update(cx, |this, cx| this.compare_commit(target.clone(), cx));
+                            }
+                        }))
+                    } else {
+                        menu
+                    };
+                    menu.item(PopupMenuItem::new("Copy commit hash").on_click({
                         let hash = hash.clone();
                         move |_, _, cx| {
                             cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(hash.clone()))
@@ -1958,17 +2029,7 @@ impl Render for HistoryWindow {
                                 }
                             }))))
                             .child(self.parent_controls(cx))
-                            .child(Button::new("compare-menu").label("Compare changes…").dropdown_menu({
-                                let focus = self.focus.clone();
-                                move |menu, _, _| menu.action_context(focus.clone())
-                                    .menu("Set as comparison base", Box::new(SetComparisonBase))
-                                    .menu("Compare with base", Box::new(CompareWithBase))
-                                    .menu("Swap endpoints", Box::new(SwapComparison))
-                                    .menu("Exit comparison", Box::new(ExitComparison))
-                                    .menu("Clear comparison base", Box::new(ClearComparisonBase))
-                            }))
-                            .when_some(self.comparison_base.as_ref(), |pane, base| pane.child(div().id("pinned-base").test_support().child(format!("Base: {:.12} {}", base.id.to_hex(), base.summary()))))
-                            .when_some(self.comparison.as_ref(), |pane, comparison| pane.child(div().id("comparison-endpoints").test_support().child(format!("{:.12} {} -> {:.12} {}", comparison.base.id.to_hex(), comparison.base.summary(), comparison.target.id.to_hex(), comparison.target.summary()))))
+                            .children(self.comparison_controls())
                             .child(div().flex_1().min_h_0().child(self.diff.clone())))),
                 ),
             )

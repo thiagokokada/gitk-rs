@@ -5,10 +5,12 @@ Filters search within the chosen scope. See [search](search.md) for ranges.
 
 ## Compare changes
 
-Select a commit and use **Compare changes… > Set as comparison base**, or use
-its context menu. Select another commit and choose **Compare with base**. The
-pinned base survives filters and scope changes within the repository. Comparison
-uses the two commit trees directly, including unrelated histories; it does not
+Choose **Set as comparison base** from a commit's context menu, then **Compare
+with base** from another commit's context menu. A compact row shows the pinned
+base or both endpoints. Its **Comparison** menu offers Clear comparison base,
+plus Swap endpoints and Exit comparison while a comparison is active. The pinned
+base survives filters and scope changes within the repository. Comparison uses
+the two commit trees directly, including unrelated histories; it does not
 substitute their merge base. Old/New display options refer to the base/target
 respectively. The existing diff presentation handles renames, binary notices,
 mode changes, symlinks and submodule pointers; it does not expand binary

@@ -3798,3 +3798,74 @@ fn unavailable_selection_clears_filter_and_shows_the_new_scope(cx: &mut TestAppC
         assert_eq!(view.history_state.snapshot.as_ref().unwrap().visible, 2);
     });
 }
+
+#[gpui_kit::test]
+fn comparison_context_actions_and_compact_menu_work_at_narrow_widths(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let root = fixture.commit(&format!("Root {}", "long subject ".repeat(20)));
+    let tip = fixture.commit(&format!("Tip {}", "long subject ".repeat(20)));
+    let (app, cx) = open(&fixture, cx);
+    until(cx, |cx| selected(&app.view, cx).as_deref() == Some(&tip));
+    cx.simulate_resize(size(px(740.), px(850.)));
+    for (index, keys) in [(0_usize, "down enter"), (1_usize, "down down enter")] {
+        cx.refresh().unwrap();
+        let bounds = cx.update(|window, _| window.find(("commit", index)).bounds());
+        cx.simulate_mouse_down(
+            bounds.center(),
+            gpui_kit::MouseButton::Right,
+            gpui_kit::Modifiers::default(),
+        );
+        cx.simulate_mouse_up(
+            bounds.center(),
+            gpui_kit::MouseButton::Right,
+            gpui_kit::Modifiers::default(),
+        );
+        until(cx, |cx| {
+            cx.update(|window, _| window.try_find("popup-menu").is_some())
+        });
+        cx.simulate_keystrokes(keys);
+        until(cx, |cx| {
+            cx.update(|_, cx| {
+                if index == 0 {
+                    app.view.read(cx).comparison_base.is_some()
+                } else {
+                    app.view.read(cx).comparison.is_some()
+                }
+            })
+        });
+        cx.update(|window, _| {
+            let bar = window.find("comparison-controls").bounds();
+            let menu = window.find("compare-menu").bounds();
+            assert!(menu.size.width < px(200.));
+            assert!(bar.size.height <= px(40.));
+            assert!(menu.right() <= bar.right());
+            assert!(menu.left() >= bar.left());
+        });
+    }
+    cx.update(|_, cx| {
+        let comparison = app.view.read(cx).comparison.as_ref().unwrap();
+        assert_eq!(comparison.base.id.to_hex(), tip);
+        assert_eq!(comparison.target.id.to_hex(), root);
+    });
+    cx.update(|window, cx| window.click("compare-menu", cx));
+    cx.simulate_keystrokes("down enter");
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            app.view
+                .read(cx)
+                .comparison
+                .as_ref()
+                .is_some_and(|c| c.base.id.to_hex() == root)
+        })
+    });
+    cx.update(|window, cx| window.click("compare-menu", cx));
+    cx.simulate_keystrokes("down down enter");
+    until(cx, |cx| {
+        cx.update(|_, cx| app.view.read(cx).comparison.is_none())
+    });
+    cx.update(|window, cx| window.click("compare-menu", cx));
+    cx.simulate_keystrokes("down enter");
+    until(cx, |cx| {
+        cx.update(|_, cx| app.view.read(cx).comparison_base.is_none())
+    });
+}
