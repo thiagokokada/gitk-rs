@@ -11,8 +11,7 @@ pub(super) struct BranchDialog {
 
 impl BranchDialog {
     pub(super) fn new(window: &mut Window, cx: &mut Context<HistoryWindow>) -> Self {
-        let branch_filter =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Filter local branches"));
+        let branch_filter = cx.new(|cx| InputState::new(window, cx).placeholder("Search refs"));
         let branch_subscription = cx.subscribe_in(
             &branch_filter,
             window,

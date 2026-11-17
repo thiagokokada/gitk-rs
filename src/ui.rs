@@ -18,7 +18,8 @@ use gitk_rs::{
     diff::{DiffEngine, DiffHandle, DiffSettings},
     graph::{GraphLayout, GraphRow, MAX_GRAPH_LANES, text_graph},
     history::{
-        Entry, Generation, HistoryEngine, HistoryHandle, HistorySource, RefKind, Request,
+        Entry, Generation, HistoryEngine, HistoryHandle, HistoryScope, HistorySource, RefKind,
+        Request,
         view::{HistoryViewState, LocalChangeKind, RowSelection, ScrollTarget, Selection},
     },
     preferences::Preferences,
@@ -125,6 +126,7 @@ enum DialogKind {
     Help,
     About,
     Branches,
+    Scope,
     Preferences,
     OpenRepository,
 }
@@ -534,7 +536,14 @@ impl HistoryWindow {
         if let Some(top) = update.top {
             self.scroll.scroll_to_item_strict(top, ScrollStrategy::Top);
         }
-        if head_changed || update.reload {
+        if head_changed
+            || update.reload
+            || refs_changed
+                && !matches!(
+                    self.history_state.request.source.scope,
+                    HistoryScope::CurrentHead
+                )
+        {
             self.reload(cx);
         } else if refs_changed {
             self.history_state.request.refs_revision += 1;
@@ -1284,6 +1293,13 @@ impl Render for HistoryWindow {
             .text_color(rgb(palette.foreground))
             .child(
                 div().flex().items_center().gap_2()
+                    .child(Button::new("history-scope")
+                        .label(format!("History: {}", self.history_state.request.source.scope.label()))
+                        .on_click(cx.listener(|this, _, window, cx| this.open_scope(window, cx))))
+                    .child(format!("Working tree: {}", self.workspace_snapshot.as_ref().and_then(|s| s.repository.as_ref()).map_or("loading", |r| r.branch.as_str())))
+            )
+            .child(
+                div().flex().items_center().gap_2()
                     .child("Filter:")
                     .child(self.filter_input(window, cx))
                     .child(Checkbox::new("search-regex")
@@ -1478,6 +1494,7 @@ pub fn run(mut config: Config, preferences: Preferences, launched: Instant) {
     let timing = guard.timing();
     let request = Request {
         source: HistorySource {
+            scope: config.scope.clone(),
             repository: config.repository.clone(),
             graph_columns: config.graph_columns,
             git_workers: config.git_workers,

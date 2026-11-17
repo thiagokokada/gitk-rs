@@ -49,7 +49,7 @@ pub(super) struct CommitPool {
 impl CommitPool {
     pub(super) fn open(
         root: &Path,
-        head: &CommitId,
+        revisions: &[String],
         parent: Cancellation,
         readers: usize,
     ) -> Result<Self> {
@@ -84,7 +84,7 @@ impl CommitPool {
             coordinator: None,
         };
         let root = root.to_owned();
-        let head = head.clone();
+        let revisions = revisions.to_vec();
         pool.coordinator = Some(
             thread::Builder::new()
                 .name("history-dispatch".into())
@@ -92,7 +92,7 @@ impl CommitPool {
                     let mut workers = Vec::new();
                     let mut result = dispatch(
                         &root,
-                        &head,
+                        &revisions,
                         &cancel,
                         readers,
                         &sender,
@@ -192,7 +192,7 @@ impl Drop for CommitPool {
 
 fn dispatch(
     root: &Path,
-    head: &CommitId,
+    revisions: &[String],
     cancel: &Cancellation,
     readers: usize,
     order: &SyncSender<Result<Ordered>>,
@@ -201,7 +201,7 @@ fn dispatch(
 ) -> Result<()> {
     let mut traversal = GitStream::spawn(
         root,
-        &["rev-list", "--parents", &head.to_hex()],
+        &revision_args("rev-list", revisions),
         cancel.clone(),
         &[0],
     )?;

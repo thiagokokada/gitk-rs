@@ -80,3 +80,11 @@ in history order; changing the setting restarts history loading.
 
 See [content search performance](contents-search-performance.md) for
 architecture and measurements.
+
+History scope controls which commits are searched. Use **History: Current HEAD**
+to browse HEAD, all local and remote-tracking branches plus HEAD, or an
+individual branch/tag. Browsing never checks out a ref. Tags must resolve to
+commits; a removed ref produces an error until you choose another scope or
+restore the ref. The working-tree rows always describe the actual checkout shown
+above history. Use the separate **Switch local branch** menu action to change
+checkout. CLI scope options are listed in `gitk-rs --help`.

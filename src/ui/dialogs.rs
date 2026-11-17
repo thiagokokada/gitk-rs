@@ -48,6 +48,7 @@ impl HistoryWindow {
         self.workspace_generation.0 += 1;
         self.workspace_snapshot = None;
         self.history_state.reset_repository();
+        self.history_state.request.source.scope = HistoryScope::CurrentHead;
         self.pending_operation = None;
         self.operation_message.clear();
         self.dialog = None;
@@ -77,6 +78,33 @@ impl HistoryWindow {
         self.change_repository(path.into(), cx);
     }
 
+    pub(super) fn open_scope(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.dialog = Some(DialogKind::Scope);
+        self.branch_dialog.reset(window, cx);
+        let mut refs = Vec::new();
+        if let Some(snapshot) = &self.history_state.snapshot {
+            for labels in snapshot.refs.values() {
+                for label in labels {
+                    let prefix = match label.kind {
+                        RefKind::Branch => "refs/heads/",
+                        RefKind::Remote => "refs/remotes/",
+                        RefKind::Tag => "refs/tags/",
+                        RefKind::Head => continue,
+                    };
+                    refs.push(format!("{prefix}{}", label.name));
+                }
+            }
+        }
+        refs.sort();
+        refs.dedup();
+        refs.insert(0, "All branches (local + remote)".into());
+        refs.insert(0, "Current HEAD".into());
+        self.branch_dialog.set_branches(refs, cx);
+        self.operation_message =
+            "Browse without changing checkout. Tags must resolve to commits.".into();
+        cx.notify();
+    }
+
     pub(super) fn open_branches(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.dialog = Some(DialogKind::Branches);
         self.dialog_focus.focus(window, cx);
@@ -95,6 +123,20 @@ impl HistoryWindow {
         cx.notify();
     }
     pub(super) fn switch_branch(&mut self, index: usize, cx: &mut Context<Self>) {
+        if matches!(self.dialog, Some(DialogKind::Scope)) {
+            let Some(name) = self.branch_dialog.selected(index) else {
+                return;
+            };
+            self.history_state.request.source.scope = match name.as_str() {
+                "Current HEAD" => HistoryScope::CurrentHead,
+                "All branches (local + remote)" => HistoryScope::AllBranches,
+                _ => HistoryScope::Ref(name),
+            };
+            self.dialog = None;
+            self.restore_focus = true;
+            self.reload(cx);
+            return;
+        }
         if !matches!(self.dialog, Some(DialogKind::Branches)) || self.pending_operation.is_some() {
             return;
         }
@@ -127,7 +169,8 @@ impl HistoryWindow {
 
     pub(super) fn dialog_element(&self, cx: &mut Context<Self>) -> AnyElement {
         let title = match self.dialog {
-            Some(DialogKind::Branches) => "Switch local branch",
+            Some(DialogKind::Branches) => "Switch working branch",
+            Some(DialogKind::Scope) => "Show commits from…",
             Some(DialogKind::Help) => "Help",
             Some(DialogKind::Preferences) => "Preferences",
             Some(DialogKind::OpenRepository) => "Open repository by path",
@@ -147,7 +190,7 @@ impl HistoryWindow {
             .text_color(rgb(palette.foreground));
         body = body.child(div().flex_shrink_0().text_size(px(18.)).child(title));
         match self.dialog {
-            Some(DialogKind::Branches) => {
+            Some(DialogKind::Branches | DialogKind::Scope) => {
                 body = self.branch_dialog.render(
                     body,
                     self.config.theme,
@@ -177,6 +220,7 @@ impl HistoryWindow {
                 );
             }
             Some(DialogKind::Help) => {
+                body = body.child("History scope changes browsing without checkout. Filters apply within that scope; merge searches use the first parent.");
                 body = body.h(gpui_kit::relative(0.9)).overflow_hidden().child(
                     div()
                         .relative()
@@ -300,7 +344,7 @@ impl HistoryWindow {
             .justify_center()
             .track_focus(&self.dialog_focus)
             .key_context(match self.dialog {
-                Some(DialogKind::Branches) => "Dialog BranchDialog",
+                Some(DialogKind::Branches | DialogKind::Scope) => "Dialog BranchDialog",
                 Some(DialogKind::Help) => "Dialog HelpDialog",
                 _ => "Dialog",
             })

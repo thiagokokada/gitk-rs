@@ -42,6 +42,7 @@ fn open_with_state<'a>(
     };
     let request = Request {
         source: HistorySource {
+            scope: Default::default(),
             repository: config.repository.clone(),
             graph_columns: config.graph_columns,
             git_workers: config.git_workers,
@@ -3462,4 +3463,60 @@ fn committing_selected_local_changes_selects_the_new_head(staged: bool, cx: &mut
                 && view.diff.read(cx).has_loaded_selection()
         })
     });
+}
+
+#[gpui_kit::test]
+fn scope_picker_browses_refs_with_keyboard_and_restores_focus(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let root = fixture.commit("root");
+    fixture.git(&["checkout", "-qb", "side"]);
+    let side = fixture.commit("side");
+    fixture.git(&["checkout", "main"]);
+    let (app, cx) = open(&fixture, cx);
+    until(cx, |cx| selected(&app.view, cx).as_deref() == Some(&root));
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            app.view
+                .read(cx)
+                .history_state
+                .snapshot
+                .as_ref()
+                .is_some_and(|s| {
+                    s.refs
+                        .values()
+                        .any(|labels| labels.iter().any(|l| l.name == "side"))
+                })
+        })
+    });
+    cx.update(|window, cx| app.view.update(cx, |view, cx| view.open_scope(window, cx)));
+    cx.update(|window, cx| {
+        app.view.update(cx, |view, cx| {
+            view.branch_dialog.filter.update(cx, |input, cx| {
+                input.set_value("refs/heads/side", window, cx)
+            });
+            view.branch_dialog.filter(cx);
+        })
+    });
+    cx.simulate_keystrokes("enter");
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            app.view
+                .read(cx)
+                .history_state
+                .snapshot
+                .as_ref()
+                .is_some_and(|s| s.eof && s.loaded == 2 && s.rows[0].commit.id.to_hex() == side)
+        })
+    });
+    assert_eq!(selected(&app.view, cx).as_deref(), Some(root.as_str()));
+    cx.update(|window, cx| {
+        let view = app.view.read(cx);
+        assert!(view.dialog.is_none());
+        assert!(view.focus.is_focused(window));
+        assert_eq!(
+            view.history_state.request.source.scope,
+            HistoryScope::Ref("refs/heads/side".into())
+        );
+    });
+    assert_eq!(fixture.git(&["rev-parse", "HEAD"]), root);
 }

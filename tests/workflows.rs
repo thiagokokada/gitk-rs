@@ -81,6 +81,7 @@ fn wait<T>(mut poll: impl FnMut() -> Option<T>) -> T {
 fn history_request(fixture: &Fixture) -> Request {
     Request {
         source: HistorySource {
+            scope: Default::default(),
             repository: fixture.root().into(),
             graph_columns: 200,
             git_workers: gitk_rs::git::DEFAULT_GIT_WORKERS,
@@ -906,4 +907,73 @@ fn source_identity_restarts_history_while_viewport_changes_keep_entries() {
     assert!(switched.error.is_none());
     assert_eq!(switched.loaded, 1);
     assert_eq!(switched.rows[0].commit.id.to_hex(), tip);
+}
+
+#[test]
+fn scoped_history_deduplicates_roots_refreshes_refs_and_preserves_worktree() {
+    use gitk_rs::history::HistoryScope;
+    let fixture = Fixture::new();
+    let root = fixture.commit("root");
+    let main = fixture.commit("main only");
+    fixture.git(&["checkout", "-qb", "side", &root]);
+    let side = fixture.commit("side only");
+    fixture.git(&["tag", "-a", "version", "-m", "annotated"]);
+    fixture.git(&["checkout", "--orphan", "disconnected"]);
+    let disconnected = fixture.commit("disconnected root");
+    fixture.git(&["update-ref", "refs/remotes/origin/other", &disconnected]);
+    fixture.git(&["checkout", "main"]);
+    fs::write(fixture.root().join("file.txt"), "dirty working file").unwrap();
+    let before = fixture.git(&["status", "--porcelain=v1"]);
+    let mut request = history_request(&fixture);
+    request.source.scope = HistoryScope::AllBranches;
+    let engine = HistoryEngine::spawn(request.clone());
+    let handle = engine.handle();
+    let snapshot = wait(|| handle.take_snapshot().filter(|s| s.eof));
+    assert!(snapshot.error.is_none(), "{:?}", snapshot.error);
+    let ids: std::collections::HashSet<_> =
+        snapshot.rows.iter().map(|e| e.commit.id.to_hex()).collect();
+    assert_eq!(
+        ids,
+        [root.clone(), main.clone(), side.clone(), disconnected]
+            .into_iter()
+            .collect()
+    );
+    assert_eq!(snapshot.rows.len(), ids.len());
+    request.source.scope = HistoryScope::Ref("refs/tags/version".into());
+    request.generation.0 += 1;
+    request.id += 1;
+    handle.request(request.clone());
+    let snapshot = wait(|| {
+        handle
+            .take_snapshot()
+            .filter(|s| s.eof && s.generation == request.generation)
+    });
+    assert_eq!(snapshot.rows[0].commit.id.to_hex(), side);
+    assert_eq!(snapshot.loaded, 2);
+    fixture.git(&["update-ref", "refs/tags/version", &main]);
+    request.generation.0 += 1;
+    request.id += 1;
+    handle.request(request.clone());
+    let snapshot = wait(|| {
+        handle
+            .take_snapshot()
+            .filter(|s| s.eof && s.generation == request.generation)
+    });
+    assert_eq!(snapshot.rows[0].commit.id.to_hex(), main);
+    fixture.git(&["tag", "-d", "version"]);
+    request.generation.0 += 1;
+    request.id += 1;
+    handle.request(request.clone());
+    let snapshot = wait(|| {
+        handle
+            .take_snapshot()
+            .filter(|s| s.generation == request.generation && s.error.is_some())
+    });
+    assert!(snapshot.error.unwrap().contains("unavailable"));
+    assert_eq!(fixture.git(&["rev-parse", "HEAD"]), main);
+    assert_eq!(fixture.git(&["status", "--porcelain=v1"]), before);
+    assert_eq!(
+        fs::read(fixture.root().join("file.txt")).unwrap(),
+        b"dirty working file"
+    );
 }

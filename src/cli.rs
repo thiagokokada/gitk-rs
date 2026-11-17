@@ -15,6 +15,7 @@ pub enum Theme {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Config {
     pub repository: PathBuf,
+    pub scope: crate::history::HistoryScope,
     pub theme: Theme,
     pub timings: bool,
     pub batch: Option<usize>,
@@ -30,6 +31,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             repository: PathBuf::from("."),
+            scope: Default::default(),
             theme: Theme::Dark,
             timings: false,
             batch: None,
@@ -62,6 +64,14 @@ struct Args {
     /// Git repository to browse
     #[arg(default_value = ".")]
     repository: PathBuf,
+
+    /// Browse local and remote-tracking branches plus HEAD without checkout
+    #[arg(long, conflicts_with = "revision")]
+    all_branches: bool,
+
+    /// Browse a branch, tag, or commit without checkout
+    #[arg(long, value_name = "REF")]
+    revision: Option<String>,
 
     /// Choose dark or light appearance
     #[arg(long, value_enum, default_value = "dark")]
@@ -123,6 +133,13 @@ pub fn parse_with_preferences(
         ..Config::default()
     };
     config.apply_preferences(preferences);
+    config.scope = if args.all_branches {
+        crate::history::HistoryScope::AllBranches
+    } else if let Some(name) = args.revision {
+        crate::history::HistoryScope::Ref(name)
+    } else {
+        crate::history::HistoryScope::CurrentHead
+    };
     if explicit("mode") {
         config.theme = args.mode;
     }
@@ -250,6 +267,7 @@ mod tests {
                 batch: Some(42),
                 graph_columns: 1,
                 git_workers: DEFAULT_GIT_WORKERS,
+                scope: Default::default(),
                 text_graph: true,
                 syntax: false,
                 watch: false,

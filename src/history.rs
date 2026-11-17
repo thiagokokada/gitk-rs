@@ -1,7 +1,9 @@
 //! Loaded entries live once in memory. The GUI receives only nearby Arc
 //! references; neither history nor filter results persist on disk.
+pub mod scope;
 mod search;
 pub mod view;
+pub use scope::HistoryScope;
 
 use search::{HistorySearch, SearchProgress};
 
@@ -36,6 +38,7 @@ pub struct ReloadGeneration(pub u64);
 /// Settings that determine whether retained history and its Git stream can be reused.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HistorySource {
+    pub scope: HistoryScope,
     pub repository: PathBuf,
     pub graph_columns: usize,
     pub git_workers: usize,
@@ -724,6 +727,7 @@ struct Bookmarks {
 
 struct Session {
     repository: Repository,
+    resolved: Vec<String>,
     git_workers: usize,
     stream: Option<CommitStream>,
     cancellation: Cancellation,
@@ -745,14 +749,21 @@ impl Session {
     fn open(request: &Request, cancellation: Cancellation) -> Result<Self> {
         let repository = Repository::open(&request.source.repository, &cancellation)?;
         let reusable = history_reusable(&repository, &cancellation)?;
-        let stream = repository
-            .head
-            .as_ref()
-            .map(|_| repository.log_with_readers(cancellation.clone(), request.source.git_workers))
-            .transpose()?;
+        let resolved = request.source.scope.resolve(&repository, &cancellation)?;
+        let stream = if resolved.is_empty() {
+            None
+        } else {
+            Some(CommitStream::open(
+                &repository.root,
+                &resolved,
+                cancellation.clone(),
+                request.source.git_workers,
+            )?)
+        };
         let eof = stream.is_none();
         Ok(Self {
             repository,
+            resolved,
             git_workers: request.source.git_workers,
             stream,
             cancellation,
@@ -788,7 +799,19 @@ impl Session {
         {
             return Ok(false);
         }
+        let resolved = request
+            .source
+            .scope
+            .resolve(&repository, &self.cancellation)?;
+        if !matches!(request.source.scope, HistoryScope::CurrentHead) && resolved != self.resolved {
+            return Ok(false);
+        }
         if repository.head != self.repository.head {
+            if !matches!(request.source.scope, HistoryScope::CurrentHead) {
+                self.repository = repository;
+                self.refs_loaded = false;
+                return Ok(true);
+            }
             let Some(old_head) = self.repository.head.clone() else {
                 return Ok(false);
             };
@@ -826,6 +849,12 @@ impl Session {
             }
             ReloadProgress::Replace => Ok(ReloadProgress::Replace),
             ReloadProgress::Ready => {
+                self.resolved = reload
+                    .repository
+                    .head
+                    .iter()
+                    .map(CommitId::to_hex)
+                    .collect();
                 self.repository = reload.repository;
                 self.refs_loaded = false;
                 self.strings.extend(reload.strings);
@@ -863,18 +892,9 @@ impl Session {
                         bookmark.ordinal = self.entries.iter().position(|e| &e.commit.id == target);
                         // Avoid streaming an unrelated branch to EOF just to find
                         // a bookmark which is no longer reachable from HEAD.
-                        bookmark.reachable = bookmark.ordinal.is_some()
-                            || run_bytes(
-                                &self.repository.root,
-                                &["merge-base", "--all", &target.to_hex(), "HEAD"],
-                                &self.cancellation,
-                                &[0, 1, 128],
-                            )
-                            .is_ok_and(|bytes| {
-                                bytes
-                                    .split(|b| *b == b'\n')
-                                    .any(|id| id == target.to_hex().as_bytes())
-                            });
+                        // Scope membership is established by the traversal, including
+                        // disconnected roots and excluded range ancestry.
+                        bookmark.reachable = bookmark.ordinal.is_some() || !self.eof;
                     }
                 }
             }
@@ -1179,6 +1199,7 @@ mod tests {
     fn request(fixture: &Fixture) -> Request {
         Request {
             source: HistorySource {
+                scope: Default::default(),
                 repository: fixture.root().to_owned(),
                 graph_columns: crate::graph::DEFAULT_GRAPH_LANES,
                 git_workers: crate::git::DEFAULT_GIT_WORKERS,
@@ -1603,6 +1624,7 @@ mod tests {
         assert!((1..=crate::git::MAX_GIT_WORKERS).contains(&readers));
         let request = Request {
             source: HistorySource {
+                scope: Default::default(),
                 repository: repository.into(),
                 graph_columns: crate::graph::DEFAULT_GRAPH_LANES,
                 git_workers: readers,
@@ -2168,6 +2190,7 @@ mod tests {
             .unwrap_or_else(|_| "path:ci.yml after:2026-01-01".into());
         let mut request = Request {
             source: HistorySource {
+                scope: Default::default(),
                 repository: repository.into(),
                 graph_columns: crate::graph::DEFAULT_GRAPH_LANES,
                 git_workers: crate::git::DEFAULT_GIT_WORKERS,

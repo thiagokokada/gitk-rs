@@ -10,6 +10,7 @@ fn state() -> HistoryViewState {
     HistoryViewState::new(Request {
         generation: Generation(1),
         source: HistorySource {
+            scope: Default::default(),
             repository: PathBuf::from("repository"),
             graph_columns: 256,
             git_workers: 4,
