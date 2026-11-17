@@ -7,15 +7,15 @@ Filters search within the chosen scope. See [search](search.md) for ranges.
 
 Choose **Set as base** from a commit's context menu, then **Compare changes with
 base** from another commit's context menu. A compact row shows the pinned base
-or both endpoints. Its **Base actions…** menu offers Clear base and Show commits
-between base and selection. During a comparison it becomes **Comparison
-actions…** and also offers Swap endpoints and Exit comparison. The pinned base
-survives filters and scope changes within the repository. Comparison uses the
-two commit trees directly, including unrelated histories; it does not substitute
-their merge base. Old/New display options refer to the base/target respectively.
-The existing diff presentation handles renames, binary notices, mode changes,
-symlinks and submodule pointers; it does not expand binary contents or submodule
-history.
+or both endpoints. **Base actions…** manages the pinned base and history range.
+During a comparison it becomes **Comparison actions…**, with Swap endpoints and
+Exit comparison. See [search](search.md) for history-range actions. The pinned
+base survives filters and scope changes within the repository. Comparison uses
+the two commit trees directly, including unrelated histories; it does not
+substitute their merge base. Old/New display options refer to the base/target
+respectively. The existing diff presentation handles renames, binary notices,
+mode changes, symlinks and submodule pointers; it does not expand binary
+contents or submodule history.
 
 Ordinary row selection leaves comparison endpoints fixed. Swap reverses them;
 setting another base or choosing Compare changes with base replaces that
