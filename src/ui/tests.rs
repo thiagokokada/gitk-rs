@@ -3954,6 +3954,47 @@ fn context_menu_sets_range_endpoints_and_removal_restores_repository_position(
         );
         assert!(view.comparison.is_none());
     });
+    let return_depth = cx.update(|_, cx| app.view.read(cx).scope_locations.len());
+    cx.update(|window, cx| window.click("compare-menu", cx));
+    cx.simulate_keystrokes("down enter");
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            let view = app.view.read(cx);
+            view.history_state.snapshot.as_ref().is_some_and(|s| {
+                s.eof && s.source == view.history_state.request.source && s.visible == 0
+            })
+        })
+    });
+    cx.update(|_, cx| {
+        let view = app.view.read(cx);
+        assert_eq!(
+            view.history_state.request.source.scope,
+            HistoryScope::Range {
+                base: target.clone(),
+                target: base.clone()
+            }
+        );
+        assert_eq!(view.comparison_base.as_ref().unwrap().id.to_hex(), target);
+        assert_eq!(view.range_base.read(cx).value().as_ref(), target);
+        assert_eq!(view.range_target.read(cx).value().as_ref(), base);
+        assert_eq!(view.scope_locations.len(), return_depth);
+        assert_eq!(view.detail.as_ref(), "No commits in this history scope.");
+    });
+    cx.update(|window, cx| window.click("compare-menu", cx));
+    cx.simulate_keystrokes("down enter");
+    until(cx, |cx| selected(&app.view, cx).as_deref() == Some(&target));
+    cx.update(|_, cx| {
+        let view = app.view.read(cx);
+        assert_eq!(
+            view.history_state.request.source.scope,
+            HistoryScope::Range {
+                base: base.clone(),
+                target: target.clone()
+            }
+        );
+        assert_eq!(view.comparison_base.as_ref().unwrap().id.to_hex(), base);
+        assert_eq!(view.scope_locations.len(), return_depth);
+    });
     cx.update(|window, cx| window.click("clear-range", cx));
     until(cx, |cx| selected(&app.view, cx).as_deref() == Some(&tip));
     cx.update(|window, cx| {

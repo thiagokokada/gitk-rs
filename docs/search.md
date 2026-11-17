@@ -93,7 +93,8 @@ To choose a history range from rows, use **Set as base** in one commit's context
 menu, then **Show commits between base and here** in the target's context menu.
 The pinned base is shared with comparisons and survives scope/filter changes.
 You can also use **Show commits between base and selection** in its actions
-menu.
+menu. While a range is active, **Base actions… > Swap endpoints** reverses the
+range directly. Removing the range still returns to the preceding scope.
 
 **Commits between…** takes Base and Target: `base..target` includes commits
 reachable from Target and excludes Base's ancestry. Swap reverses that

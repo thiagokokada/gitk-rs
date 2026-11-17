@@ -92,6 +92,7 @@ actions!(
         SetComparisonBase,
         CompareWithBase,
         ShowCommitsWithBase,
+        SwapHistoryRange,
         ClearComparisonBase,
         SwapComparison,
         ExitComparison
@@ -138,7 +139,14 @@ enum DialogKind {
     OpenRepository,
 }
 
+#[derive(Clone)]
+struct RangeCommits {
+    base: Arc<gitk_rs::git::Commit>,
+    target: Arc<gitk_rs::git::Commit>,
+}
+
 struct BrowseLocation {
+    range_commits: Option<RangeCommits>,
     detail: Option<diff_view::DiffLocation>,
     parent_index: usize,
     parent_commit: Option<gitk_rs::git::CommitId>,
@@ -155,6 +163,7 @@ struct Comparison {
 struct HistoryWindow {
     title: String,
     comparison_base: Option<Arc<gitk_rs::git::Commit>>,
+    range_commits: Option<RangeCommits>,
     comparison: Option<Comparison>,
     file_origin: Option<BrowseLocation>,
     file_comparison: Option<Comparison>,
@@ -433,6 +442,7 @@ impl HistoryWindow {
             sync_filter_text: false,
             repository_prompt_pending: false,
             comparison_base: None,
+            range_commits: None,
             comparison: None,
             file_origin: None,
             file_comparison: None,
@@ -581,7 +591,11 @@ impl HistoryWindow {
             self.detail = error.clone().into();
         } else if snapshot.eof && snapshot.visible == 0 {
             self.detail = if snapshot.loaded == 0 {
-                "This repository has no commits."
+                if matches!(snapshot.source.scope, HistoryScope::CurrentHead) {
+                    "This repository has no commits."
+                } else {
+                    "No commits in this history scope."
+                }
             } else {
                 "No matching commits."
             }
@@ -781,6 +795,7 @@ impl HistoryWindow {
 
     fn browse_location(&self, cx: &App) -> BrowseLocation {
         BrowseLocation {
+            range_commits: self.range_commits.clone(),
             detail: self.diff.read(cx).location(),
             parent_index: self.parent_index,
             parent_commit: self.parent_commit.clone(),
@@ -808,6 +823,7 @@ impl HistoryWindow {
         self.filter_task = None;
         self.parent_index = location.parent_index;
         self.parent_commit = location.parent_commit;
+        self.range_commits = location.range_commits;
         if self.comparison.is_none()
             && !self.blame_active
             && let Some(detail) = location.detail
@@ -873,6 +889,32 @@ impl HistoryWindow {
             input.set_value(target.id.to_hex(), window, cx)
         });
         self.apply_range(cx);
+        self.range_commits = Some(RangeCommits { base, target });
+    }
+
+    fn swap_history_range(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.comparison.is_some() {
+            return;
+        }
+        let HistoryScope::Range { base, target } = self.history_state.request.source.scope.clone()
+        else {
+            return;
+        };
+        let commits = self.range_commits.take().filter(|commits| {
+            commits.base.id.to_hex() == base && commits.target.id.to_hex() == target
+        });
+        self.range_base
+            .update(cx, |input, cx| input.set_value(target, window, cx));
+        self.range_target
+            .update(cx, |input, cx| input.set_value(base, window, cx));
+        self.apply_range(cx);
+        if let Some(commits) = commits {
+            self.comparison_base = Some(commits.target.clone());
+            self.range_commits = Some(RangeCommits {
+                base: commits.target,
+                target: commits.base,
+            });
+        }
     }
 
     fn show_comparison(&mut self, cx: &mut Context<Self>) {
@@ -895,6 +937,10 @@ impl HistoryWindow {
     fn comparison_controls(&self) -> Option<AnyElement> {
         let base = self.comparison_base.as_ref()?;
         let comparing = self.comparison.is_some();
+        let has_range = matches!(
+            self.history_state.request.source.scope,
+            HistoryScope::Range { .. }
+        );
         let menu_label = if comparing {
             "Comparison actions…"
         } else {
@@ -962,6 +1008,8 @@ impl HistoryWindow {
                                 menu = menu
                                     .menu("Swap endpoints", Box::new(SwapComparison))
                                     .menu("Exit comparison", Box::new(ExitComparison));
+                            } else if has_range {
+                                menu = menu.menu("Swap endpoints", Box::new(SwapHistoryRange));
                             }
                             let menu = menu.menu("Clear base", Box::new(ClearComparisonBase));
                             if has_target {
@@ -1842,6 +1890,7 @@ impl Render for HistoryWindow {
                     this.show_commits_with_base(Arc::new(entry.commit.clone()), window, cx);
                 }
             }))
+            .on_action(cx.listener(|this, _: &SwapHistoryRange, window, cx| this.swap_history_range(window, cx)))
             .on_action(cx.listener(|this, _: &ExitComparison, window, cx| this.exit_comparison(window, cx)))
             .on_action(cx.listener(|this, _: &ClearComparisonBase, window, cx| {
                 this.exit_comparison(window, cx); this.comparison_base = None; cx.notify();

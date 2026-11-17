@@ -63,6 +63,7 @@ impl HistoryWindow {
         self.parent_metadata.clear();
         self.parent_index = 0;
         self.comparison_base = None;
+        self.range_commits = None;
         self.history_state.request.source.scope = HistoryScope::CurrentHead;
         self.scope_locations.clear();
         self.pending_operation = None;
@@ -126,6 +127,11 @@ impl HistoryWindow {
         let target = self.range_target.read(cx).value().trim().to_string();
         if base.is_empty() || target.is_empty() {
             return;
+        }
+        if self.range_commits.as_ref().is_some_and(|commits| {
+            commits.base.id.to_hex() != base || commits.target.id.to_hex() != target
+        }) {
+            self.range_commits = None;
         }
         if !matches!(
             self.history_state.request.source.scope,
