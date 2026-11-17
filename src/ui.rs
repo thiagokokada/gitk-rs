@@ -88,7 +88,12 @@ actions!(
         OpenPreferences,
         ApplyPreferences,
         ToggleTheme,
-        CopyCommit
+        CopyCommit,
+        SetComparisonBase,
+        CompareWithBase,
+        ClearComparisonBase,
+        SwapComparison,
+        ExitComparison
     ]
 );
 
@@ -132,8 +137,21 @@ enum DialogKind {
     OpenRepository,
 }
 
+struct BrowseLocation {
+    request: Request,
+    restore: gitk_rs::history::Restore,
+}
+
+struct Comparison {
+    base: Arc<gitk_rs::git::Commit>,
+    target: Arc<gitk_rs::git::Commit>,
+    origin: BrowseLocation,
+}
+
 struct HistoryWindow {
     title: String,
+    comparison_base: Option<Arc<gitk_rs::git::Commit>>,
+    comparison: Option<Comparison>,
     config: Config,
     preferences: Preferences,
     preference_dialog: PreferencesDialog,
@@ -325,6 +343,8 @@ impl HistoryWindow {
             restore_focus: false,
             restore_repository_focus: false,
             repository_prompt_pending: false,
+            comparison_base: None,
+            comparison: None,
             branch_dialog,
             preceding_scope: None,
             restore_range_focus: false,
@@ -450,7 +470,7 @@ impl HistoryWindow {
             }
             .into();
         }
-        if update.clear_diff {
+        if update.clear_diff && self.comparison.is_none() {
             let message = if snapshot.error.is_some() {
                 "No commit selected."
             } else {
@@ -580,6 +600,9 @@ impl HistoryWindow {
     }
 
     fn load_selection(&mut self, selection: Selection, cx: &mut Context<Self>) {
+        if self.comparison.is_some() {
+            return;
+        }
         match selection {
             Selection::Commit(entry) => {
                 if self.config.verbose {
@@ -612,6 +635,89 @@ impl HistoryWindow {
                     diff.load_local(self.config.repository.clone(), kind, revision, cx)
                 });
             }
+        }
+    }
+
+    fn browse_location(&self) -> BrowseLocation {
+        BrowseLocation {
+            request: self.history_state.request.clone(),
+            restore: gitk_rs::history::Restore {
+                selected: self
+                    .history_state
+                    .selected
+                    .as_ref()
+                    .map(|s| s.1.commit.id.clone()),
+                top: self
+                    .history_state
+                    .cached(self.history_state.viewport.start)
+                    .map(|e| e.commit.id.clone()),
+            },
+        }
+    }
+
+    fn restore_location(
+        &mut self,
+        location: BrowseLocation,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let generation = self.history_state.request.generation.0 + 1;
+        let id = self.history_state.request.id + 1;
+        self.history_state.request = location.request;
+        self.history_state.request.generation = Generation(generation);
+        self.history_state.request.id = id;
+        self.history_state.request.restore = Some(location.restore);
+        self.history_state.selected = None;
+        self.history_state.snapshot = None;
+        self.history_state.pending_selection = None;
+        self.filter.update(cx, |input, cx| {
+            input.set_value(self.history_state.request.query.clone(), window, cx)
+        });
+        self.submit();
+        self.focus.focus(window, cx);
+        cx.notify();
+    }
+
+    fn pin_comparison(&mut self, commit: Arc<gitk_rs::git::Commit>, cx: &mut Context<Self>) {
+        self.comparison_base = Some(commit.clone());
+        if let Some(comparison) = &mut self.comparison {
+            comparison.base = commit;
+            self.show_comparison(cx);
+        }
+        cx.notify();
+    }
+
+    fn compare_commit(&mut self, target: Arc<gitk_rs::git::Commit>, cx: &mut Context<Self>) {
+        let Some(base) = self.comparison_base.clone() else {
+            return;
+        };
+        let origin = self
+            .comparison
+            .take()
+            .map(|c| c.origin)
+            .unwrap_or_else(|| self.browse_location());
+        self.comparison = Some(Comparison {
+            base,
+            target,
+            origin,
+        });
+        self.show_comparison(cx);
+    }
+
+    fn show_comparison(&mut self, cx: &mut Context<Self>) {
+        if let Some(comparison) = &self.comparison {
+            let base = comparison.base.clone();
+            let target = comparison.target.clone();
+            self.diff.update(cx, |diff, cx| {
+                diff.load_comparison(self.config.repository.clone(), base, target, cx)
+            });
+        }
+        cx.notify();
+    }
+
+    fn exit_comparison(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(comparison) = self.comparison.take() {
+            self.restore_location(comparison.origin, window, cx);
         }
     }
 
@@ -671,7 +777,7 @@ impl HistoryWindow {
         let update = self
             .history_state
             .reload(self.config.repository.clone(), force);
-        if update.clear_diff {
+        if update.clear_diff && self.comparison.is_none() {
             let message = if force {
                 "Reloading repository…"
             } else {
@@ -962,8 +1068,27 @@ impl HistoryWindow {
             )
             .context_menu({
                 let hash = entry.commit.id.to_string();
+                let base = Arc::new(entry.commit.clone());
+                let target = base.clone();
+                let view = cx.entity().downgrade();
                 move |menu, _, _| {
-                    menu.item(PopupMenuItem::new("Copy commit hash").on_click({
+                    menu.item(PopupMenuItem::new("Set as comparison base").on_click({
+                        let view = view.clone();
+                        let base = base.clone();
+                        move |_, _, cx| {
+                            let _ =
+                                view.update(cx, |this, cx| this.pin_comparison(base.clone(), cx));
+                        }
+                    }))
+                    .item(PopupMenuItem::new("Compare with base").on_click({
+                        let view = view.clone();
+                        let target = target.clone();
+                        move |_, _, cx| {
+                            let _ =
+                                view.update(cx, |this, cx| this.compare_commit(target.clone(), cx));
+                        }
+                    }))
+                    .item(PopupMenuItem::new("Copy commit hash").on_click({
                         let hash = hash.clone();
                         move |_, _, cx| {
                             cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(hash.clone()))
@@ -1229,6 +1354,23 @@ impl Render for HistoryWindow {
                 });
                 cx.notify();
             }))
+            .on_action(cx.listener(|this, _: &SetComparisonBase, _, cx| {
+                if let Some((_, entry)) = &this.history_state.selected { this.pin_comparison(Arc::new(entry.commit.clone()), cx); }
+            }))
+            .on_action(cx.listener(|this, _: &CompareWithBase, _, cx| {
+                if let Some((_, entry)) = &this.history_state.selected { this.compare_commit(Arc::new(entry.commit.clone()), cx); }
+            }))
+            .on_action(cx.listener(|this, _: &ExitComparison, window, cx| this.exit_comparison(window, cx)))
+            .on_action(cx.listener(|this, _: &ClearComparisonBase, window, cx| {
+                this.exit_comparison(window, cx); this.comparison_base = None; cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &SwapComparison, _, cx| {
+                if let Some(comparison) = &mut this.comparison {
+                    std::mem::swap(&mut comparison.base, &mut comparison.target);
+                    this.comparison_base = Some(comparison.base.clone());
+                    this.show_comparison(cx);
+                }
+            }))
             .on_action(cx.listener(|this, _: &CopyCommit, _, cx| {
                 if let Some((_, entry)) = &this.history_state.selected {
                     cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(
@@ -1469,7 +1611,19 @@ impl Render for HistoryWindow {
                                     ),
                             ),
                         )
-                        .child(resizable_panel().child(self.diff.clone())),
+                        .child(resizable_panel().child(div().size_full().flex().flex_col()
+                            .child(Button::new("compare-menu").label("Compare changes…").dropdown_menu({
+                                let focus = self.focus.clone();
+                                move |menu, _, _| menu.action_context(focus.clone())
+                                    .menu("Set as comparison base", Box::new(SetComparisonBase))
+                                    .menu("Compare with base", Box::new(CompareWithBase))
+                                    .menu("Swap endpoints", Box::new(SwapComparison))
+                                    .menu("Exit comparison", Box::new(ExitComparison))
+                                    .menu("Clear comparison base", Box::new(ClearComparisonBase))
+                            }))
+                            .when_some(self.comparison_base.as_ref(), |pane, base| pane.child(div().id("pinned-base").test_support().child(format!("Base: {:.12} {}", base.id.to_hex(), base.summary()))))
+                            .when_some(self.comparison.as_ref(), |pane, comparison| pane.child(div().id("comparison-endpoints").test_support().child(format!("{:.12} {} -> {:.12} {}", comparison.base.id.to_hex(), comparison.base.summary(), comparison.target.id.to_hex(), comparison.target.summary()))))
+                            .child(div().flex_1().min_h_0().child(self.diff.clone())))),
                 ),
             )
             .child(

@@ -3581,3 +3581,50 @@ fn range_picker_applies_direction_and_restores_preceding_scope(cx: &mut TestAppC
         )
     });
 }
+
+#[gpui_kit::test]
+fn comparison_pins_endpoints_across_navigation_swaps_and_restores_history(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let root = fixture.commit("root");
+    let tip = fixture.commit("tip");
+    let (app, cx) = open(&fixture, cx);
+    until(cx, |cx| selected(&app.view, cx).as_deref() == Some(&tip));
+    cx.dispatch_action(SetComparisonBase);
+    cx.update(|window, cx| app.view.update(cx, |view, cx| view.select(1, window, cx)));
+    cx.dispatch_action(CompareWithBase);
+    until(cx, |cx| {
+        cx.update(|_, cx| app.view.read(cx).diff.read(cx).has_loaded_selection())
+    });
+    let selection = cx.update(|_, cx| app.view.read(cx).diff.read(cx).selection_id());
+    cx.update(|window, cx| app.view.update(cx, |view, cx| view.select(0, window, cx)));
+    cx.update(|_, cx| {
+        let view = app.view.read(cx);
+        let comparison = view.comparison.as_ref().unwrap();
+        assert_eq!(comparison.base.id.to_hex(), tip);
+        assert_eq!(comparison.target.id.to_hex(), root);
+        assert_eq!(view.diff.read(cx).selection_id(), selection);
+    });
+    cx.dispatch_action(SwapComparison);
+    cx.update(|_, cx| {
+        assert_eq!(
+            app.view
+                .read(cx)
+                .comparison
+                .as_ref()
+                .unwrap()
+                .base
+                .id
+                .to_hex(),
+            root
+        )
+    });
+    cx.dispatch_action(ExitComparison);
+    until(cx, |cx| selected(&app.view, cx).as_deref() == Some(&root));
+    cx.update(|_, cx| {
+        let view = app.view.read(cx);
+        assert!(view.comparison.is_none());
+        assert!(view.comparison_base.is_some());
+    });
+    cx.dispatch_action(ClearComparisonBase);
+    cx.update(|_, cx| assert!(app.view.read(cx).comparison_base.is_none()));
+}

@@ -58,7 +58,13 @@ pub struct FileSection {
 #[derive(Clone)]
 pub enum DiffSource {
     Commit(Arc<Commit>),
-    Local { staged: bool },
+    Compare {
+        base: Arc<Commit>,
+        target: Arc<Commit>,
+    },
+    Local {
+        staged: bool,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -226,6 +232,13 @@ impl DiffDocument {
         let mut max_width = 0;
         let header = match &selection.source {
             DiffSource::Commit(commit) => commit_header(commit),
+            DiffSource::Compare { base, target } => format!(
+                "Compare changes: {} -> {}\nBase: {}\nTarget: {}\n\n",
+                base.id,
+                target.id,
+                base.summary(),
+                target.summary()
+            ),
             DiffSource::Local { staged } => format!(
                 "{}\n\n",
                 if *staged {
@@ -634,6 +647,10 @@ fn diff_args(source: &DiffSource, numstat: bool) -> Vec<OsString> {
                 args.push(parent.to_hex().into());
             }
             args.push(commit.id.to_hex().into());
+        }
+        DiffSource::Compare { base, target } => {
+            args.push(base.id.to_hex().into());
+            args.push(target.id.to_hex().into());
         }
         DiffSource::Local { staged: true } => args.push("--cached".into()),
         DiffSource::Local { staged: false } => args.push("--ours".into()),
@@ -1148,6 +1165,52 @@ mod tests {
                 dark: true,
             },
         }
+    }
+
+    #[test]
+    fn explicit_comparisons_reverse_equal_and_unrelated_trees() {
+        let fixture = Fixture::new();
+        fixture.commit("base");
+        let DiffSource::Commit(base) = selected(&fixture, 1).source else {
+            unreachable!()
+        };
+        fixture.commit("target");
+        let DiffSource::Commit(target) = selected(&fixture, 1).source else {
+            unreachable!()
+        };
+        for (base, target, expected_files) in [
+            (base.clone(), target.clone(), 1),
+            (target.clone(), base.clone(), 1),
+            (base.clone(), base.clone(), 0),
+        ] {
+            let selection = DiffSelection {
+                source: DiffSource::Compare { base, target },
+                ..selected(&fixture, 1)
+            };
+            let mut document = DiffDocument::load(&selection, &cancel()).unwrap();
+            let snapshot = document.page(&page(1)).unwrap();
+            assert_eq!(snapshot.files.len(), expected_files);
+            assert!(
+                snapshot
+                    .lines
+                    .iter()
+                    .any(|l| l.text.contains("Compare changes:"))
+            );
+        }
+        fixture.git(&["checkout", "--orphan", "unrelated"]);
+        fixture.commit("unrelated");
+        let DiffSource::Commit(other) = selected(&fixture, 1).source else {
+            unreachable!()
+        };
+        let selection = DiffSelection {
+            source: DiffSource::Compare {
+                base: other,
+                target,
+            },
+            ..selected(&fixture, 1)
+        };
+        let mut document = DiffDocument::load(&selection, &cancel()).unwrap();
+        assert_eq!(document.page(&page(1)).unwrap().files.len(), 1);
     }
 
     #[test]

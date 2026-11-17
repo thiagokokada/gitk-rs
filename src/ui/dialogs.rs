@@ -48,6 +48,8 @@ impl HistoryWindow {
         self.workspace_generation.0 += 1;
         self.workspace_snapshot = None;
         self.history_state.reset_repository();
+        self.comparison = None;
+        self.comparison_base = None;
         self.history_state.request.source.scope = HistoryScope::CurrentHead;
         self.preceding_scope = None;
         self.pending_operation = None;

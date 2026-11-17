@@ -96,6 +96,7 @@ impl UniformListDecoration for DiffViewport {
 #[derive(PartialEq, Eq)]
 enum DiffIdentity {
     Commit(PathBuf, gitk_rs::git::CommitId),
+    Compare(PathBuf, gitk_rs::git::CommitId, gitk_rs::git::CommitId),
     Local(PathBuf, LocalChangeKind, u64),
 }
 
@@ -274,6 +275,24 @@ impl DiffPane {
             DiffSource::Commit(commit),
             identity,
             "Loading diff…",
+            cx,
+        );
+    }
+
+    pub(super) fn load_comparison(
+        &mut self,
+        repository: PathBuf,
+        base: Arc<Commit>,
+        target: Arc<Commit>,
+        cx: &mut Context<Self>,
+    ) {
+        let identity =
+            DiffIdentity::Compare(repository.clone(), base.id.clone(), target.id.clone());
+        self.load_source(
+            repository,
+            DiffSource::Compare { base, target },
+            identity,
+            "Loading comparison…",
             cx,
         );
     }
