@@ -3690,7 +3690,11 @@ fn merge_parent_selection_reveals_parent_and_returns_to_chosen_parent(cx: &mut T
     fixture.git(&["checkout", "-qb", "side"]);
     std::fs::write(fixture.root().join("side"), "side\n").unwrap();
     fixture.git(&["add", "."]);
-    fixture.git(&["commit", "-qm", "side"]);
+    fixture.git(&[
+        "commit",
+        "-qm",
+        &format!("side {}", "long parent subject ".repeat(20)),
+    ]);
     let side = fixture.git(&["rev-parse", "HEAD"]);
     fixture.git(&["checkout", "main"]);
     std::fs::write(fixture.root().join("main"), "main\n").unwrap();
@@ -3704,7 +3708,32 @@ fn merge_parent_selection_reveals_parent_and_returns_to_chosen_parent(cx: &mut T
         cx.update(|_, cx| app.view.read(cx).parent_metadata.len() == 2)
     });
     let initial = cx.update(|_, cx| app.view.read(cx).diff.read(cx).selection_id());
-    cx.update(|_, cx| app.view.update(cx, |view, cx| view.choose_parent(1, cx)));
+    cx.simulate_resize(size(px(740.), px(850.)));
+    cx.refresh().unwrap();
+    cx.update(|window, cx| {
+        let toolbar = window.find("parent-controls").bounds();
+        let button = window.find("merge-parent").bounds();
+        let go = window.find("go-parent").bounds();
+        let top_gap = button.top().min(go.top()) - toolbar.top();
+        let bottom_gap = toolbar.bottom() - button.bottom().max(go.bottom());
+        assert!(top_gap > px(0.), "{toolbar:?} {button:?} {go:?}");
+        assert!(bottom_gap > px(0.), "{toolbar:?} {button:?} {go:?}");
+        assert!(f32::from(top_gap - bottom_gap).abs() <= 1.);
+        window.click("merge-parent", cx);
+    });
+    until(cx, |cx| {
+        cx.update(|window, _| window.try_find("popup-menu").is_some())
+    });
+    cx.update(|window, _| {
+        let menu = window.find("popup-menu").bounds();
+        for index in 0_usize..2 {
+            let label = window.find(("merge-parent-label", index)).bounds();
+            assert!(label.size.width > px(0.));
+            assert!(label.left() >= menu.left());
+            assert!(label.right() <= menu.right(), "{label:?} {menu:?}");
+        }
+    });
+    cx.simulate_keystrokes("down down enter");
     until(cx, |cx| {
         cx.update(|_, cx| app.view.read(cx).diff.read(cx).has_loaded_selection())
     });

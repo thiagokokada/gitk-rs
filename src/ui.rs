@@ -1027,8 +1027,27 @@ impl HistoryWindow {
         }
     }
 
-    fn parent_controls(&self, cx: &mut Context<Self>) -> AnyElement {
-        let mut bar = div().flex().gap_2();
+    fn parent_controls(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let has_merge = self.comparison.is_none()
+            && self
+                .history_state
+                .selected
+                .as_ref()
+                .is_some_and(|(_, entry)| entry.commit.parents.len() > 1);
+        if !has_merge && self.parent_origin.is_none() {
+            return None;
+        }
+        let mut bar = div()
+            .id("parent-controls")
+            .test_support()
+            .flex()
+            .flex_wrap()
+            .items_center()
+            .flex_shrink_0()
+            .min_w_0()
+            .gap_2()
+            .px_2()
+            .py_1();
         if self.comparison.is_none()
             && let Some((_, entry)) = &self.history_state.selected
             && entry.commit.parents.len() > 1
@@ -1084,15 +1103,35 @@ impl HistoryWindow {
                             index + 1,
                             parent.to_hex()
                         ))
-                        .dropdown_menu(move |mut menu, _, _| {
+                        .dropdown_menu(move |mut menu, window, _| {
+                            let width = (window.viewport_size().width - px(32.)).min(px(640.));
+                            menu = menu.min_w(width).max_w(width);
                             for (i, label) in &choices {
                                 let entity = entity.clone();
                                 let index = *i;
-                                menu = menu.item(PopupMenuItem::new(label.clone()).on_click(
-                                    move |_, _, cx| {
-                                        entity.update(cx, |this, cx| this.choose_parent(index, cx))
-                                    },
-                                ));
+                                let label = label.clone();
+                                menu = menu.item(
+                                    PopupMenuItem::element(move |window, _| {
+                                        let tooltip = label.clone();
+                                        div()
+                                            .id(("merge-parent-label", index))
+                                            .test_support()
+                                            .w((width - window.rem_size() * 2.).max(px(0.)))
+                                            .min_w_0()
+                                            .truncate()
+                                            .child(label.clone())
+                                            .hoverable_tooltip(move |window, cx| {
+                                                wrapped_tooltip(tooltip.clone(), window, cx)
+                                            })
+                                    })
+                                    .on_click(
+                                        move |_, _, cx| {
+                                            entity.update(cx, |this, cx| {
+                                                this.choose_parent(index, cx)
+                                            })
+                                        },
+                                    ),
+                                );
                             }
                             menu
                         }),
@@ -1127,7 +1166,7 @@ impl HistoryWindow {
                 }),
             ));
         }
-        bar.into_any_element()
+        Some(bar.into_any_element())
     }
 
     fn cached(&self, index: usize) -> Option<Arc<Entry>> {
@@ -2084,7 +2123,7 @@ impl Render for HistoryWindow {
                                     this.diff.update(cx, |diff, cx| diff.restore(location, cx));
                                 }
                             }))))
-                            .child(self.parent_controls(cx))
+                            .children(self.parent_controls(cx))
                             .children(self.comparison_controls())
                             .child(div().flex_1().min_h_0().child(self.diff.clone())))),
                 ),
