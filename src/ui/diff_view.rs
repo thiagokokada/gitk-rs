@@ -288,6 +288,23 @@ impl DiffPane {
         );
     }
 
+    pub(super) fn load_parent(
+        &mut self,
+        repository: PathBuf,
+        commit: Arc<Commit>,
+        parent: CommitId,
+        cx: &mut Context<Self>,
+    ) {
+        let identity = DiffIdentity::Compare(repository.clone(), parent.clone(), commit.id.clone());
+        self.load_source(
+            repository,
+            DiffSource::Parent { commit, parent },
+            identity,
+            "Loading parent diff…",
+            cx,
+        );
+    }
+
     pub(super) fn load_file(
         &mut self,
         repository: PathBuf,
@@ -319,6 +336,9 @@ impl DiffPane {
         let (base, target) = match &selection.source {
             DiffSource::Commit(commit) | DiffSource::File { commit, .. } => {
                 (commit.parents.first().cloned(), Some(commit.id.clone()))
+            }
+            DiffSource::Parent { commit, parent } => {
+                (Some(parent.clone()), Some(commit.id.clone()))
             }
             DiffSource::Compare { base, target } => {
                 (Some(base.id.clone()), Some(target.id.clone()))

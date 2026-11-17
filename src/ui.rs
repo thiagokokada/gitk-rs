@@ -153,6 +153,9 @@ struct HistoryWindow {
     comparison_base: Option<Arc<gitk_rs::git::Commit>>,
     comparison: Option<Comparison>,
     file_origin: Option<BrowseLocation>,
+    parent_index: usize,
+    parent_commit: Option<gitk_rs::git::CommitId>,
+    parent_origin: Option<(BrowseLocation, usize)>,
     _file_subscription: Subscription,
     config: Config,
     preferences: Preferences,
@@ -370,6 +373,9 @@ impl HistoryWindow {
             comparison_base: None,
             comparison: None,
             file_origin: None,
+            parent_index: 0,
+            parent_commit: None,
+            parent_origin: None,
             _file_subscription: file_subscription,
             branch_dialog,
             preceding_scope: None,
@@ -631,6 +637,10 @@ impl HistoryWindow {
         }
         match selection {
             Selection::Commit(entry) => {
+                if self.parent_commit.as_ref() != Some(&entry.commit.id) {
+                    self.parent_commit = Some(entry.commit.id.clone());
+                    self.parent_index = 0;
+                }
                 if self.config.verbose {
                     eprintln!(
                         "gitk-rs: selection generation={} commit={} row={}",
@@ -645,7 +655,17 @@ impl HistoryWindow {
                     );
                 }
                 self.diff.update(cx, |diff, cx| {
-                    if let Some(file) = entry.file.clone() {
+                    if entry.commit.parents.len() > 1 {
+                        let parent = entry.commit.parents
+                            [self.parent_index.min(entry.commit.parents.len() - 1)]
+                        .clone();
+                        diff.load_parent(
+                            self.config.repository.clone(),
+                            Arc::new(entry.commit.clone()),
+                            parent,
+                            cx,
+                        );
+                    } else if let Some(file) = entry.file.clone() {
                         diff.load_file(
                             self.config.repository.clone(),
                             Arc::new(entry.commit.clone()),
@@ -754,6 +774,112 @@ impl HistoryWindow {
         if let Some(comparison) = self.comparison.take() {
             self.restore_location(comparison.origin, window, cx);
         }
+    }
+
+    fn choose_parent(&mut self, index: usize, cx: &mut Context<Self>) {
+        if let Some((_, entry)) = &self.history_state.selected {
+            let entry = entry.clone();
+            if index < entry.commit.parents.len() {
+                self.parent_index = index;
+                self.load_selection(Selection::Commit(entry), cx);
+                cx.notify();
+            }
+        }
+    }
+
+    fn parent_controls(&self, cx: &mut Context<Self>) -> AnyElement {
+        let mut bar = div().flex().gap_2();
+        if self.comparison.is_none()
+            && let Some((_, entry)) = &self.history_state.selected
+            && entry.commit.parents.len() > 1
+        {
+            let index = self.parent_index.min(entry.commit.parents.len() - 1);
+            let parent = entry.commit.parents[index].clone();
+            let choices: Vec<_> = entry
+                .commit
+                .parents
+                .iter()
+                .enumerate()
+                .map(|(i, id)| {
+                    let snapshot = self.history_state.snapshot.as_ref();
+                    let summary = snapshot
+                        .and_then(|s| s.rows.iter().find(|e| &e.commit.id == id))
+                        .map(|e| e.commit.summary())
+                        .unwrap_or_default();
+                    let labels = snapshot
+                        .and_then(|s| s.refs.get(id))
+                        .map(|labels| {
+                            labels
+                                .iter()
+                                .map(|l| l.name.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        })
+                        .unwrap_or_default();
+                    (
+                        i,
+                        format!(
+                            "Parent {} {:.12} {} {}",
+                            i + 1,
+                            id.to_hex(),
+                            summary,
+                            labels
+                        ),
+                    )
+                })
+                .collect();
+            let entity = cx.entity();
+            bar = bar
+                .child(
+                    Button::new("merge-parent")
+                        .label(format!(
+                            "Changes relative to: Parent {} {:.12}",
+                            index + 1,
+                            parent.to_hex()
+                        ))
+                        .dropdown_menu(move |mut menu, _, _| {
+                            for (i, label) in &choices {
+                                let entity = entity.clone();
+                                let index = *i;
+                                menu = menu.item(PopupMenuItem::new(label.clone()).on_click(
+                                    move |_, _, cx| {
+                                        entity.update(cx, |this, cx| this.choose_parent(index, cx))
+                                    },
+                                ));
+                            }
+                            menu
+                        }),
+                )
+                .child(
+                    Button::new("go-parent")
+                        .label("Go to parent (reveal ancestry)")
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.parent_origin = Some((this.browse_location(), this.parent_index));
+                            this.history_state.request.source.scope =
+                                HistoryScope::Ref(parent.to_hex());
+                            this.history_state.request.query.clear();
+                            this.history_state.selected = None;
+                            this.history_state.snapshot = None;
+                            this.history_state.request.restore = None;
+                            this.filter
+                                .update(cx, |input, cx| input.set_value("", window, cx));
+                            this.reload(cx);
+                            this.focus.focus(window, cx);
+                        })),
+                );
+        }
+        if self.parent_origin.is_some() {
+            bar = bar.child(Button::new("back-merge").label("Back to merge").on_click(
+                cx.listener(|this, _, window, cx| {
+                    if let Some((origin, index)) = this.parent_origin.take() {
+                        this.parent_commit = origin.restore.selected.clone();
+                        this.parent_index = index;
+                        this.restore_location(origin, window, cx);
+                    }
+                }),
+            ));
+        }
+        bar.into_any_element()
     }
 
     fn cached(&self, index: usize) -> Option<Arc<Entry>> {
@@ -1650,6 +1776,7 @@ impl Render for HistoryWindow {
                             ),
                         )
                         .child(resizable_panel().child(div().size_full().flex().flex_col()
+                            .child(self.parent_controls(cx))
                             .child(Button::new("compare-menu").label("Compare changes…").dropdown_menu({
                                 let focus = self.focus.clone();
                                 move |menu, _, _| menu.action_context(focus.clone())

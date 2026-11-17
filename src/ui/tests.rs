@@ -3661,3 +3661,36 @@ fn file_history_action_returns_to_repository_selection_and_focus(cx: &mut TestAp
     until(cx, |cx| selected(&app.view, cx).as_deref() == Some(&root));
     cx.update(|window, cx| assert!(app.view.read(cx).focus.is_focused(window)));
 }
+
+#[gpui_kit::test]
+fn merge_parent_selection_reveals_parent_and_returns_to_chosen_parent(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    fixture.commit("root");
+    fixture.git(&["checkout", "-qb", "side"]);
+    std::fs::write(fixture.root().join("side"), "side\n").unwrap();
+    fixture.git(&["add", "."]);
+    fixture.git(&["commit", "-qm", "side"]);
+    let side = fixture.git(&["rev-parse", "HEAD"]);
+    fixture.git(&["checkout", "main"]);
+    std::fs::write(fixture.root().join("main"), "main\n").unwrap();
+    fixture.git(&["add", "."]);
+    fixture.git(&["commit", "-qm", "main"]);
+    fixture.git(&["merge", "--no-ff", "side", "-m", "merge"]);
+    let merge = fixture.git(&["rev-parse", "HEAD"]);
+    let (app, cx) = open(&fixture, cx);
+    until(cx, |cx| selected(&app.view, cx).as_deref() == Some(&merge));
+    let initial = cx.update(|_, cx| app.view.read(cx).diff.read(cx).selection_id());
+    cx.update(|_, cx| app.view.update(cx, |view, cx| view.choose_parent(1, cx)));
+    until(cx, |cx| {
+        cx.update(|_, cx| app.view.read(cx).diff.read(cx).has_loaded_selection())
+    });
+    cx.update(|_, cx| assert_ne!(app.view.read(cx).diff.read(cx).selection_id(), initial));
+    cx.update(|window, cx| window.click("go-parent", cx));
+    until(cx, |cx| selected(&app.view, cx).as_deref() == Some(&side));
+    cx.update(|window, cx| window.click("back-merge", cx));
+    until(cx, |cx| selected(&app.view, cx).as_deref() == Some(&merge));
+    cx.update(|window, cx| {
+        assert_eq!(app.view.read(cx).parent_index, 1);
+        assert!(app.view.read(cx).focus.is_focused(window));
+    });
+}

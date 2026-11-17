@@ -58,6 +58,10 @@ pub struct FileSection {
 #[derive(Clone)]
 pub enum DiffSource {
     Commit(Arc<Commit>),
+    Parent {
+        commit: Arc<Commit>,
+        parent: crate::git::CommitId,
+    },
     File {
         commit: Arc<Commit>,
         path: PathBuf,
@@ -237,6 +241,11 @@ impl DiffDocument {
         let mut max_width = 0;
         let header = match &selection.source {
             DiffSource::Commit(commit) | DiffSource::File { commit, .. } => commit_header(commit),
+            DiffSource::Parent { commit, parent } => format!(
+                "Changes relative to parent {}\n{}\n",
+                parent,
+                commit_header(commit)
+            ),
             DiffSource::Compare { base, target } => format!(
                 "Compare changes: {} -> {}\nBase: {}\nTarget: {}\n\n",
                 base.id,
@@ -653,6 +662,10 @@ fn diff_args(source: &DiffSource, numstat: bool) -> Vec<OsString> {
             if let Some(parent) = commit.parents.first() {
                 args.push(parent.to_hex().into());
             }
+            args.push(commit.id.to_hex().into());
+        }
+        DiffSource::Parent { commit, parent } => {
+            args.push(parent.to_hex().into());
             args.push(commit.id.to_hex().into());
         }
         DiffSource::Compare { base, target } => {

@@ -50,6 +50,9 @@ impl HistoryWindow {
         self.history_state.reset_repository();
         self.comparison = None;
         self.file_origin = None;
+        self.parent_origin = None;
+        self.parent_commit = None;
+        self.parent_index = 0;
         self.comparison_base = None;
         self.history_state.request.source.scope = HistoryScope::CurrentHead;
         self.preceding_scope = None;

@@ -33,3 +33,14 @@ This uses Git's single-file `--follow` rename heuristic. Copies, splits and
 ambiguous merges do not have complete identity tracking. File results can skip
 ancestry, so their graph rows are isolated rather than drawing false parent
 edges. Path filters remain substring searches without rename following.
+
+## Merge parents
+
+Merge details offer **Changes relative to: Parent …**. The initial parent is
+Parent 1; selecting another updates the file list and diff together. IDs and
+available loaded subjects/ref labels identify each parent, including octopus
+merges. **Go to parent (reveal ancestry)** explicitly browses the parent's
+ancestry with filters cleared. **Back to merge** restores the previous scope,
+query, viewport, selection and chosen parent. Changing the displayed parent does
+not change the first-parent semantics of path/content searches. Root commits
+continue to use Git's root diff, without hard-coding an empty-tree object ID.
