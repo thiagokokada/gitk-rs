@@ -152,6 +152,8 @@ struct HistoryWindow {
     title: String,
     comparison_base: Option<Arc<gitk_rs::git::Commit>>,
     comparison: Option<Comparison>,
+    file_origin: Option<BrowseLocation>,
+    _file_subscription: Subscription,
     config: Config,
     preferences: Preferences,
     preference_dialog: PreferencesDialog,
@@ -330,6 +332,28 @@ impl HistoryWindow {
                 cx,
             )
         });
+        let file_subscription = cx.subscribe_in(
+            &diff,
+            window,
+            |this, _, action: &diff_view::FileAction, window, cx| {
+                if this.file_origin.is_none() {
+                    this.file_origin = Some(this.browse_location());
+                }
+                this.comparison = None;
+                this.history_state.request.source.scope = HistoryScope::File {
+                    revision: action.revision.clone(),
+                    path: action.path.clone(),
+                };
+                this.history_state.request.query.clear();
+                this.history_state.request.restore = None;
+                this.history_state.selected = None;
+                this.history_state.snapshot = None;
+                this.filter
+                    .update(cx, |input, cx| input.set_value("", window, cx));
+                this.reload(cx);
+                this.focus.focus(window, cx);
+            },
+        );
         Self {
             title: String::new(),
             preferences,
@@ -345,6 +369,8 @@ impl HistoryWindow {
             repository_prompt_pending: false,
             comparison_base: None,
             comparison: None,
+            file_origin: None,
+            _file_subscription: file_subscription,
             branch_dialog,
             preceding_scope: None,
             restore_range_focus: false,
@@ -619,11 +645,20 @@ impl HistoryWindow {
                     );
                 }
                 self.diff.update(cx, |diff, cx| {
-                    diff.load(
-                        self.config.repository.clone(),
-                        Arc::new(entry.commit.clone()),
-                        cx,
-                    )
+                    if let Some(file) = entry.file.clone() {
+                        diff.load_file(
+                            self.config.repository.clone(),
+                            Arc::new(entry.commit.clone()),
+                            file,
+                            cx,
+                        );
+                    } else {
+                        diff.load(
+                            self.config.repository.clone(),
+                            Arc::new(entry.commit.clone()),
+                            cx,
+                        );
+                    }
                 });
             }
             Selection::Local(kind) => {
@@ -1474,6 +1509,9 @@ impl Render for HistoryWindow {
                             this.history_state.request.source.scope = this.preceding_scope.take().unwrap_or_default();
                             this.reload(cx);
                         }))))
+                    .when(self.file_origin.is_some(), |bar| bar.child(Button::new("back-repository-history").label("Back to repository history").on_click(cx.listener(|this, _, window, cx| {
+                        if let Some(origin) = this.file_origin.take() { this.restore_location(origin, window, cx); }
+                    }))))
                     .child(format!("Working tree: {}", self.workspace_snapshot.as_ref().and_then(|s| s.repository.as_ref()).map_or("loading", |r| r.branch.as_str())))
             )
             .child(

@@ -12,7 +12,7 @@ use gitk_rs::{
         DiffSnapshot, DiffSource, DiffVersion, LineKind, SelectionId, TextPoint, TextSelection,
         WordDiff, selection::DisplayText,
     },
-    git::Commit,
+    git::{Commit, CommitId},
 };
 use gpui_kit::component::{
     Sizable,
@@ -96,8 +96,15 @@ impl UniformListDecoration for DiffViewport {
 #[derive(PartialEq, Eq)]
 enum DiffIdentity {
     Commit(PathBuf, gitk_rs::git::CommitId),
+    File(PathBuf, CommitId, PathBuf),
     Compare(PathBuf, gitk_rs::git::CommitId, gitk_rs::git::CommitId),
     Local(PathBuf, LocalChangeKind, u64),
+}
+
+#[derive(Clone)]
+pub(super) struct FileAction {
+    pub revision: CommitId,
+    pub path: PathBuf,
 }
 
 pub(super) struct DiffPane {
@@ -126,6 +133,8 @@ pub(super) struct DiffPane {
     layouts: Rc<RefCell<HashMap<usize, PaintedLine>>>,
     _poll: Task<()>,
 }
+
+impl EventEmitter<FileAction> for DiffPane {}
 
 impl DiffPane {
     #[cfg(test)]
@@ -279,6 +288,69 @@ impl DiffPane {
         );
     }
 
+    pub(super) fn load_file(
+        &mut self,
+        repository: PathBuf,
+        commit: Arc<Commit>,
+        file: gitk_rs::history::file::FileRevision,
+        cx: &mut Context<Self>,
+    ) {
+        let identity = DiffIdentity::File(repository.clone(), commit.id.clone(), file.path.clone());
+        self.load_source(
+            repository,
+            DiffSource::File {
+                commit,
+                path: file.path,
+                old_path: file.old_path,
+            },
+            identity,
+            "Loading historical file…",
+            cx,
+        );
+    }
+
+    fn file_versions(&self, index: usize) -> Vec<(String, FileAction)> {
+        let Some(file) = self.snapshot.as_ref().and_then(|s| s.files.get(index)) else {
+            return Vec::new();
+        };
+        let Some(selection) = &self.current else {
+            return Vec::new();
+        };
+        let (base, target) = match &selection.source {
+            DiffSource::Commit(commit) | DiffSource::File { commit, .. } => {
+                (commit.parents.first().cloned(), Some(commit.id.clone()))
+            }
+            DiffSource::Compare { base, target } => {
+                (Some(base.id.clone()), Some(target.id.clone()))
+            }
+            DiffSource::Local { .. } => return Vec::new(),
+        };
+        let mut versions = Vec::new();
+        for (side, revision, path) in [
+            (
+                "Base / parent",
+                base,
+                file.old_path.as_ref().unwrap_or(&file.path),
+            ),
+            ("Target", target, &file.path),
+        ] {
+            if let Some(revision) = revision {
+                versions.push((
+                    format!(
+                        "Show file history: {side} {:.12}:{}",
+                        revision.to_hex(),
+                        path.to_string_lossy()
+                    ),
+                    FileAction {
+                        revision,
+                        path: path.clone(),
+                    },
+                ));
+            }
+        }
+        versions
+    }
+
     pub(super) fn load_comparison(
         &mut self,
         repository: PathBuf,
@@ -416,6 +488,30 @@ impl DiffPane {
                     })),
             );
         }
+        bar = bar.child(
+            Button::new("file-actions")
+                .small()
+                .label("File actions…")
+                .dropdown_menu({
+                    let entity = cx.entity();
+                    let versions = self
+                        .selected_file
+                        .map(|i| self.file_versions(i))
+                        .unwrap_or_default();
+                    move |mut menu, _, _| {
+                        for (label, action) in &versions {
+                            let entity = entity.clone();
+                            let action = action.clone();
+                            menu = menu.item(PopupMenuItem::new(label.clone()).on_click(
+                                move |_, _, cx| {
+                                    entity.update(cx, |_, cx| cx.emit(action.clone()));
+                                },
+                            ));
+                        }
+                        menu
+                    }
+                }),
+        );
         bar = bar.child("Lines of context:");
         if let Some(input) = &self.context_input {
             bar = bar.child(
@@ -938,6 +1034,8 @@ impl Render for DiffPane {
                                                         this.snapshot.as_ref()?.worktree_root.as_ref()
                                                             .map(|root| root.join(path))
                                                     });
+                                                    let versions = this.file_versions(i);
+                                                    let entity = cx.entity();
                                                     div()
                                                         .id(("diff-file", i))
                                                         .test_support()
@@ -972,7 +1070,11 @@ impl Render for DiffPane {
                                                                 }
                                                             },
                                                         ))
-                                                        .context_menu(move |menu, _, _| {
+                                                        .context_menu(move |mut menu, _, _| {
+                                                            for (label, action) in &versions {
+                                                                let entity = entity.clone(); let action = action.clone();
+                                                                menu = menu.item(PopupMenuItem::new(label.clone()).on_click(move |_, _, cx| { entity.update(cx, |_, cx| cx.emit(action.clone())); }));
+                                                            }
                                                             let menu = if let Some(path) = open_path.clone() {
                                                                 menu.item(
                                                                     PopupMenuItem::new("Open file")

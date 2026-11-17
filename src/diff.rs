@@ -58,6 +58,11 @@ pub struct FileSection {
 #[derive(Clone)]
 pub enum DiffSource {
     Commit(Arc<Commit>),
+    File {
+        commit: Arc<Commit>,
+        path: PathBuf,
+        old_path: Option<PathBuf>,
+    },
     Compare {
         base: Arc<Commit>,
         target: Arc<Commit>,
@@ -231,7 +236,7 @@ impl DiffDocument {
         let mut offset = 0;
         let mut max_width = 0;
         let header = match &selection.source {
-            DiffSource::Commit(commit) => commit_header(commit),
+            DiffSource::Commit(commit) | DiffSource::File { commit, .. } => commit_header(commit),
             DiffSource::Compare { base, target } => format!(
                 "Compare changes: {} -> {}\nBase: {}\nTarget: {}\n\n",
                 base.id,
@@ -632,7 +637,9 @@ pub fn commit_header(commit: &Commit) -> String {
 
 fn diff_args(source: &DiffSource, numstat: bool) -> Vec<OsString> {
     let mut args: Vec<OsString> = match source {
-        DiffSource::Commit(commit) if commit.parents.is_empty() => {
+        DiffSource::Commit(commit) | DiffSource::File { commit, .. }
+            if commit.parents.is_empty() =>
+        {
             vec!["show".into(), "--format=".into()]
         }
         _ => vec!["diff".into()],
@@ -642,7 +649,7 @@ fn diff_args(source: &DiffSource, numstat: bool) -> Vec<OsString> {
         args.extend(["--numstat", "-z"].map(OsString::from));
     }
     match source {
-        DiffSource::Commit(commit) => {
+        DiffSource::Commit(commit) | DiffSource::File { commit, .. } => {
             if let Some(parent) = commit.parents.first() {
                 args.push(parent.to_hex().into());
             }
@@ -704,6 +711,14 @@ impl DiffCommands {
         if command == 0 {
             let mut args = diff_args(&self.source, numstat);
             args.extend(self.options.args(numstat));
+            if let DiffSource::File { path, old_path, .. } = &self.source {
+                args.insert(0, "--literal-pathspecs".into());
+                args.push("--".into());
+                args.push(path.as_os_str().to_owned());
+                if let Some(path) = old_path {
+                    args.push(path.as_os_str().to_owned());
+                }
+            }
             return args;
         }
         let mut args = vec![

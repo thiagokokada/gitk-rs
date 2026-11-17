@@ -8,6 +8,10 @@ pub enum HistoryScope {
     CurrentHead,
     AllBranches,
     Ref(String),
+    File {
+        revision: CommitId,
+        path: std::path::PathBuf,
+    },
     Range {
         base: String,
         target: String,
@@ -20,6 +24,11 @@ impl HistoryScope {
             Self::CurrentHead => "Current HEAD".into(),
             Self::AllBranches => "All branches (local + remote)".into(),
             Self::Ref(name) => name.clone(),
+            Self::File { revision, path } => format!(
+                "File {} at {} (follow renames; skipped ancestry has no edges)",
+                path.to_string_lossy(),
+                revision
+            ),
             Self::Range { base, target } => format!("{base}..{target}"),
         }
     }
@@ -31,6 +40,7 @@ impl HistoryScope {
     ) -> Result<Vec<String>> {
         match self {
             Self::CurrentHead => Ok(repository.head.iter().map(CommitId::to_hex).collect()),
+            Self::File { revision, .. } => Ok(vec![revision.to_hex()]),
             Self::Ref(name) => Ok(vec![resolve_commit(repository, name, cancel)?.to_hex()]),
             Self::Range { base, target } => Ok(vec![format!(
                 "{}..{}",

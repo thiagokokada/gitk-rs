@@ -19,3 +19,17 @@ setting another base or choosing Compare with base replaces that endpoint. Exit
 comparison returns to the scope, query, selected commit and viewport where the
 comparison began. The base remains pinned until cleared. Changing repository
 clears comparisons and their return locations. Menus provide keyboard access.
+
+## File history
+
+Select a file and open **File actions… > Show file history**, or use the file's
+context menu. Choose Target or Base / parent explicitly; for a deleted file,
+choose its last existing parent version. The header identifies the starting
+revision and path. Each result uses its historical filename, and selecting it
+shows that file's change. **Back to repository history** restores your previous
+scope, filter, selection and viewport.
+
+This uses Git's single-file `--follow` rename heuristic. Copies, splits and
+ambiguous merges do not have complete identity tracking. File results can skip
+ancestry, so their graph rows are isolated rather than drawing false parent
+edges. Path filters remain substring searches without rename following.

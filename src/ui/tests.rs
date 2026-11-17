@@ -2619,6 +2619,7 @@ fn graph_paints_a_folded_column_at_the_maximum_lane_limit(cx: &mut TestAppContex
             ..GraphRow::default()
         };
         snapshot.rows[0] = Arc::new(Entry {
+            file: None,
             ordinal: entry.ordinal,
             commit: entry.commit.clone(),
             graph,
@@ -3627,4 +3628,36 @@ fn comparison_pins_endpoints_across_navigation_swaps_and_restores_history(cx: &m
     });
     cx.dispatch_action(ClearComparisonBase);
     cx.update(|_, cx| assert!(app.view.read(cx).comparison_base.is_none()));
+}
+
+#[gpui_kit::test]
+fn file_history_action_returns_to_repository_selection_and_focus(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let root = fixture.commit("root");
+    let tip = fixture.commit("tip");
+    let (app, cx) = open(&fixture, cx);
+    until(cx, |cx| selected(&app.view, cx).as_deref() == Some(&tip));
+    cx.update(|window, cx| app.view.update(cx, |view, cx| view.select(1, window, cx)));
+    cx.update(|_, cx| {
+        let diff = app.view.read(cx).diff.clone();
+        diff.update(cx, |_, cx| {
+            cx.emit(diff_view::FileAction {
+                revision: gitk_rs::git::CommitId::parse(&tip).unwrap(),
+                path: "file.txt".into(),
+            })
+        });
+    });
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            app.view
+                .read(cx)
+                .history_state
+                .snapshot
+                .as_ref()
+                .is_some_and(|s| s.eof && s.rows.iter().all(|e| e.file.is_some()))
+        })
+    });
+    cx.update(|window, cx| window.click("back-repository-history", cx));
+    until(cx, |cx| selected(&app.view, cx).as_deref() == Some(&root));
+    cx.update(|window, cx| assert!(app.view.read(cx).focus.is_focused(window)));
 }

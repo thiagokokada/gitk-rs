@@ -1,5 +1,6 @@
 //! Loaded entries live once in memory. The GUI receives only nearby Arc
 //! references; neither history nor filter results persist on disk.
+pub mod file;
 pub mod scope;
 mod search;
 pub mod view;
@@ -76,6 +77,7 @@ pub struct Restored {
 
 #[derive(Clone, Debug)]
 pub struct Entry {
+    pub file: Option<file::FileRevision>,
     pub ordinal: usize,
     pub commit: Commit,
     pub graph: GraphRow,
@@ -692,6 +694,7 @@ impl LinearReload {
             self.expected = commit.parents[0].clone();
             intern_signatures(&mut commit, &mut self.strings, Some(retained_strings));
             self.entries.push(Arc::new(Entry {
+                file: None,
                 ordinal: self.entries.len(),
                 graph: self.graph.push(&commit),
                 commit,
@@ -730,6 +733,7 @@ struct Session {
     resolved: Vec<String>,
     git_workers: usize,
     stream: Option<CommitStream>,
+    file_stream: Option<file::FileHistory>,
     cancellation: Cancellation,
     entries: Vec<Arc<Entry>>,
     strings: HashSet<Arc<str>>,
@@ -750,22 +754,34 @@ impl Session {
         let repository = Repository::open(&request.source.repository, &cancellation)?;
         let reusable = history_reusable(&repository, &cancellation)?;
         let resolved = request.source.scope.resolve(&repository, &cancellation)?;
-        let stream = if resolved.is_empty() {
-            None
-        } else {
-            Some(CommitStream::open(
+        let stream =
+            if matches!(request.source.scope, HistoryScope::File { .. }) || resolved.is_empty() {
+                None
+            } else {
+                Some(CommitStream::open(
+                    &repository.root,
+                    &resolved,
+                    cancellation.clone(),
+                    request.source.git_workers,
+                )?)
+            };
+        let file_stream = if let HistoryScope::File { revision, path } = &request.source.scope {
+            Some(file::FileHistory::open(
                 &repository.root,
-                &resolved,
+                revision,
+                path,
                 cancellation.clone(),
-                request.source.git_workers,
             )?)
+        } else {
+            None
         };
-        let eof = stream.is_none();
+        let eof = stream.is_none() && file_stream.is_none();
         Ok(Self {
             repository,
             resolved,
             git_workers: request.source.git_workers,
             stream,
+            file_stream,
             cancellation,
             entries: Vec::new(),
             strings: HashSet::new(),
@@ -990,16 +1006,32 @@ impl Session {
             if self.cancellation.load(Ordering::Acquire) {
                 break;
             }
-            let Some(mut commit) = self.stream.as_mut().unwrap().next_commit()? else {
+            let next = if let Some(stream) = self.file_stream.as_mut() {
+                stream.next()?.map(|(commit, file)| (commit, Some(file)))
+            } else {
+                self.stream
+                    .as_mut()
+                    .unwrap()
+                    .next_commit()?
+                    .map(|commit| (commit, None))
+            };
+            let Some((mut commit, file)) = next else {
                 self.eof = true;
                 self.stream = None;
+                self.file_stream = None;
                 break;
             };
             bytes += commit.memory_bytes();
             // Share repeated identities within this history generation. Full
             // messages and exact timestamps remain available for search/details.
             intern_signatures(&mut commit, &mut self.strings, None);
-            let graph = self.graph.push(&commit);
+            let graph = if file.is_some() {
+                let mut isolated = commit.clone();
+                isolated.parents = Box::default();
+                self.graph.push(&isolated)
+            } else {
+                self.graph.push(&commit)
+            };
             let ordinal = self.entries.len();
             if let Some(restore) = &self.restore {
                 for (bookmark, target) in [
@@ -1013,6 +1045,7 @@ impl Session {
             }
             self.search.consider(&commit, ordinal);
             self.entries.push(Arc::new(Entry {
+                file,
                 ordinal,
                 commit,
                 graph,

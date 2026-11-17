@@ -36,6 +36,7 @@ fn page(state: &HistoryViewState, start: usize, count: usize, visible: usize) ->
                 time: "0 +0000".into(),
             };
             Arc::new(Entry {
+                file: None,
                 ordinal,
                 commit: Commit {
                     id: CommitId::parse(&format!("{:040x}", ordinal + 1)).unwrap(),

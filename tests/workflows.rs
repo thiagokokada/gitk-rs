@@ -1036,3 +1036,49 @@ fn revision_ranges_resolve_endpoints_and_search_only_target_exclusive_commits() 
         .contains("unavailable")
     );
 }
+
+#[test]
+fn file_history_follows_multiple_renames_with_raw_paths_and_isolated_graph_rows() {
+    use gitk_rs::{git::CommitId, history::HistoryScope};
+    use std::path::PathBuf;
+    let fixture = Fixture::new();
+    let names = ["old\tname.txt", "middle\nname.txt", "final name.txt"];
+    fs::write(fixture.root().join(names[0]), "original\n").unwrap();
+    fixture.git(&["add", "."]);
+    fixture.git(&["commit", "-qm", "add file"]);
+    let first = fixture.git(&["rev-parse", "HEAD"]);
+    for pair in names.windows(2) {
+        fixture.git(&["mv", "--", pair[0], pair[1]]);
+        fixture.git(&["commit", "-qm", "rename"]);
+    }
+    let tip = fixture.git(&["rev-parse", "HEAD"]);
+    let mut request = history_request(&fixture);
+    request.source.scope = HistoryScope::File {
+        revision: CommitId::parse(&tip).unwrap(),
+        path: names[2].into(),
+    };
+    let engine = HistoryEngine::spawn(request);
+    let snapshot = wait(|| {
+        engine
+            .handle()
+            .take_snapshot()
+            .filter(|s| s.eof || s.error.is_some())
+    });
+    assert!(snapshot.error.is_none(), "{:?}", snapshot.error);
+    assert_eq!(snapshot.loaded, 3);
+    let paths: Vec<_> = snapshot
+        .rows
+        .iter()
+        .map(|e| e.file.as_ref().unwrap().path.clone())
+        .collect();
+    assert_eq!(
+        paths,
+        names.iter().rev().map(PathBuf::from).collect::<Vec<_>>()
+    );
+    assert_eq!(snapshot.rows[2].commit.id.to_hex(), first);
+    assert_eq!(
+        snapshot.rows[0].file.as_ref().unwrap().old_path,
+        Some(names[1].into())
+    );
+    assert!(snapshot.rows.iter().all(|e| !e.graph.incoming));
+}
