@@ -32,6 +32,7 @@ pub enum ScrollTarget {
 
 #[derive(Default)]
 pub struct SnapshotUpdate {
+    pub clear_filter: bool,
     pub clear_diff: bool,
     pub selection: Option<Selection>,
     pub scroll: Option<ScrollTarget>,
@@ -107,6 +108,29 @@ impl HistoryViewState {
         {
             // Keep the current rows and viewport until bookmarks have been found.
             return None;
+        }
+        if self.local_selection.is_none()
+            && snapshot.error.is_none()
+            && snapshot.query_error.is_none()
+            && !self.request.query.trim().is_empty()
+            && self
+                .request
+                .restore
+                .as_ref()
+                .is_some_and(|r| r.selected.is_some())
+            && snapshot
+                .restored
+                .as_ref()
+                .is_some_and(|r| !r.pending && r.selected.is_none())
+        {
+            // Retry the saved commit without the filter before choosing a
+            // fallback row. Retain its bookmarks and reject the old query's pages.
+            self.request.query.clear();
+            return Some(SnapshotUpdate {
+                clear_filter: true,
+                request: Some(self.next_request()),
+                ..Default::default()
+            });
         }
         let mut update = SnapshotUpdate {
             clear_diff: self.local_selection.is_none()

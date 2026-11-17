@@ -475,3 +475,52 @@ fn committing_the_first_staged_changes_does_not_select_a_remaining_local_row() {
     assert_eq!(state.selected.as_ref().unwrap().0, 1);
     assert!(state.local_selection.is_none());
 }
+
+#[test]
+fn failed_filtered_restoration_clears_query_and_retries_saved_bookmarks() {
+    let mut state = loaded();
+    state.request.query = "author:someone".into();
+    state.viewport = 2..7;
+    state.reload(PathBuf::from("repository"), false);
+    let restore = state.request.restore.clone();
+    let mut snapshot = page(&state, 0, 0, 0);
+    snapshot.restored = Some(Restored {
+        selected: None,
+        top: None,
+        pending: false,
+    });
+    let obsolete = snapshot.clone();
+    let update = state.consume_snapshot(snapshot).unwrap();
+    assert!(update.clear_filter);
+    let retry = update.request.unwrap();
+    assert!(retry.query.is_empty());
+    assert_eq!(retry.restore, restore);
+    assert!(state.consume_snapshot(obsolete).is_none());
+    let mut snapshot = page(&state, 0, 10, 10);
+    snapshot.restored = Some(Restored {
+        selected: Some((0, snapshot.rows[0].clone())),
+        top: Some(2),
+        pending: false,
+    });
+    let update = state.consume_snapshot(snapshot).unwrap();
+    assert!(update.selection.is_some());
+    assert_eq!(update.scroll, Some(ScrollTarget::Top(2)));
+    assert!(state.request.restore.is_none());
+}
+
+#[test]
+fn failed_history_request_preserves_filter_for_correction() {
+    let mut state = loaded();
+    state.request.query = "author:someone".into();
+    state.reload(PathBuf::from("repository"), false);
+    let mut snapshot = page(&state, 0, 0, 0);
+    snapshot.error = Some("Missing revision".into());
+    snapshot.restored = Some(Restored {
+        selected: None,
+        top: None,
+        pending: false,
+    });
+    let update = state.consume_snapshot(snapshot).unwrap();
+    assert!(!update.clear_filter);
+    assert_eq!(state.request.query, "author:someone");
+}

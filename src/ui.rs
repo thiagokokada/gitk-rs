@@ -183,6 +183,7 @@ struct HistoryWindow {
     dialog_focus: FocusHandle,
     restore_focus: bool,
     restore_repository_focus: bool,
+    sync_filter_text: bool,
     repository_prompt_pending: bool,
     branch_dialog: BranchDialog,
     scope_locations: Vec<BrowseLocation>,
@@ -428,6 +429,7 @@ impl HistoryWindow {
             dialog_focus: cx.focus_handle(),
             restore_focus: false,
             restore_repository_focus: false,
+            sync_filter_text: false,
             repository_prompt_pending: false,
             comparison_base: None,
             comparison: None,
@@ -547,6 +549,16 @@ impl HistoryWindow {
         let Some(update) = self.history_state.consume_snapshot(snapshot) else {
             return;
         };
+        if update.clear_filter {
+            self.filter_task = None;
+            self.sync_filter_text = true;
+            self.pending_history_activity = Some("Restoring selection…");
+            if let Some(request) = update.request {
+                self.history.request(request);
+            }
+            cx.notify();
+            return;
+        }
         self.pending_history_activity = None;
         let snapshot = self.history_state.snapshot.as_ref().unwrap();
         if self.config.verbose {
@@ -1558,6 +1570,11 @@ impl Render for HistoryWindow {
             || self.dialog.is_none() && self.dialog_focus.is_focused(window)
         {
             self.focus.focus(window, cx);
+        }
+        if std::mem::take(&mut self.sync_filter_text) {
+            let query = self.history_state.request.query.clone();
+            self.filter
+                .update(cx, |input, cx| input.set_value(query, window, cx));
         }
         if std::mem::take(&mut self.restore_repository_focus) {
             self.repository_input

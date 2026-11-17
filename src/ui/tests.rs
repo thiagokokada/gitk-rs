@@ -3754,3 +3754,47 @@ fn blame_opens_attributed_file_and_returns_to_same_version_and_line(cx: &mut Tes
     until(cx, |cx| selected(&app.view, cx).as_deref() == Some(&tip));
     cx.update(|_, cx| assert!(!app.view.read(cx).blame_active));
 }
+
+#[gpui_kit::test]
+fn unavailable_selection_clears_filter_and_shows_the_new_scope(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let root = fixture.commit("root");
+    let main = fixture.commit("main only");
+    fixture.git(&["checkout", "-qb", "side", &root]);
+    let side = fixture.commit("side only");
+    fixture.git(&["checkout", "main"]);
+    let (app, cx) = open(&fixture, cx);
+    until(cx, |cx| selected(&app.view, cx).as_deref() == Some(&main));
+    cx.simulate_keystrokes("/");
+    cx.simulate_input("main only");
+    cx.simulate_keystrokes("enter");
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            app.view
+                .read(cx)
+                .history_state
+                .snapshot
+                .as_ref()
+                .is_some_and(|s| s.visible == 1 && !s.filtering)
+        })
+    });
+    cx.update(|window, cx| {
+        app.view.update(cx, |view, cx| {
+            view.open_scope(window, cx);
+            let index = view
+                .branch_dialog
+                .branches
+                .iter()
+                .position(|s| s == "refs/heads/side")
+                .unwrap();
+            view.switch_branch(index, cx);
+        })
+    });
+    until(cx, |cx| selected(&app.view, cx).as_deref() == Some(&side));
+    cx.update(|_, cx| {
+        let view = app.view.read(cx);
+        assert!(view.history_state.request.query.is_empty());
+        assert!(view.filter.read(cx).value().is_empty());
+        assert_eq!(view.history_state.snapshot.as_ref().unwrap().visible, 2);
+    });
+}

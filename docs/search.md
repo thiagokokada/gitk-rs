@@ -99,3 +99,6 @@ options.
 **Back to previous scope** restores the query, selected commit and viewport
 saved before a scope change. **Go to ref tip** explicitly jumps to the browsed
 ref without changing checkout.
+
+If a saved selection cannot be restored while a filter is active, the filter is
+cleared and restoration retried before choosing a fallback commit.
