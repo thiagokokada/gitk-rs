@@ -91,6 +91,7 @@ actions!(
         CopyCommit,
         SetComparisonBase,
         CompareWithBase,
+        ShowCommitsWithBase,
         ClearComparisonBase,
         SwapComparison,
         ExitComparison
@@ -856,6 +857,24 @@ impl HistoryWindow {
         self.show_comparison(cx);
     }
 
+    fn show_commits_with_base(
+        &mut self,
+        target: Arc<gitk_rs::git::Commit>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(base) = self.comparison_base.clone() else {
+            return;
+        };
+        self.range_base.update(cx, |input, cx| {
+            input.set_value(base.id.to_hex(), window, cx)
+        });
+        self.range_target.update(cx, |input, cx| {
+            input.set_value(target.id.to_hex(), window, cx)
+        });
+        self.apply_range(cx);
+    }
+
     fn show_comparison(&mut self, cx: &mut Context<Self>) {
         if let Some(comparison) = &self.comparison {
             let base = comparison.base.clone();
@@ -876,6 +895,12 @@ impl HistoryWindow {
     fn comparison_controls(&self) -> Option<AnyElement> {
         let base = self.comparison_base.as_ref()?;
         let comparing = self.comparison.is_some();
+        let menu_label = if comparing {
+            "Comparison actions…"
+        } else {
+            "Base actions…"
+        };
+        let has_target = self.history_state.selected.is_some();
         let (id, label) = if let Some(comparison) = &self.comparison {
             (
                 "comparison-endpoints",
@@ -922,13 +947,13 @@ impl HistoryWindow {
                 .child(
                     Button::new("compare-menu")
                         .small()
-                        .accessibility_label("Comparison actions")
+                        .accessibility_label(menu_label.trim_end_matches('…'))
                         .child(
                             div()
                                 .id("comparison-menu-label")
                                 .test_support()
                                 .line_height(gpui_kit::relative(1.))
-                                .child("Comparison actions…"),
+                                .child(menu_label),
                         )
                         .flex_shrink_0()
                         .dropdown_menu(move |menu, _, _| {
@@ -938,7 +963,15 @@ impl HistoryWindow {
                                     .menu("Swap endpoints", Box::new(SwapComparison))
                                     .menu("Exit comparison", Box::new(ExitComparison));
                             }
-                            menu.menu("Clear comparison base", Box::new(ClearComparisonBase))
+                            let menu = menu.menu("Clear base", Box::new(ClearComparisonBase));
+                            if has_target {
+                                menu.menu(
+                                    "Show commits between base and selection",
+                                    Box::new(ShowCommitsWithBase),
+                                )
+                            } else {
+                                menu
+                            }
                         }),
                 )
                 .into_any_element(),
@@ -1450,7 +1483,7 @@ impl HistoryWindow {
                 let view = cx.entity().downgrade();
                 let has_base = self.comparison_base.is_some();
                 move |menu, _, _| {
-                    let menu = menu.item(PopupMenuItem::new("Set as comparison base").on_click({
+                    let menu = menu.item(PopupMenuItem::new("Set as base").on_click({
                         let view = view.clone();
                         let base = base.clone();
                         move |_, _, cx| {
@@ -1459,7 +1492,7 @@ impl HistoryWindow {
                         }
                     }));
                     let menu = if has_base {
-                        menu.item(PopupMenuItem::new("Compare with base").on_click({
+                        menu.item(PopupMenuItem::new("Compare changes with base").on_click({
                             let view = view.clone();
                             let target = target.clone();
                             move |_, _, cx| {
@@ -1467,6 +1500,17 @@ impl HistoryWindow {
                                     .update(cx, |this, cx| this.compare_commit(target.clone(), cx));
                             }
                         }))
+                        .item(
+                            PopupMenuItem::new("Show commits between base and here").on_click({
+                                let view = view.clone();
+                                let target = target.clone();
+                                move |_, window, cx| {
+                                    let _ = view.update(cx, |this, cx| {
+                                        this.show_commits_with_base(target.clone(), window, cx)
+                                    });
+                                }
+                            }),
+                        )
                     } else {
                         menu
                     };
@@ -1753,6 +1797,11 @@ impl Render for HistoryWindow {
             }))
             .on_action(cx.listener(|this, _: &CompareWithBase, _, cx| {
                 if let Some((_, entry)) = &this.history_state.selected { this.compare_commit(Arc::new(entry.commit.clone()), cx); }
+            }))
+            .on_action(cx.listener(|this, _: &ShowCommitsWithBase, window, cx| {
+                if let Some((_, entry)) = &this.history_state.selected {
+                    this.show_commits_with_base(Arc::new(entry.commit.clone()), window, cx);
+                }
             }))
             .on_action(cx.listener(|this, _: &ExitComparison, window, cx| this.exit_comparison(window, cx)))
             .on_action(cx.listener(|this, _: &ClearComparisonBase, window, cx| {

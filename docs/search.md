@@ -89,6 +89,12 @@ restore the ref. The working-tree rows always describe the actual checkout shown
 above history. Use the separate **Switch local branch** menu action to change
 checkout. CLI scope options are listed in `gitk-rs --help`.
 
+To choose a history range from rows, use **Set as base** in one commit's context
+menu, then **Show commits between base and here** in the target's context menu.
+The pinned base is shared with comparisons and survives scope/filter changes.
+You can also use **Show commits between base and selection** in its actions
+menu.
+
 **Commits between…** takes Base and Target: `base..target` includes commits
 reachable from Target and excludes Base's ancestry. Swap reverses that
 direction. Remove range restores the preceding scope. This is commit membership,

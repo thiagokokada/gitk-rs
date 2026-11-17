@@ -29,7 +29,14 @@ impl HistoryScope {
                 path.to_string_lossy().escape_debug(),
                 revision
             ),
-            Self::Range { base, target } => format!("{base}..{target}"),
+            Self::Range { base, target } => {
+                let label = |revision: &str| {
+                    CommitId::parse(revision)
+                        .map(|id| format!("{:.12}", id.to_hex()))
+                        .unwrap_or_else(|_| revision.to_owned())
+                };
+                format!("{}..{}", label(base), label(target))
+            }
         }
     }
 

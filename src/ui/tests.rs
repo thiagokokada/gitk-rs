@@ -1,5 +1,8 @@
 use super::*;
-use gpui_kit::{InputEvent as _, TestAppContext, VisualTestContext, test::TestWindowExt};
+use gpui_kit::{
+    InputEvent as _, TestAppContext, VisualTestContext,
+    test::{TestQueryExt, TestWindowExt},
+};
 #[path = "../test_support.rs"]
 mod test_support;
 pub(super) use test_support::Fixture;
@@ -3871,4 +3874,68 @@ fn comparison_context_actions_and_compact_menu_work_at_narrow_widths(cx: &mut Te
     until(cx, |cx| {
         cx.update(|_, cx| app.view.read(cx).comparison_base.is_none())
     });
+}
+
+#[gpui_kit::test]
+fn context_menu_sets_range_endpoints_and_removal_restores_repository_position(
+    cx: &mut TestAppContext,
+) {
+    let fixture = Fixture::new();
+    let base = fixture.commit("base");
+    let target = fixture.commit("range target");
+    let tip = fixture.commit("current selection");
+    let (app, cx) = open(&fixture, cx);
+    until(cx, |cx| selected(&app.view, cx).as_deref() == Some(&tip));
+    for (index, label) in [
+        (2_usize, "Set as base"),
+        (1_usize, "Show commits between base and here"),
+    ] {
+        cx.update(|window, cx| window.right_click(("commit", index), cx));
+        until(cx, |cx| {
+            cx.update(|window, _| window.try_find("popup-menu").is_some())
+        });
+        let item = cx.update(|window, _| window.find_by_label(label).bounds());
+        cx.simulate_click(item.center(), gpui_kit::Modifiers::default());
+        if index == 2 {
+            until(cx, |cx| {
+                cx.update(|_, cx| {
+                    app.view
+                        .read(cx)
+                        .comparison_base
+                        .as_ref()
+                        .is_some_and(|c| c.id.to_hex() == base)
+                })
+            });
+        }
+    }
+    until(cx, |cx| selected(&app.view, cx).as_deref() == Some(&target));
+    cx.update(|_, cx| {
+        let view = app.view.read(cx);
+        assert_eq!(
+            view.history_state.request.source.scope,
+            HistoryScope::Range {
+                base: base.clone(),
+                target: target.clone()
+            }
+        );
+        assert_eq!(view.history_state.snapshot.as_ref().unwrap().visible, 1);
+        assert_eq!(
+            view.history_state.request.source.scope.label(),
+            format!("{}..{}", &base[..12], &target[..12])
+        );
+        assert!(view.comparison.is_none());
+    });
+    cx.update(|window, cx| window.click("clear-range", cx));
+    until(cx, |cx| selected(&app.view, cx).as_deref() == Some(&tip));
+    cx.update(|window, cx| {
+        let view = app.view.read(cx);
+        assert_eq!(
+            view.history_state.request.source.scope,
+            HistoryScope::CurrentHead
+        );
+        assert_eq!(view.history_state.snapshot.as_ref().unwrap().visible, 3);
+        assert_eq!(view.comparison_base.as_ref().unwrap().id.to_hex(), base);
+        assert!(view.focus.is_focused(window));
+    });
+    assert_eq!(fixture.git(&["rev-parse", "HEAD"]), tip);
 }
