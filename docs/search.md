@@ -94,14 +94,14 @@ menu, then **Show commits between base and here** in the target's context menu.
 The pinned base is shared with comparisons and survives scope/filter changes.
 You can also use **Show commits between base and selection** in its actions
 menu. While a range is active, **Base actions… > Swap endpoints** reverses the
-range directly. **Base actions… > Remove range** returns to the preceding scope.
-Range actions remain available after clearing the pinned base.
+range directly. Removing the range still returns to the preceding scope.
 
-A history range `base..target` includes commits reachable from Target and
-excludes Base's ancestry. Swap reverses that direction. This is commit
-membership, distinct from a tree-to-tree comparison of net file changes. CLI
-`--base` and `--target` must be used together and cannot be combined with other
-scope options.
+**Commits between…** takes Base and Target: `base..target` includes commits
+reachable from Target and excludes Base's ancestry. Swap reverses that
+direction. Remove range restores the preceding scope. This is commit membership,
+distinct from a tree-to-tree comparison of net file changes. CLI `--base` and
+`--target` must be used together and cannot be combined with other scope
+options.
 
 **Back to previous scope** restores the query, selected commit and viewport
 saved before a scope change. **Go to ref tip** explicitly jumps to the browsed

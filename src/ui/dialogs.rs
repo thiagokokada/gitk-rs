@@ -116,9 +116,33 @@ impl HistoryWindow {
         refs.dedup();
         refs.insert(0, "All branches (local + remote)".into());
         refs.insert(0, "Current HEAD".into());
+        refs.push("Commits between…".into());
         self.branch_dialog.set_branches(refs, cx);
         self.operation_message.clear();
         cx.notify();
+    }
+
+    pub(super) fn apply_range(&mut self, cx: &mut Context<Self>) {
+        let base = self.range_base.read(cx).value().trim().to_string();
+        let target = self.range_target.read(cx).value().trim().to_string();
+        if base.is_empty() || target.is_empty() {
+            return;
+        }
+        if self.range_commits.as_ref().is_some_and(|commits| {
+            commits.base.id.to_hex() != base || commits.target.id.to_hex() != target
+        }) {
+            self.range_commits = None;
+        }
+        if !matches!(
+            self.history_state.request.source.scope,
+            HistoryScope::Range { .. }
+        ) {
+            self.scope_locations.push(self.browse_location(cx));
+        }
+        self.history_state.request.source.scope = HistoryScope::Range { base, target };
+        self.dialog = None;
+        self.restore_focus = true;
+        self.reload(cx);
     }
 
     pub(super) fn open_branches(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -143,6 +167,12 @@ impl HistoryWindow {
             let Some(name) = self.branch_dialog.selected(index) else {
                 return;
             };
+            if name == "Commits between…" {
+                self.dialog = Some(DialogKind::Range);
+                self.restore_range_focus = true;
+                cx.notify();
+                return;
+            }
             self.scope_locations.push(self.browse_location(cx));
             self.history_state.request.source.scope = match name.as_str() {
                 "Current HEAD" => HistoryScope::CurrentHead,
@@ -188,6 +218,7 @@ impl HistoryWindow {
         let title = match self.dialog {
             Some(DialogKind::Branches) => "Switch working branch",
             Some(DialogKind::Scope) => "Show commits from…",
+            Some(DialogKind::Range) => "Show commits between…",
             Some(DialogKind::Help) => "Help",
             Some(DialogKind::Preferences) => "Preferences",
             Some(DialogKind::OpenRepository) => "Open repository by path",
@@ -215,6 +246,33 @@ impl HistoryWindow {
                     self.pending_operation.is_some(),
                     cx,
                 );
+            }
+            Some(DialogKind::Range) => {
+                body =
+                    body.child("Base (exclude its ancestry)")
+                        .child(Input::new(&self.range_base))
+                        .child("Target (include its ancestry)")
+                        .child(Input::new(&self.range_target))
+                        .child(format!(
+                            "Show commits reachable from {} that aren't reachable from {}.",
+                            self.range_target.read(cx).value(),
+                            self.range_base.read(cx).value()
+                        ))
+                        .child(Button::new("swap-range").label("Swap endpoints").on_click(
+                            cx.listener(|this, _, window, cx| {
+                                let base = this.range_base.read(cx).value();
+                                let target = this.range_target.read(cx).value();
+                                this.range_base
+                                    .update(cx, |input, cx| input.set_value(target, window, cx));
+                                this.range_target
+                                    .update(cx, |input, cx| input.set_value(base, window, cx));
+                            }),
+                        ))
+                        .child(
+                            Button::new("apply-range")
+                                .label("Show commits")
+                                .on_click(cx.listener(|this, _, _, cx| this.apply_range(cx))),
+                        );
             }
             Some(DialogKind::OpenRepository) => {
                 body = body

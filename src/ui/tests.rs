@@ -3543,6 +3543,67 @@ fn scope_picker_browses_refs_with_keyboard_and_restores_focus(cx: &mut TestAppCo
 }
 
 #[gpui_kit::test]
+fn range_picker_applies_direction_and_restores_preceding_scope(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let root = fixture.commit("root");
+    let tip = fixture.commit("tip");
+    let (app, cx) = open(&fixture, cx);
+    until(cx, |cx| selected(&app.view, cx).as_deref() == Some(&tip));
+    cx.update(|window, cx| {
+        app.view.update(cx, |view, cx| {
+            view.open_scope(window, cx);
+            let index = view
+                .branch_dialog
+                .branches
+                .iter()
+                .position(|s| s == "Commits between…")
+                .unwrap();
+            view.switch_branch(index, cx);
+        })
+    });
+    cx.refresh().unwrap();
+    cx.update(|window, cx| {
+        app.view.update(cx, |view, cx| {
+            assert!(view.range_base.read(cx).focus_handle(cx).is_focused(window));
+            view.range_base
+                .update(cx, |input, cx| input.set_value(root, window, cx));
+            view.range_target.update(cx, |input, cx| {
+                input.set_value("HEAD", window, cx);
+                input.focus(window, cx);
+            });
+        })
+    });
+    cx.simulate_keystrokes("enter");
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            app.view
+                .read(cx)
+                .history_state
+                .snapshot
+                .as_ref()
+                .is_some_and(|s| s.eof && s.loaded == 1)
+        })
+    });
+    cx.update(|window, cx| window.click("clear-range", cx));
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            app.view
+                .read(cx)
+                .history_state
+                .snapshot
+                .as_ref()
+                .is_some_and(|s| s.eof && s.loaded == 2)
+        })
+    });
+    cx.update(|_, cx| {
+        assert_eq!(
+            app.view.read(cx).history_state.request.source.scope,
+            HistoryScope::CurrentHead
+        )
+    });
+}
+
+#[gpui_kit::test]
 fn comparison_pins_endpoints_across_navigation_swaps_and_restores_history(cx: &mut TestAppContext) {
     let fixture = Fixture::new();
     let root = fixture.commit("root");
@@ -3908,12 +3969,10 @@ fn context_menu_sets_range_endpoints_and_removal_restores_repository_position(
             .find_by_label("Show commits between base and selection")
             .bounds();
         let swap = window.find_by_label("Swap endpoints").bounds();
-        let remove = window.find_by_label("Remove range").bounds();
         let clear = window.find_by_label("Clear base").bounds();
         assert!(show.bottom() < swap.top());
-        assert!(swap.bottom() < remove.top());
-        assert!(remove.bottom() < clear.top());
-        assert!(clear.top() - remove.bottom() > remove.top() - swap.bottom());
+        assert!(swap.bottom() < clear.top());
+        assert!(clear.top() - swap.bottom() > swap.top() - show.bottom());
     });
     cx.simulate_keystrokes("down down enter");
     until(cx, |cx| {
@@ -3934,6 +3993,8 @@ fn context_menu_sets_range_endpoints_and_removal_restores_repository_position(
             }
         );
         assert_eq!(view.comparison_base.as_ref().unwrap().id.to_hex(), target);
+        assert_eq!(view.range_base.read(cx).value().as_ref(), target);
+        assert_eq!(view.range_target.read(cx).value().as_ref(), base);
         assert_eq!(view.scope_locations.len(), return_depth);
         assert_eq!(view.detail.as_ref(), "No commits in this history scope.");
     });
@@ -3952,8 +4013,7 @@ fn context_menu_sets_range_endpoints_and_removal_restores_repository_position(
         assert_eq!(view.comparison_base.as_ref().unwrap().id.to_hex(), base);
         assert_eq!(view.scope_locations.len(), return_depth);
     });
-    cx.update(|window, cx| window.click("compare-menu", cx));
-    cx.simulate_keystrokes("down down down enter");
+    cx.update(|window, cx| window.click("clear-range", cx));
     until(cx, |cx| selected(&app.view, cx).as_deref() == Some(&tip));
     cx.update(|window, cx| {
         let view = app.view.read(cx);
@@ -3966,47 +4026,4 @@ fn context_menu_sets_range_endpoints_and_removal_restores_repository_position(
         assert!(view.focus.is_focused(window));
     });
     assert_eq!(fixture.git(&["rev-parse", "HEAD"]), tip);
-}
-
-#[gpui_kit::test]
-fn range_removal_without_a_pinned_base_returns_to_head(cx: &mut TestAppContext) {
-    let fixture = Fixture::new();
-    let base = fixture.commit("base");
-    let tip = fixture.commit("target");
-    let (app, cx) = open(&fixture, cx);
-    until(cx, |cx| selected(&app.view, cx).as_deref() == Some(&tip));
-    // An initial CLI range has no pinned base or saved UI return location.
-    app.view.update(cx, |view, cx| {
-        view.history_state.request.source.scope = HistoryScope::Range {
-            base,
-            target: tip.clone(),
-        };
-        view.reload(cx);
-    });
-    until(cx, |cx| {
-        cx.update(|_, cx| {
-            app.view
-                .read(cx)
-                .history_state
-                .snapshot
-                .as_ref()
-                .is_some_and(|s| s.eof && s.loaded == 1)
-        })
-    });
-    cx.update(|window, cx| window.click("compare-menu", cx));
-    cx.simulate_keystrokes("down down enter");
-    until(cx, |cx| {
-        cx.update(|_, cx| {
-            app.view
-                .read(cx)
-                .history_state
-                .snapshot
-                .as_ref()
-                .is_some_and(|s| {
-                    s.eof && s.source.scope == HistoryScope::CurrentHead && s.visible == 2
-                })
-        })
-    });
-    assert_eq!(selected(&app.view, cx).as_deref(), Some(tip.as_str()));
-    cx.update(|window, cx| assert!(app.view.read(cx).focus.is_focused(window)));
 }

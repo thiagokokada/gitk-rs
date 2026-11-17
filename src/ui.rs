@@ -93,7 +93,6 @@ actions!(
         CompareWithBase,
         ShowCommitsWithBase,
         SwapHistoryRange,
-        RemoveHistoryRange,
         ClearComparisonBase,
         SwapComparison,
         ExitComparison
@@ -135,6 +134,7 @@ enum DialogKind {
     About,
     Branches,
     Scope,
+    Range,
     Preferences,
     OpenRepository,
 }
@@ -197,6 +197,10 @@ struct HistoryWindow {
     repository_prompt_pending: bool,
     branch_dialog: BranchDialog,
     scope_locations: Vec<BrowseLocation>,
+    restore_range_focus: bool,
+    _range_subscriptions: Vec<Subscription>,
+    range_base: Entity<InputState>,
+    range_target: Entity<InputState>,
     repository_input: Entity<InputState>,
     _repository_subscription: Subscription,
     help_scroll: ScrollHandle,
@@ -249,6 +253,22 @@ impl HistoryWindow {
         }
         let preference_dialog = PreferencesDialog::new(&preferences, window, cx);
         let branch_dialog = BranchDialog::new(window, cx);
+        let range_base = cx.new(|cx| InputState::new(window, cx).placeholder("Base ref or commit"));
+        let range_target =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Target ref or commit"));
+        let range_subscriptions = [&range_base, &range_target]
+            .into_iter()
+            .map(|input| {
+                cx.subscribe_in(input, window, |this, _, event, _, cx| {
+                    if matches!(this.dialog, Some(DialogKind::Range)) {
+                        if matches!(event, InputEvent::PressEnter { .. }) {
+                            this.apply_range(cx);
+                        }
+                        cx.notify();
+                    }
+                })
+            })
+            .collect();
         let repository_input = cx.new(|cx| InputState::new(window, cx));
         let repository_subscription =
             cx.subscribe_in(&repository_input, window, |this, _, event, _, cx| {
@@ -440,6 +460,10 @@ impl HistoryWindow {
             attribution_origin: None,
             branch_dialog,
             scope_locations: Vec::new(),
+            restore_range_focus: false,
+            _range_subscriptions: range_subscriptions,
+            range_base,
+            range_target,
             repository_input,
             _repository_subscription: repository_subscription,
             help_scroll: ScrollHandle::new(),
@@ -849,36 +873,26 @@ impl HistoryWindow {
         self.show_comparison(cx);
     }
 
-    fn apply_range(&mut self, base: String, target: String, cx: &mut Context<Self>) {
-        if !matches!(
-            self.history_state.request.source.scope,
-            HistoryScope::Range { .. }
-        ) {
-            self.scope_locations.push(self.browse_location(cx));
-        }
-        if self.range_commits.as_ref().is_some_and(|commits| {
-            commits.base.id.to_hex() != base || commits.target.id.to_hex() != target
-        }) {
-            self.range_commits = None;
-        }
-        self.history_state.request.source.scope = HistoryScope::Range { base, target };
-        self.restore_focus = true;
-        self.reload(cx);
-    }
-
     fn show_commits_with_base(
         &mut self,
         target: Arc<gitk_rs::git::Commit>,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let Some(base) = self.comparison_base.clone() else {
             return;
         };
-        self.apply_range(base.id.to_hex(), target.id.to_hex(), cx);
+        self.range_base.update(cx, |input, cx| {
+            input.set_value(base.id.to_hex(), window, cx)
+        });
+        self.range_target.update(cx, |input, cx| {
+            input.set_value(target.id.to_hex(), window, cx)
+        });
+        self.apply_range(cx);
         self.range_commits = Some(RangeCommits { base, target });
     }
 
-    fn swap_history_range(&mut self, cx: &mut Context<Self>) {
+    fn swap_history_range(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.comparison.is_some() {
             return;
         }
@@ -889,30 +903,17 @@ impl HistoryWindow {
         let commits = self.range_commits.take().filter(|commits| {
             commits.base.id.to_hex() == base && commits.target.id.to_hex() == target
         });
-        self.apply_range(target, base, cx);
+        self.range_base
+            .update(cx, |input, cx| input.set_value(target, window, cx));
+        self.range_target
+            .update(cx, |input, cx| input.set_value(base, window, cx));
+        self.apply_range(cx);
         if let Some(commits) = commits {
             self.comparison_base = Some(commits.target.clone());
             self.range_commits = Some(RangeCommits {
                 base: commits.target,
                 target: commits.base,
             });
-        }
-    }
-
-    fn remove_history_range(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !matches!(
-            self.history_state.request.source.scope,
-            HistoryScope::Range { .. }
-        ) {
-            return;
-        }
-        if let Some(origin) = self.scope_locations.pop() {
-            self.restore_location(origin, window, cx);
-        } else {
-            self.range_commits = None;
-            self.history_state.request.source.scope = HistoryScope::CurrentHead;
-            self.reload(cx);
-            self.focus.focus(window, cx);
         }
     }
 
@@ -934,22 +935,18 @@ impl HistoryWindow {
     }
 
     fn comparison_controls(&self) -> Option<AnyElement> {
-        let base = self.comparison_base.as_ref();
+        let base = self.comparison_base.as_ref()?;
         let comparing = self.comparison.is_some();
         let has_range = matches!(
             self.history_state.request.source.scope,
             HistoryScope::Range { .. }
         );
-        if base.is_none() && !has_range {
-            return None;
-        }
-        let has_base = base.is_some();
         let menu_label = if comparing {
             "Comparison actions…"
         } else {
             "Base actions…"
         };
-        let has_target = has_base && self.history_state.selected.is_some();
+        let has_target = self.history_state.selected.is_some();
         let (id, label) = if let Some(comparison) = &self.comparison {
             (
                 "comparison-endpoints",
@@ -961,15 +958,10 @@ impl HistoryWindow {
                     comparison.target.summary()
                 ),
             )
-        } else if let Some(base) = base {
+        } else {
             (
                 "pinned-base",
                 format!("Base: {:.12} {}", base.id.to_hex(), base.summary()),
-            )
-        } else {
-            (
-                "range-endpoints",
-                format!("Range: {}", self.history_state.request.source.scope.label()),
             )
         };
         let tooltip = label.clone();
@@ -1016,7 +1008,7 @@ impl HistoryWindow {
                                 menu = menu
                                     .menu("Swap endpoints", Box::new(SwapComparison))
                                     .menu("Exit comparison", Box::new(ExitComparison));
-                                if has_target || has_range {
+                                if has_target {
                                     menu = menu.separator();
                                 }
                             }
@@ -1029,17 +1021,10 @@ impl HistoryWindow {
                             if !comparing && has_range {
                                 menu = menu.menu("Swap endpoints", Box::new(SwapHistoryRange));
                             }
-                            if has_range {
-                                menu = menu.menu("Remove range", Box::new(RemoveHistoryRange));
+                            if comparing || has_target || has_range {
+                                menu = menu.separator();
                             }
-                            if has_base {
-                                if comparing || has_target || has_range {
-                                    menu = menu.separator();
-                                }
-                                menu.menu("Clear base", Box::new(ClearComparisonBase))
-                            } else {
-                                menu
-                            }
+                            menu.menu("Clear base", Box::new(ClearComparisonBase))
                         }),
                 )
                 .into_any_element(),
@@ -1611,9 +1596,9 @@ impl HistoryWindow {
                             PopupMenuItem::new("Show commits between base and here").on_click({
                                 let view = view.clone();
                                 let target = target.clone();
-                                move |_, _, cx| {
+                                move |_, window, cx| {
                                     let _ = view.update(cx, |this, cx| {
-                                        this.show_commits_with_base(target.clone(), cx)
+                                        this.show_commits_with_base(target.clone(), window, cx)
                                     });
                                 }
                             }),
@@ -1809,6 +1794,10 @@ impl Render for HistoryWindow {
             self.repository_input
                 .update(cx, |input, cx| input.focus(window, cx));
         }
+        if std::mem::take(&mut self.restore_range_focus) {
+            self.range_base
+                .update(cx, |input, cx| input.focus(window, cx));
+        }
         let started = Instant::now();
         let timing = self.timing.clone();
         let history_ready = self
@@ -1901,13 +1890,12 @@ impl Render for HistoryWindow {
             .on_action(cx.listener(|this, _: &CompareWithBase, _, cx| {
                 if let Some((_, entry)) = &this.history_state.selected { this.compare_commit(Arc::new(entry.commit.clone()), cx); }
             }))
-            .on_action(cx.listener(|this, _: &ShowCommitsWithBase, _, cx| {
+            .on_action(cx.listener(|this, _: &ShowCommitsWithBase, window, cx| {
                 if let Some((_, entry)) = &this.history_state.selected {
-                    this.show_commits_with_base(Arc::new(entry.commit.clone()), cx);
+                    this.show_commits_with_base(Arc::new(entry.commit.clone()), window, cx);
                 }
             }))
-            .on_action(cx.listener(|this, _: &SwapHistoryRange, _, cx| this.swap_history_range(cx)))
-            .on_action(cx.listener(|this, _: &RemoveHistoryRange, window, cx| this.remove_history_range(window, cx)))
+            .on_action(cx.listener(|this, _: &SwapHistoryRange, window, cx| this.swap_history_range(window, cx)))
             .on_action(cx.listener(|this, _: &ExitComparison, window, cx| this.exit_comparison(window, cx)))
             .on_action(cx.listener(|this, _: &ClearComparisonBase, window, cx| {
                 this.exit_comparison(window, cx); this.comparison_base = None; cx.notify();
@@ -2017,6 +2005,11 @@ impl Render for HistoryWindow {
                     .child(Button::new("history-scope")
                         .label(format!("History: {}", self.history_state.request.source.scope.label()))
                         .on_click(cx.listener(|this, _, window, cx| this.open_scope(window, cx))))
+                    .when(matches!(self.history_state.request.source.scope, HistoryScope::Range { .. }), |bar| bar.child(
+                        Button::new("clear-range").label("Remove range").on_click(cx.listener(|this, _, window, cx| {
+                            if let Some(origin) = this.scope_locations.pop() { this.restore_location(origin, window, cx); }
+                            else { this.history_state.request.source.scope = HistoryScope::CurrentHead; this.reload(cx); }
+                        }))))
                     .when(!self.scope_locations.is_empty() && !matches!(self.history_state.request.source.scope, HistoryScope::Range { .. }), |bar| bar.child(Button::new("back-scope").label("Back to previous scope").on_click(cx.listener(|this, _, window, cx| {
                         if let Some(origin) = this.scope_locations.pop() { this.restore_location(origin, window, cx); }
                     }))))
