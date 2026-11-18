@@ -49,6 +49,7 @@ fn page(state: &HistoryViewState, start: usize, count: usize, visible: usize) ->
         })
         .collect();
     Snapshot {
+        comparison: None,
         generation: state.request.generation,
         source: state.request.source.clone(),
         request_id: state.request.id,

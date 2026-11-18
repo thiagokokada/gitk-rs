@@ -168,6 +168,10 @@ pub enum HistoryScope {
     Current,
     AllBranches,
     Reference(String),
+    Compare {
+        base: String,
+        target: String,
+    },
 }
 
 impl HistoryScope {
@@ -176,8 +180,19 @@ impl HistoryScope {
             Self::Current => "Current branch".into(),
             Self::AllBranches => "All branches and tags".into(),
             Self::Reference(name) => reference_label(name),
+            Self::Compare { base, target } => format!(
+                "Commits in {} missing from {}",
+                reference_label(target),
+                reference_label(base)
+            ),
         }
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ComparisonEndpoints {
+    pub base: CommitId,
+    pub target: CommitId,
 }
 
 pub fn reference_label(name: &str) -> String {
@@ -276,8 +291,42 @@ impl Repository {
                 args
             }
             HistoryScope::Reference(name) => vec![self.resolve_commit(name, &cancel)?.to_hex()],
+            HistoryScope::Compare { base, target } => {
+                let endpoints = self.resolve_comparison(base, target, &cancel)?;
+                vec![endpoints.target.to_hex(), format!("^{}", endpoints.base)]
+            }
         };
         CommitStream::open(&self.root, &revisions, cancel, readers).map(Some)
+    }
+
+    pub fn resolve_comparison(
+        &self,
+        base: &str,
+        target: &str,
+        cancel: &Cancellation,
+    ) -> Result<ComparisonEndpoints> {
+        Ok(ComparisonEndpoints {
+            base: self
+                .resolve_commit(base, cancel)
+                .context("resolve comparison base")?,
+            target: self
+                .resolve_commit(target, cancel)
+                .context("resolve comparison target")?,
+        })
+    }
+
+    pub fn comparison_log(
+        &self,
+        endpoints: &ComparisonEndpoints,
+        cancel: Cancellation,
+        readers: usize,
+    ) -> Result<CommitStream> {
+        CommitStream::open(
+            &self.root,
+            &[endpoints.target.to_hex(), format!("^{}", endpoints.base)],
+            cancel,
+            readers,
+        )
     }
 
     pub fn resolve_commit(&self, name: &str, cancel: &Cancellation) -> Result<CommitId> {

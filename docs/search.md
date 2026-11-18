@@ -51,11 +51,11 @@ without reloading. There are no separate glob operators: use `.*` for an
 arbitrary sequence in regex mode.
 
 Path search covers the selected history scope, as does the ordinary history
-list. It matches additions, modifications, deletions, and both sides of
-renames. Merges compare with their first parent, as in the diff view. It does
-not follow a file through earlier names automatically. Paths containing invalid
-UTF-8 are decoded with replacement characters for substring matching. Dates use
-the author's recorded timezone and exclude the boundary day.
+list. It matches additions, modifications, deletions, and both sides of renames.
+Merges compare with their first parent, as in the diff view. It does not follow
+a file through earlier names automatically. Paths containing invalid UTF-8 are
+decoded with replacement characters for substring matching. Dates use the
+author's recorded timezone and exclude the boundary day.
 
 Contents search examines added and removed text lines, excluding the diff's
 headers and unchanged context. Matching is per line, without the leading `+` or

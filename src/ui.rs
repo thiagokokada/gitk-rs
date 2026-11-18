@@ -3,6 +3,7 @@ mod tests;
 
 mod branch_dialog;
 mod colors;
+mod comparison_dialog;
 mod dialogs;
 mod diff_view;
 mod filter_completion;
@@ -126,6 +127,7 @@ enum DialogKind {
     About,
     Branches,
     BrowseReferences,
+    Compare,
     Preferences,
     OpenRepository,
 }
@@ -148,6 +150,8 @@ struct HistoryWindow {
     restore_repository_focus: bool,
     repository_prompt_pending: bool,
     branch_dialog: BranchDialog,
+    comparison_dialog: comparison_dialog::ComparisonDialog,
+    comparison_diff: Option<gitk_rs::diff::ComparisonMode>,
     repository_input: Entity<InputState>,
     _repository_subscription: Subscription,
     help_scroll: ScrollHandle,
@@ -200,6 +204,7 @@ impl HistoryWindow {
         }
         let preference_dialog = PreferencesDialog::new(&preferences, window, cx);
         let branch_dialog = BranchDialog::new(window, cx);
+        let comparison_dialog = comparison_dialog::ComparisonDialog::new(window, cx);
         let repository_input = cx.new(|cx| InputState::new(window, cx));
         let repository_subscription =
             cx.subscribe_in(&repository_input, window, |this, _, event, _, cx| {
@@ -303,6 +308,8 @@ impl HistoryWindow {
             restore_repository_focus: false,
             repository_prompt_pending: false,
             branch_dialog,
+            comparison_dialog,
+            comparison_diff: None,
             repository_input,
             _repository_subscription: repository_subscription,
             help_scroll: ScrollHandle::new(),
@@ -415,14 +422,20 @@ impl HistoryWindow {
         if let Some(error) = &snapshot.error {
             self.detail = error.clone().into();
         } else if snapshot.eof && snapshot.visible == 0 {
-            self.detail = if snapshot.loaded == 0 {
+            self.detail = if snapshot.loaded == 0
+                && matches!(
+                    snapshot.source.scope,
+                    gitk_rs::git::HistoryScope::Compare { .. }
+                ) {
+                "Target has no commits missing from Base."
+            } else if snapshot.loaded == 0 {
                 "This repository has no commits."
             } else {
                 "No matching commits."
             }
             .into();
         }
-        if update.clear_diff {
+        if update.clear_diff && (self.comparison_diff.is_none() || snapshot.error.is_some()) {
             let message = if snapshot.error.is_some() {
                 "No commit selected."
             } else {
@@ -445,7 +458,9 @@ impl HistoryWindow {
                 true
             });
         }
-        if let Some(selection) = update.selection {
+        if self.comparison_diff.is_some() {
+            self.load_comparison(cx);
+        } else if let Some(selection) = update.selection {
             self.load_selection(selection, cx);
         }
         if let Some(scroll) = update.scroll {
@@ -608,6 +623,7 @@ impl HistoryWindow {
         let Some(selection) = self.history_state.select_row(index) else {
             return;
         };
+        self.comparison_diff = None;
         self.focus.focus(window, cx);
         match selection {
             RowSelection::Ready(selection) => self.load_selection(selection, cx),
@@ -1260,6 +1276,12 @@ impl Render for HistoryWindow {
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &CloseDialog, window, cx| {
+                if matches!(this.dialog, Some(DialogKind::BrowseReferences)) && this.comparison_dialog.destination.take().is_some() {
+                    this.dialog = Some(DialogKind::Compare);
+                    this.comparison_dialog.target.update(cx, |input, cx| input.focus(window, cx));
+                    cx.notify();
+                    return;
+                }
                 this.dialog = None;
                 this.focus.focus(window, cx);
                 cx.notify();
@@ -1272,8 +1294,8 @@ impl Render for HistoryWindow {
                 this.branch_dialog.move_selection(true);
                 cx.notify();
             }))
-            .on_action(cx.listener(|this, _: &BranchAccept, _, cx| {
-                this.switch_branch(this.branch_dialog.index, cx)
+            .on_action(cx.listener(|this, _: &BranchAccept, window, cx| {
+                this.switch_branch(this.branch_dialog.index, window, cx)
             }))
             .on_action(cx.listener(|this, _: &Reload, _, cx| this.reload(cx)))
             .on_action(cx.listener(|this, _: &ForceReload, _, cx| this.force_reload(cx)))
@@ -1340,6 +1362,7 @@ impl Render for HistoryWindow {
                     )
             )
             .child(self.history_scope_control(cx))
+            .when(matches!(self.history_state.request.source.scope, gitk_rs::git::HistoryScope::Compare { .. }), |view| view.child(self.comparison_controls(cx)))
             .children(search_feedback(self.filter.read(cx).value().as_ref(), self.history_state.request.regex, self.query_error(cx), palette))
             .child(
                 div().flex_1().min_h_0().child(

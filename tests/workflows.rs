@@ -1002,3 +1002,183 @@ fn changing_scope_discards_stale_results_and_reports_deleted_references() {
     assert!(recovered.error.is_none());
     assert_eq!(recovered.loaded, 1);
 }
+
+#[test]
+fn comparisons_share_resolved_endpoints_and_distinguish_aggregate_diff_modes() {
+    use gitk_rs::{diff::ComparisonMode, git::HistoryScope};
+    let fixture = Fixture::new();
+    let root = fixture.commit("shared");
+    fixture.git(&["checkout", "-qb", "feature"]);
+    let feature = fixture.commit("feature change");
+    fixture.git(&["checkout", "-q", "main"]);
+    fs::write(fixture.root().join("main.txt"), "main only\n").unwrap();
+    fixture.git(&["add", "main.txt"]);
+    fixture.git(&["commit", "-qm", "main change"]);
+    let main = fixture.git(&["rev-parse", "HEAD"]);
+    let mut request = history_request(&fixture);
+    request.source.scope = HistoryScope::Compare {
+        base: "main".into(),
+        target: "feature".into(),
+    };
+    let history = HistoryEngine::spawn(request.clone());
+    let handle = history.handle();
+    let snapshot = wait(|| handle.take_snapshot().filter(|s| s.eof));
+    assert!(snapshot.error.is_none(), "{:?}", snapshot.error);
+    assert_eq!(snapshot.loaded, 1);
+    assert_eq!(snapshot.rows[0].commit.id.to_hex(), feature);
+    let endpoints = snapshot.comparison.unwrap();
+    assert_eq!(endpoints.base.to_hex(), main);
+    assert_eq!(endpoints.target.to_hex(), feature);
+    // Move the reference after loading history: the diff must use the captured IDs.
+    fixture.git(&["update-ref", "refs/heads/feature", &root]);
+    let diff = DiffEngine::spawn();
+    let diff_handle = diff.handle();
+    for (id, mode, expected_files) in [
+        (1, ComparisonMode::Endpoints, vec!["file.txt", "main.txt"]),
+        (2, ComparisonMode::SinceMergeBase, vec!["file.txt"]),
+    ] {
+        diff_handle.select(
+            DiffSelection {
+                options: Default::default(),
+                id: SelectionId(id),
+                repository: fixture.root().into(),
+                source: DiffSource::Comparison {
+                    endpoints: endpoints.clone(),
+                    mode,
+                },
+            },
+            diff_page(id),
+        );
+        let diff = wait(|| {
+            diff_handle
+                .take_snapshot()
+                .filter(|s| s.selection == SelectionId(id) && !s.highlighting)
+        });
+        assert!(diff.error.is_none(), "{:?}", diff.error);
+        let actual: Vec<_> = diff
+            .files
+            .iter()
+            .map(|f| f.path.to_str().unwrap())
+            .collect();
+        assert_eq!(actual, expected_files);
+    }
+    // Reversing direction exposes main's commit, while equal endpoints are empty.
+    for (base, target, expected) in [("feature", "main", 1), ("main", "main", 0)] {
+        fixture.git(&["update-ref", "refs/heads/feature", &feature]);
+        request.source.scope = HistoryScope::Compare {
+            base: base.into(),
+            target: target.into(),
+        };
+        request.generation.0 += 1;
+        handle.request(request.clone());
+        let snapshot = wait(|| {
+            handle
+                .take_snapshot()
+                .filter(|s| s.generation == request.generation && s.eof)
+        });
+        assert!(snapshot.error.is_none());
+        assert_eq!(snapshot.loaded, expected);
+        if expected == 1 {
+            assert_eq!(snapshot.rows[0].commit.id.to_hex(), main);
+        }
+    }
+    assert_eq!(fixture.git(&["branch", "--show-current"]), "main");
+}
+
+#[test]
+fn unrelated_comparisons_report_merge_base_error_and_recover_with_endpoints() {
+    use gitk_rs::{
+        diff::ComparisonMode,
+        git::{CommitId, ComparisonEndpoints},
+    };
+    let fixture = Fixture::new();
+    let main = fixture.commit("main root");
+    fixture.git(&["checkout", "--orphan", "unrelated"]);
+    let target = fixture.commit("unrelated root");
+    let endpoints = ComparisonEndpoints {
+        base: CommitId::parse(&main).unwrap(),
+        target: CommitId::parse(&target).unwrap(),
+    };
+    let diff = DiffEngine::spawn();
+    let handle = diff.handle();
+    for (id, mode) in [
+        (1, ComparisonMode::SinceMergeBase),
+        (2, ComparisonMode::Endpoints),
+    ] {
+        handle.select(
+            DiffSelection {
+                options: Default::default(),
+                id: SelectionId(id),
+                repository: fixture.root().into(),
+                source: DiffSource::Comparison {
+                    endpoints: endpoints.clone(),
+                    mode,
+                },
+            },
+            diff_page(id),
+        );
+        let snapshot = wait(|| {
+            handle
+                .take_snapshot()
+                .filter(|s| s.selection == SelectionId(id) && !s.highlighting)
+        });
+        if id == 1 {
+            assert!(snapshot.error.unwrap().contains("no common ancestor"));
+        } else {
+            assert!(snapshot.error.is_none());
+            assert_eq!(snapshot.files.len(), 1);
+        }
+    }
+}
+
+#[test]
+fn ambiguous_merge_bases_require_an_explicit_endpoint_comparison() {
+    use gitk_rs::{
+        diff::ComparisonMode,
+        git::{CommitId, ComparisonEndpoints},
+    };
+    let fixture = Fixture::new();
+    let root = fixture.commit("root");
+    let tree = fixture.git(&["rev-parse", "HEAD^{tree}"]);
+    let left = fixture.git(&["commit-tree", &tree, "-p", &root, "-m", "left"]);
+    let right = fixture.git(&["commit-tree", &tree, "-p", &root, "-m", "right"]);
+    let base = fixture.git(&[
+        "commit-tree",
+        &tree,
+        "-p",
+        &left,
+        "-p",
+        &right,
+        "-m",
+        "left merge",
+    ]);
+    let target = fixture.git(&[
+        "commit-tree",
+        &tree,
+        "-p",
+        &right,
+        "-p",
+        &left,
+        "-m",
+        "right merge",
+    ]);
+    let diff = DiffEngine::spawn();
+    let handle = diff.handle();
+    handle.select(
+        DiffSelection {
+            options: Default::default(),
+            id: SelectionId(1),
+            repository: fixture.root().into(),
+            source: DiffSource::Comparison {
+                endpoints: ComparisonEndpoints {
+                    base: CommitId::parse(&base).unwrap(),
+                    target: CommitId::parse(&target).unwrap(),
+                },
+                mode: ComparisonMode::SinceMergeBase,
+            },
+        },
+        diff_page(1),
+    );
+    let snapshot = wait(|| handle.take_snapshot().filter(|s| s.error.is_some()));
+    assert!(snapshot.error.unwrap().contains("multiple merge bases"));
+}

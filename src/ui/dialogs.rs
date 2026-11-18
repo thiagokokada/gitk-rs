@@ -47,6 +47,7 @@ impl HistoryWindow {
         self.config.repository = std::path::absolute(&path).unwrap_or(path);
         self.workspace_generation.0 += 1;
         self.workspace_snapshot = None;
+        self.comparison_diff = None;
         self.history_state.request.source.scope = Default::default();
         self.history_state.reset_repository();
         self.pending_operation = None;
@@ -104,7 +105,16 @@ impl HistoryWindow {
             .child("History:")
             .child(
                 Button::new("history-scope")
-                    .label(self.history_state.request.source.scope.label())
+                    .label(
+                        if matches!(
+                            self.history_state.request.source.scope,
+                            gitk_rs::git::HistoryScope::Compare { .. }
+                        ) {
+                            "Branch comparison".into()
+                        } else {
+                            self.history_state.request.source.scope.label()
+                        },
+                    )
                     .dropdown_menu(move |menu, _, _| {
                         let current = view.clone();
                         let all = view.clone();
@@ -142,6 +152,11 @@ impl HistoryWindow {
                         )
                     }),
             )
+            .child(
+                Button::new("open-comparison")
+                    .label("Compare…")
+                    .on_click(cx.listener(|this, _, window, cx| this.open_comparison(window, cx))),
+            )
             .into_any_element()
     }
 
@@ -156,6 +171,8 @@ impl HistoryWindow {
     }
 
     fn apply_history_scope(&mut self, scope: gitk_rs::git::HistoryScope, cx: &mut Context<Self>) {
+        self.comparison_diff = matches!(scope, gitk_rs::git::HistoryScope::Compare { .. })
+            .then_some(gitk_rs::diff::ComparisonMode::Endpoints);
         self.history_state.request.source.scope = scope;
         self.history_state.reset_repository();
         if let Some(snapshot) = &self.workspace_snapshot {
@@ -171,6 +188,7 @@ impl HistoryWindow {
     }
 
     pub(super) fn open_history_references(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.comparison_dialog.destination = None;
         self.dialog = Some(DialogKind::BrowseReferences);
         self.dialog_focus.focus(window, cx);
         self.branch_dialog.reset(window, cx);
@@ -188,12 +206,34 @@ impl HistoryWindow {
         cx.notify();
     }
 
-    pub(super) fn switch_branch(&mut self, index: usize, cx: &mut Context<Self>) {
+    pub(super) fn switch_branch(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if matches!(self.dialog, Some(DialogKind::BrowseReferences)) {
             if self.pending_operation.is_none()
                 && let Some(name) = self.branch_dialog.selected(index)
             {
-                self.apply_history_scope(gitk_rs::git::HistoryScope::Reference(name), cx);
+                if let Some(side) = self.comparison_dialog.destination.take() {
+                    let input = match side {
+                        comparison_dialog::ComparisonSide::Base => {
+                            self.comparison_dialog.base.clone()
+                        }
+                        comparison_dialog::ComparisonSide::Target => {
+                            self.comparison_dialog.target.clone()
+                        }
+                    };
+                    input.update(cx, |input, cx| {
+                        input.set_value(name, window, cx);
+                        input.focus(window, cx);
+                    });
+                    self.dialog = Some(DialogKind::Compare);
+                    cx.notify();
+                } else {
+                    self.apply_history_scope(gitk_rs::git::HistoryScope::Reference(name), cx);
+                }
             }
             return;
         }
@@ -231,6 +271,7 @@ impl HistoryWindow {
         let title = match self.dialog {
             Some(DialogKind::Branches) => "Switch local branch",
             Some(DialogKind::BrowseReferences) => "Browse branch or tag",
+            Some(DialogKind::Compare) => "Compare branches or revisions",
             Some(DialogKind::Help) => "Help",
             Some(DialogKind::Preferences) => "Preferences",
             Some(DialogKind::OpenRepository) => "Open repository by path",
@@ -258,6 +299,9 @@ impl HistoryWindow {
                     self.pending_operation.is_some(),
                     cx,
                 );
+            }
+            Some(DialogKind::Compare) => {
+                body = self.comparison_dialog.render(body, cx);
             }
             Some(DialogKind::OpenRepository) => {
                 body = body

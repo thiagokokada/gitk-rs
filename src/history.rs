@@ -97,6 +97,7 @@ pub type Refs = HashMap<CommitId, Vec<RefLabel>>;
 
 #[derive(Clone, Debug)]
 pub struct Snapshot {
+    pub comparison: Option<crate::git::ComparisonEndpoints>,
     pub generation: Generation,
     pub source: HistorySource,
     pub request_id: u64,
@@ -335,6 +336,7 @@ fn run(shared: Arc<Shared>) {
 
 fn empty_snapshot(request: &Request, error: Option<String>) -> Snapshot {
     Snapshot {
+        comparison: None,
         generation: request.generation,
         source: request.source.clone(),
         request_id: request.id,
@@ -725,6 +727,7 @@ struct Bookmarks {
 }
 
 struct Session {
+    comparison: Option<crate::git::ComparisonEndpoints>,
     repository: Repository,
     git_workers: usize,
     stream: Option<CommitStream>,
@@ -747,13 +750,27 @@ impl Session {
     fn open(request: &Request, cancellation: Cancellation) -> Result<Self> {
         let repository = Repository::open(&request.source.repository, &cancellation)?;
         let reusable = history_reusable(&repository, &cancellation)?;
-        let stream = repository.scoped_log(
-            &request.source.scope,
-            cancellation.clone(),
-            request.source.git_workers,
-        )?;
+        let comparison =
+            if let crate::git::HistoryScope::Compare { base, target } = &request.source.scope {
+                Some(repository.resolve_comparison(base, target, &cancellation)?)
+            } else {
+                None
+            };
+        let stream = match &comparison {
+            Some(endpoints) => Some(repository.comparison_log(
+                endpoints,
+                cancellation.clone(),
+                request.source.git_workers,
+            )?),
+            None => repository.scoped_log(
+                &request.source.scope,
+                cancellation.clone(),
+                request.source.git_workers,
+            )?,
+        };
         let eof = stream.is_none();
         Ok(Self {
+            comparison,
             repository,
             git_workers: request.source.git_workers,
             stream,
@@ -1068,6 +1085,7 @@ impl Session {
             })
             .collect();
         Snapshot {
+            comparison: self.comparison.clone(),
             generation: request.generation,
             source: request.source.clone(),
             request_id: request.id,

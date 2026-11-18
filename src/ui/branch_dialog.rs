@@ -16,12 +16,14 @@ impl BranchDialog {
         let branch_subscription = cx.subscribe_in(
             &branch_filter,
             window,
-            |this, _, event, _, cx| match event {
+            |this, _, event, window, cx| match event {
                 InputEvent::Change => {
                     this.branch_dialog.filter(cx);
                     cx.notify();
                 }
-                InputEvent::PressEnter { .. } => this.switch_branch(this.branch_dialog.index, cx),
+                InputEvent::PressEnter { .. } => {
+                    this.switch_branch(this.branch_dialog.index, window, cx)
+                }
                 _ => {}
             },
         );
@@ -86,8 +88,8 @@ impl BranchDialog {
                                                 },
                                             )
                                             .cursor_pointer()
-                                            .on_click(cx.listener(move |this, _, _, cx| {
-                                                this.switch_branch(i, cx)
+                                            .on_click(cx.listener(move |this, _, window, cx| {
+                                                this.switch_branch(i, window, cx)
                                             }))
                                     })
                                     .collect::<Vec<_>>()
