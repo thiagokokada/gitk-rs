@@ -49,6 +49,7 @@ impl HistoryWindow {
         self.workspace_snapshot = None;
         self.comparison_diff = None;
         self.comparison_base = None;
+        self.file_history_return = None;
         self.history_state.request.source.scope = Default::default();
         self.history_state.reset_repository();
         self.pending_operation = None;
@@ -136,6 +137,9 @@ impl HistoryWindow {
     }
 
     fn apply_history_scope(&mut self, scope: gitk_rs::git::HistoryScope, cx: &mut Context<Self>) {
+        if !matches!(scope, gitk_rs::git::HistoryScope::File(_)) {
+            self.file_history_return = None;
+        }
         self.comparison_diff = matches!(scope, gitk_rs::git::HistoryScope::Compare { .. })
             .then_some(gitk_rs::diff::ComparisonMode::Endpoints);
         self.history_state.request.source.scope = scope;
