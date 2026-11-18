@@ -949,6 +949,21 @@ impl DiffHandle {
         self.shared.changed.notify_one();
     }
 
+    pub fn initial_follow_renames(&self) -> bool {
+        self.shared.initial_state.follow_renames
+    }
+
+    pub fn save_follow_renames(&self, follow_renames: bool) {
+        if self.shared.options_path.is_none() {
+            return;
+        }
+        let mut mailbox = self.shared.mailbox.lock().unwrap();
+        mailbox.state.follow_renames = follow_renames;
+        mailbox.save_state = true;
+        drop(mailbox);
+        self.shared.changed.notify_one();
+    }
+
     pub fn initial_search(&self) -> options::Search {
         self.shared.initial_state.search
     }

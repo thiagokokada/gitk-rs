@@ -134,7 +134,7 @@ impl HistoryWindow {
             )
             .child(
                 Button::new("clear-comparison-base")
-                    .label("Clear")
+                    .label("Clear base")
                     .tooltip("Clear the marked base for future comparisons.")
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.comparison_base = None;
@@ -196,6 +196,7 @@ impl HistoryWindow {
             return;
         }
         self.set_history_scope(HistoryScope::Compare { base, target }, window, cx);
+        self.comparison_diff = Some(ComparisonMode::SinceMergeBase);
     }
 
     pub(super) fn comparison_controls(&self, cx: &mut Context<Self>) -> AnyElement {

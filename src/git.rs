@@ -15,7 +15,9 @@ use std::{
 };
 
 mod commit_pool;
+mod file_history;
 use commit_pool::CommitPool;
+use file_history::FileStream;
 
 pub const DEFAULT_GIT_WORKERS: usize = 4;
 pub const MAX_GIT_WORKERS: usize = 8;
@@ -168,6 +170,7 @@ pub enum HistoryScope {
     Current,
     AllBranches,
     Reference(String),
+    File(FileHistory),
     Compare {
         base: String,
         target: String,
@@ -180,6 +183,14 @@ impl HistoryScope {
             Self::Current => "Current branch".into(),
             Self::AllBranches => "All branches and tags".into(),
             Self::Reference(name) => reference_label(name),
+            Self::File(history) => format!(
+                "File: {} at {}",
+                history.path.to_string_lossy().escape_debug(),
+                history
+                    .revision
+                    .as_ref()
+                    .map_or_else(|| "HEAD".into(), |id| id.to_hex()[..7].to_owned())
+            ),
             Self::Compare { base, target } => format!(
                 "Commits in {} missing from {}",
                 reference_label(target),
@@ -187,6 +198,14 @@ impl HistoryScope {
             ),
         }
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FileHistory {
+    pub path: PathBuf,
+    /// None follows the worktree's current HEAD; Some pins a displayed revision.
+    pub revision: Option<CommitId>,
+    pub follow_renames: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -294,6 +313,18 @@ impl Repository {
                 args
             }
             HistoryScope::Reference(name) => vec![self.resolve_commit(name, &cancel)?.to_hex()],
+            HistoryScope::File(history) => {
+                let Some(revision) = history.revision.as_ref().or(self.head.as_ref()) else {
+                    return Ok(None);
+                };
+                return Ok(Some(CommitStream {
+                    source: CommitSource::File(FileStream::open(
+                        &self.root, revision, history, cancel,
+                    )?),
+                    root: self.root.clone(),
+                    record_buffer: Vec::new(),
+                }));
+            }
             HistoryScope::Compare { base, target } => {
                 let endpoints = self.resolve_comparison(base, target, &cancel)?;
                 vec![endpoints.target.to_hex(), format!("^{}", endpoints.base)]
@@ -695,6 +726,7 @@ pub struct CommitStream {
 }
 
 enum CommitSource {
+    File(FileStream),
     Pretty(GitStream),
     Single {
         traversal: GitStream,
@@ -760,8 +792,16 @@ impl CommitStream {
         })
     }
 
+    pub fn file_path(&self) -> Option<Arc<Path>> {
+        match &self.source {
+            CommitSource::File(stream) => stream.file_path(),
+            _ => None,
+        }
+    }
+
     pub fn next_commit(&mut self) -> Result<Option<Commit>> {
         match &mut self.source {
+            CommitSource::File(stream) => stream.next_commit(),
             CommitSource::Pretty(reader) => reader.next_commit(),
             CommitSource::Pool(pool) => pool.next_commit(),
             CommitSource::Single { traversal, reader } => {

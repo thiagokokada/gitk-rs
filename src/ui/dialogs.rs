@@ -49,6 +49,7 @@ impl HistoryWindow {
         self.workspace_snapshot = None;
         self.comparison_diff = None;
         self.comparison_base = None;
+        self.file_history_return = None;
         self.history_state.request.source.scope = Default::default();
         self.history_state.reset_repository();
         self.pending_operation = None;
@@ -115,12 +116,20 @@ impl HistoryWindow {
                     .label("Compare…")
                     .on_click(cx.listener(|this, _, window, cx| this.open_comparison(window, cx))),
             )
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .child(self.history_state.request.source.scope.label()),
+            .when(
+                !matches!(
+                    self.history_state.request.source.scope,
+                    gitk_rs::git::HistoryScope::File(_)
+                ),
+                |bar| {
+                    bar.child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .child(self.history_state.request.source.scope.label()),
+                    )
+                },
             )
             .into_any_element()
     }
@@ -136,6 +145,9 @@ impl HistoryWindow {
     }
 
     fn apply_history_scope(&mut self, scope: gitk_rs::git::HistoryScope, cx: &mut Context<Self>) {
+        if !matches!(scope, gitk_rs::git::HistoryScope::File(_)) {
+            self.file_history_return = None;
+        }
         self.comparison_diff = matches!(scope, gitk_rs::git::HistoryScope::Compare { .. })
             .then_some(gitk_rs::diff::ComparisonMode::Endpoints);
         self.history_state.request.source.scope = scope;

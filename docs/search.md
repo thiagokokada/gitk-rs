@@ -80,3 +80,19 @@ in history order; changing the setting restarts history loading.
 
 See [content search performance](contents-search-performance.md) for
 architecture and measurements.
+
+## File history
+
+Right-click a file in the changed-file list and choose **Open file history** for
+an exact filename walk. It starts at the displayed commit, or at the comparison
+Target when viewing an aggregate diff. Local changes use the worktree's HEAD.
+The starting revision appears beside the history controls.
+
+Enable **Follow renames** to include earlier filenames using Git's rename
+recognition. This choice is remembered across file histories and application
+restarts. Selecting a commit jumps to that file in its commit diff, including
+its earlier name. The search input still narrows these commits. **Exit file
+history** returns to the previous scope.
+
+File history uses Git's single-file history simplification. Intervening commits
+are omitted, so its graph shows commit dots without ancestry connections.

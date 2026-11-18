@@ -93,9 +93,18 @@ impl UniformListDecoration for DiffViewport {
     }
 }
 
+#[derive(Clone)]
+pub(super) struct OpenFileHistory {
+    pub(super) selection: SelectionId,
+    pub(super) repository: PathBuf,
+    pub(super) revision: Option<gitk_rs::git::CommitId>,
+    pub(super) path: PathBuf,
+}
+
 #[derive(PartialEq, Eq)]
 enum DiffIdentity {
     Commit(PathBuf, gitk_rs::git::CommitId),
+    File(PathBuf, gitk_rs::git::CommitId, Arc<std::path::Path>),
     Local(PathBuf, LocalChangeKind, u64),
     Comparison(
         PathBuf,
@@ -106,6 +115,7 @@ enum DiffIdentity {
 
 pub(super) struct DiffPane {
     restore_position: Option<DiffPosition>,
+    history_file: Option<Arc<std::path::Path>>,
     file_list_width: f32,
     options: DiffOptions,
     current: Option<DiffSelection>,
@@ -131,8 +141,9 @@ pub(super) struct DiffPane {
     _poll: Task<()>,
 }
 
+impl gpui_kit::EventEmitter<OpenFileHistory> for DiffPane {}
+
 impl DiffPane {
-    #[cfg(test)]
     pub(super) fn selection_id(&self) -> SelectionId {
         self.page.selection
     }
@@ -183,6 +194,7 @@ impl DiffPane {
                                 let line = position.restore(this.snapshot.as_ref().unwrap());
                                 this.jump(line, cx);
                             }
+                            this.focus_history_file(cx);
                             cx.notify();
                         }
                         if let Some(copy) = this.handle.take_copy()
@@ -205,6 +217,7 @@ impl DiffPane {
         });
         Self {
             restore_position: None,
+            history_file: None,
             options,
             file_list_width: layout.file_list_width,
             current: None,
@@ -283,6 +296,55 @@ impl DiffPane {
         );
     }
 
+    pub(super) fn load_file_commit(
+        &mut self,
+        repository: PathBuf,
+        commit: Arc<Commit>,
+        path: Arc<std::path::Path>,
+        cx: &mut Context<Self>,
+    ) {
+        let identity = DiffIdentity::File(repository.clone(), commit.id.clone(), path.clone());
+        if self.identity.as_ref() == Some(&identity) {
+            return;
+        }
+        self.load_source(
+            repository,
+            DiffSource::Commit(commit),
+            identity,
+            "Loading file changes…",
+            cx,
+        );
+        self.history_file = Some(path);
+        self.focus_history_file(cx);
+    }
+
+    fn focus_history_file(&mut self, cx: &mut Context<Self>) {
+        if self.snapshot.is_none() {
+            return;
+        }
+        let Some(path) = self.history_file.take() else {
+            return;
+        };
+        let found = self
+            .snapshot
+            .as_ref()
+            .unwrap()
+            .files
+            .iter()
+            .enumerate()
+            .find(|(_, file)| {
+                file.path == path.as_ref() || file.old_path.as_deref() == Some(path.as_ref())
+            })
+            .map(|(index, file)| (index + 1, file.start_line));
+        if let Some((index, line)) = found {
+            self.select_file(index, cx);
+            if let Some(line) = line {
+                self.file_jump_pending = true;
+                self.jump(line, cx);
+            }
+        }
+    }
+
     pub(super) fn load_comparison(
         &mut self,
         repository: PathBuf,
@@ -350,6 +412,7 @@ impl DiffPane {
         self.identity = None;
         self.current = None;
         self.restore_position = None;
+        self.history_file = None;
         self.snapshot = None;
         self.selected_file = None;
         self.file_jump_pending = false;
@@ -940,6 +1003,17 @@ impl Render for DiffPane {
                                                         this.snapshot.as_ref()?.worktree_root.as_ref()
                                                             .map(|root| root.join(path))
                                                     });
+                                                    let history_request = path.as_ref().and_then(|path| this.current.as_ref().map(|selection| OpenFileHistory {
+                                                        selection: selection.id,
+                                                        repository: selection.repository.clone(),
+                                                        revision: match &selection.source {
+                                                            DiffSource::Commit(commit) => Some(commit.id.clone()),
+                                                            DiffSource::Comparison { endpoints, .. } => Some(endpoints.target.clone()),
+                                                            DiffSource::Local { .. } => None,
+                                                        },
+                                                        path: path.clone(),
+                                                    }));
+                                                    let history_view = cx.entity().downgrade();
                                                     div()
                                                         .id(("diff-file", i))
                                                         .test_support()
@@ -985,7 +1059,7 @@ impl Render for DiffPane {
                                                             } else {
                                                                 menu
                                                             };
-                                                            if let Some(path) = path.clone() {
+                                                            let menu = if let Some(path) = path.clone() {
                                                                 menu.item(
                                                                     PopupMenuItem::new(
                                                                         "Copy file path",
@@ -1000,7 +1074,15 @@ impl Render for DiffPane {
                                                                 )
                                                             } else {
                                                                 menu
-                                                            }
+                                                            };
+                                                            if let Some(request) = history_request.clone() {
+                                                                let view = history_view.clone();
+                                                                menu.separator().item(PopupMenuItem::new("Open file history").on_click(move |_, _, cx| {
+                                                                    let _ = view.update(cx, |this, cx| {
+                                                                        if this.page.selection == request.selection { cx.emit(request.clone()); }
+                                                                    });
+                                                                }))
+                                                            } else { menu }
                                                         })
                                                 })
                                                 .collect::<Vec<_>>()

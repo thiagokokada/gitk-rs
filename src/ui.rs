@@ -6,6 +6,7 @@ mod colors;
 mod comparison_dialog;
 mod dialogs;
 mod diff_view;
+mod file_history;
 mod filter_completion;
 mod filter_highlight;
 mod preference_dialog;
@@ -153,6 +154,9 @@ struct HistoryWindow {
     comparison_dialog: comparison_dialog::ComparisonDialog,
     comparison_diff: Option<gitk_rs::diff::ComparisonMode>,
     comparison_base: Option<comparison_dialog::ComparisonBase>,
+    file_history_return: Option<file_history::FileHistoryReturn>,
+    follow_file_renames: bool,
+    _file_history_subscription: Subscription,
     repository_input: Entity<InputState>,
     _repository_subscription: Subscription,
     help_scroll: ScrollHandle,
@@ -198,6 +202,7 @@ impl HistoryWindow {
         } = services;
         let layout = diff_handle.initial_layout();
         let search = diff_handle.initial_search();
+        let follow_file_renames = diff_handle.initial_follow_renames();
         if request.regex != search.regex {
             request.regex = search.regex;
             request.id += 1;
@@ -295,6 +300,13 @@ impl HistoryWindow {
                 cx,
             )
         });
+        let file_history_subscription = cx.subscribe_in(
+            &diff,
+            window,
+            |this, _, event: &diff_view::OpenFileHistory, window, cx| {
+                this.open_file_history(event, window, cx);
+            },
+        );
         Self {
             title: String::new(),
             preferences,
@@ -312,6 +324,9 @@ impl HistoryWindow {
             comparison_dialog,
             comparison_diff: None,
             comparison_base: None,
+            file_history_return: None,
+            follow_file_renames,
+            _file_history_subscription: file_history_subscription,
             repository_input,
             _repository_subscription: repository_subscription,
             help_scroll: ScrollHandle::new(),
@@ -430,6 +445,10 @@ impl HistoryWindow {
                     gitk_rs::git::HistoryScope::Compare { .. }
                 ) {
                 "Target has no commits missing from Base."
+            } else if snapshot.loaded == 0
+                && matches!(snapshot.source.scope, gitk_rs::git::HistoryScope::File(_))
+            {
+                "No commits found for this file at the selected revision."
             } else if snapshot.loaded == 0 {
                 "This repository has no commits."
             } else {
@@ -586,11 +605,20 @@ impl HistoryWindow {
                     );
                 }
                 self.diff.update(cx, |diff, cx| {
-                    diff.load(
-                        self.config.repository.clone(),
-                        Arc::new(entry.commit.clone()),
-                        cx,
-                    )
+                    if let Some(path) = &entry.file_path {
+                        diff.load_file_commit(
+                            self.config.repository.clone(),
+                            Arc::new(entry.commit.clone()),
+                            path.clone(),
+                            cx,
+                        );
+                    } else {
+                        diff.load(
+                            self.config.repository.clone(),
+                            Arc::new(entry.commit.clone()),
+                            cx,
+                        );
+                    }
                 });
             }
             Selection::Local(kind) => {
@@ -1433,6 +1461,7 @@ impl Render for HistoryWindow {
                     )
             )
             .child(self.history_scope_control(cx))
+            .when(matches!(self.history_state.request.source.scope, gitk_rs::git::HistoryScope::File(_)), |view| view.child(self.file_history_controls(cx)))
             .when(self.comparison_base.is_some(), |view| view.child(self.comparison_base_control(cx)))
             .when(matches!(self.history_state.request.source.scope, gitk_rs::git::HistoryScope::Compare { .. }), |view| view.child(self.comparison_controls(cx)))
             .children(search_feedback(self.filter.read(cx).value().as_ref(), self.history_state.request.regex, self.query_error(cx), palette))
@@ -1469,6 +1498,9 @@ impl Render for HistoryWindow {
                                                     .flex_shrink_0()
                                                     .px_2()
                                                     .child(if self.graph_layout.has_collapsed() { "Graph · … idle lanes" } else { "Graph" })
+                                                    .when(matches!(self.history_state.request.source.scope, gitk_rs::git::HistoryScope::File(_)), |heading| {
+                                                        heading.hoverable_tooltip(|window, cx| wrapped_tooltip("File history omits intervening commits, so ancestry connections are not drawn in this view.", window, cx))
+                                                    })
                                                     .when(self.graph_layout.has_collapsed(), |heading| {
                                                         heading.hoverable_tooltip(|window, cx| {
                                                             wrapped_tooltip(IDLE_LANES_TOOLTIP, window, cx)

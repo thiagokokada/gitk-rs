@@ -714,14 +714,23 @@ fn comparison_picker_direction_and_diff_modes_work_without_checkout(cx: &mut Tes
             pane.read(cx)
                 .snapshot
                 .as_ref()
-                .is_some_and(|s| s.error.is_none() && s.files.len() == 2)
+                .is_some_and(|s| s.error.is_none() && s.files.len() == 1)
         })
     });
     assert_eq!(selected(&app.view, cx).as_deref(), Some(feature.as_str()));
     assert_eq!(
         cx.update(|_, cx| app.view.read(cx).comparison_diff),
-        Some(ComparisonMode::Endpoints)
+        Some(ComparisonMode::SinceMergeBase)
     );
+    cx.update(|window, cx| window.click("comparison-endpoints", cx));
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            pane.read(cx)
+                .snapshot
+                .as_ref()
+                .is_some_and(|s| s.error.is_none() && s.files.len() == 2)
+        })
+    });
     cx.update(|window, cx| window.click("comparison-merge-base", cx));
     until(cx, |cx| {
         cx.update(|_, cx| {
@@ -906,7 +915,10 @@ fn commit_context_menu_compares_marked_base_and_clears_it_on_repository_change(
                         .is_some_and(|e| e.base.to_hex() == base && e.target.to_hex() == target)
             }) && matches!(
                 pane.read(cx).current.as_ref().map(|s| &s.source),
-                Some(super::DiffSource::Comparison { .. })
+                Some(super::DiffSource::Comparison {
+                    mode: gitk_rs::diff::ComparisonMode::Endpoints,
+                    ..
+                })
             ) && pane
                 .read(cx)
                 .snapshot
@@ -1014,5 +1026,269 @@ fn long_comparison_base_subject_stays_inside_the_context_menu(cx: &mut TestAppCo
                             .is_some_and(|e| e.base.to_hex() == base && e.target.to_hex() == target)
                 })
         })
+    });
+}
+
+fn open_file_history_from_menu(cx: &mut gpui_kit::VisualTestContext, index: usize) {
+    let bounds = cx.update(|window, _| window.find(("diff-file", index)).bounds());
+    cx.simulate_mouse_down(
+        bounds.center(),
+        gpui_kit::MouseButton::Right,
+        Modifiers::default(),
+    );
+    cx.simulate_mouse_up(
+        bounds.center(),
+        gpui_kit::MouseButton::Right,
+        Modifiers::default(),
+    );
+    until(cx, |cx| {
+        cx.update(|window, _| window.try_find("popup-menu").is_some())
+    });
+    let action = cx.update(|window, _| window.find_by_label("Open file history").bounds());
+    cx.simulate_click(action.center(), Modifiers::default());
+}
+
+#[gpui_kit::test]
+fn changed_file_history_follows_old_names_and_returns_to_previous_scope(cx: &mut TestAppContext) {
+    use gitk_rs::git::{CommitId, HistoryScope};
+    let fixture = Fixture::new();
+    let old = "z old [1].rs";
+    let new = "z new [1].rs";
+    let source: String = (0..180)
+        .map(|i| format!("let value_{i} = {i};\n"))
+        .collect();
+    std::fs::write(fixture.root().join(old), &source).unwrap();
+    std::fs::write(fixture.root().join("a unrelated.rs"), "first\n").unwrap();
+    fixture.git(&["add", "."]);
+    fixture.git(&["commit", "-qm", "create file"]);
+    let root = fixture.git(&["rev-parse", "HEAD"]);
+    std::fs::write(fixture.root().join(old), format!("{source}// old edit\n")).unwrap();
+    fixture.git(&["commit", "-qam", "edit old name"]);
+    fixture.commit("unrelated change");
+    fixture.git(&["mv", "--", old, new]);
+    fixture.git(&["commit", "-qm", "rename"]);
+    std::fs::write(fixture.root().join(new), format!("{source}// new edit\n")).unwrap();
+    std::fs::write(fixture.root().join("a unrelated.rs"), "second\n").unwrap();
+    fixture.git(&["commit", "-qam", "edit new name"]);
+    let head = fixture.git(&["rev-parse", "HEAD"]);
+    let (app, cx) = open(&fixture, cx);
+    let pane = cx.update(|_, cx| app.view.read(cx).diff.clone());
+    cx.update(|window, cx| {
+        app.view.update(cx, |view, cx| {
+            view.set_history_scope(HistoryScope::AllBranches, window, cx)
+        })
+    });
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            app.view
+                .read(cx)
+                .history_state
+                .snapshot
+                .as_ref()
+                .is_some_and(|s| s.eof && s.loaded == 5)
+                && pane
+                    .read(cx)
+                    .snapshot
+                    .as_ref()
+                    .is_some_and(|s| s.files.len() == 2)
+        })
+    });
+    open_file_history_from_menu(cx, 2);
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+        let view = app.view.read(cx);
+        matches!(&view.history_state.request.source.scope, HistoryScope::File(h) if h.path == std::path::Path::new(new) && h.revision.as_ref().is_some_and(|id| id.to_hex() == head) && !h.follow_renames)
+            && view.history_state.snapshot.as_ref().is_some_and(|s| s.eof && s.loaded == 2)
+            && pane.read(cx).selected_file == Some(2)
+    })
+    });
+    cx.update(|window, _| {
+        let file = window.find("file-history-label").bounds();
+        let follow = window.find("follow-file-renames").bounds();
+        let exit = window.find("exit-file-history").bounds();
+        let row = window.find("file-history-controls").bounds();
+        assert!(file.top() >= window.find("history-scope").bounds().bottom());
+        assert!(file.right() <= follow.left());
+        assert!((file.center().y - exit.center().y).abs() < px(1.));
+        assert!((follow.center().y - exit.center().y).abs() < px(1.));
+        assert!((exit.right() - row.right()).abs() < px(1.));
+    });
+    cx.update(|window, cx| window.click("follow-file-renames", cx));
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            app.view
+                .read(cx)
+                .history_state
+                .snapshot
+                .as_ref()
+                .is_some_and(|s| s.eof && s.loaded == 4)
+        })
+    });
+    cx.update(|window, cx| app.view.update(cx, |view, cx| view.select(3, window, cx)));
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+        let pane = pane.read(cx);
+        matches!(&pane.identity, Some(super::DiffIdentity::File(_, id, path)) if id.to_hex() == root && path.as_ref() == std::path::Path::new(old))
+            && pane.snapshot.as_ref().is_some_and(|s| pane.selected_file.is_some_and(|index| index > 0 && s.files[index - 1].path == std::path::Path::new(old)))
+            && pane.viewport.start > 0
+    })
+    });
+    cx.update(|window, cx| window.click("exit-file-history", cx));
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            let view = app.view.read(cx);
+            view.history_state.request.source.scope == HistoryScope::AllBranches
+                && view
+                    .history_state
+                    .snapshot
+                    .as_ref()
+                    .is_some_and(|s| s.eof && s.loaded == 5)
+                && pane.read(cx).snapshot.is_some()
+        })
+    });
+    let stale = cx.update(|_, cx| super::OpenFileHistory {
+        selection: pane.read(cx).selection_id(),
+        repository: fixture.root().into(),
+        revision: Some(CommitId::parse(&head).unwrap()),
+        path: new.into(),
+    });
+    cx.update(|window, cx| app.view.update(cx, |view, cx| view.select(4, window, cx)));
+    until(cx, |cx| {
+        cx.update(|_, cx| matches!(pane.read(cx).current.as_ref().map(|s| &s.source), Some(super::DiffSource::Commit(commit)) if commit.id.to_hex() == root) && pane.read(cx).snapshot.is_some())
+    });
+    cx.update(|window, cx| {
+        app.view
+            .update(cx, |view, cx| view.open_file_history(&stale, window, cx))
+    });
+    assert!(
+        cx.update(|_, cx| app.view.read(cx).history_state.request.source.scope
+            == HistoryScope::AllBranches)
+    );
+    open_file_history_from_menu(cx, 2);
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+        let view = app.view.read(cx);
+        matches!(&view.history_state.request.source.scope, HistoryScope::File(h) if h.revision.as_ref().is_some_and(|id| id.to_hex() == root) && h.path == std::path::Path::new(old))
+            && view.history_state.snapshot.as_ref().is_some_and(|s| s.eof && s.loaded == 1)
+    })
+    });
+    assert_eq!(fixture.git(&["rev-parse", "HEAD"]), head);
+    assert!(fixture.git(&["status", "--porcelain=v1"]).is_empty());
+}
+
+#[gpui_kit::test]
+fn untracked_file_history_in_an_unborn_repository_returns_to_local_changes(
+    cx: &mut TestAppContext,
+) {
+    use gitk_rs::git::HistoryScope;
+    let fixture = Fixture::new();
+    std::fs::write(fixture.root().join("new.rs"), "let value = 1;\n").unwrap();
+    let (app, cx) = open(&fixture, cx);
+    let pane = cx.update(|_, cx| app.view.read(cx).diff.clone());
+    until(cx, |cx| {
+        cx.update(|_, cx| !app.view.read(cx).history_state.local_rows.is_empty())
+    });
+    cx.simulate_keystrokes("home");
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            pane.read(cx)
+                .snapshot
+                .as_ref()
+                .is_some_and(|s| s.files.len() == 1)
+        })
+    });
+    open_file_history_from_menu(cx, 1);
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            let view = app.view.read(cx);
+            matches!(
+                view.history_state.request.source.scope,
+                HistoryScope::File(_)
+            ) && view
+                .history_state
+                .snapshot
+                .as_ref()
+                .is_some_and(|s| s.eof && s.loaded == 0 && s.error.is_none())
+                && view.detail.contains("No commits found for this file")
+        })
+    });
+    cx.update(|window, cx| window.click("exit-file-history", cx));
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            matches!(
+                pane.read(cx).current.as_ref().map(|s| &s.source),
+                Some(super::DiffSource::Local { .. })
+            ) && pane
+                .read(cx)
+                .snapshot
+                .as_ref()
+                .is_some_and(|s| s.files.len() == 1)
+        })
+    });
+    assert_eq!(
+        std::fs::read_to_string(fixture.root().join("new.rs")).unwrap(),
+        "let value = 1;\n"
+    );
+}
+
+#[gpui_kit::test]
+fn file_history_from_aggregate_diff_uses_target_and_restores_comparison(cx: &mut TestAppContext) {
+    use gitk_rs::{diff::ComparisonMode, git::HistoryScope};
+    let fixture = Fixture::new();
+    fixture.commit("root");
+    fixture.git(&["checkout", "-qb", "feature"]);
+    let feature = fixture.commit("feature change");
+    fixture.git(&["checkout", "-q", "main"]);
+    std::fs::write(fixture.root().join("other.txt"), "main only").unwrap();
+    fixture.git(&["add", "."]);
+    fixture.git(&["commit", "-qm", "main change"]);
+    let (app, cx) = open(&fixture, cx);
+    let pane = cx.update(|_, cx| app.view.read(cx).diff.clone());
+    cx.update(|window, cx| {
+        app.view.update(cx, |view, cx| {
+            view.set_history_scope(
+                HistoryScope::Compare {
+                    base: "main".into(),
+                    target: "feature".into(),
+                },
+                window,
+                cx,
+            )
+        })
+    });
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            pane.read(cx)
+                .snapshot
+                .as_ref()
+                .is_some_and(|s| s.files.len() == 2)
+        })
+    });
+    cx.update(|window, cx| window.click("comparison-merge-base", cx));
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            pane.read(cx)
+                .snapshot
+                .as_ref()
+                .is_some_and(|s| s.files.len() == 1)
+        })
+    });
+    open_file_history_from_menu(cx, 1);
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+        let view = app.view.read(cx);
+        matches!(&view.history_state.request.source.scope, HistoryScope::File(h) if h.revision.as_ref().is_some_and(|id| id.to_hex() == feature))
+            && view.history_state.snapshot.as_ref().is_some_and(|s| s.eof && s.loaded == 2)
+    })
+    });
+    cx.update(|window, cx| window.click("exit-file-history", cx));
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+        let view = app.view.read(cx);
+        matches!(&view.history_state.request.source.scope, HistoryScope::Compare { base, target } if base == "main" && target == "feature")
+            && view.comparison_diff == Some(ComparisonMode::SinceMergeBase)
+            && matches!(pane.read(cx).current.as_ref().map(|s| &s.source), Some(super::DiffSource::Comparison { endpoints, .. }) if endpoints.target.to_hex() == feature)
+            && pane.read(cx).snapshot.as_ref().is_some_and(|s| s.files.len() == 1)
+    })
     });
 }
