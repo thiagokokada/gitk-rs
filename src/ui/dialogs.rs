@@ -47,6 +47,7 @@ impl HistoryWindow {
         self.config.repository = std::path::absolute(&path).unwrap_or(path);
         self.workspace_generation.0 += 1;
         self.workspace_snapshot = None;
+        self.history_state.request.source.scope = Default::default();
         self.history_state.reset_repository();
         self.pending_operation = None;
         self.operation_message.clear();
@@ -94,7 +95,108 @@ impl HistoryWindow {
         }
         cx.notify();
     }
+    pub(super) fn history_scope_control(&self, cx: &mut Context<Self>) -> AnyElement {
+        let view = cx.entity().downgrade();
+        div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .child("History:")
+            .child(
+                Button::new("history-scope")
+                    .label(self.history_state.request.source.scope.label())
+                    .dropdown_menu(move |menu, _, _| {
+                        let current = view.clone();
+                        let all = view.clone();
+                        let reference = view.clone();
+                        menu.item(PopupMenuItem::new("Current branch").on_click(
+                            move |_, window, cx| {
+                                let _ = current.update(cx, |this, cx| {
+                                    this.set_history_scope(
+                                        gitk_rs::git::HistoryScope::Current,
+                                        window,
+                                        cx,
+                                    )
+                                });
+                            },
+                        ))
+                        .item(PopupMenuItem::new("All branches and tags").on_click(
+                            move |_, window, cx| {
+                                let _ = all.update(cx, |this, cx| {
+                                    this.set_history_scope(
+                                        gitk_rs::git::HistoryScope::AllBranches,
+                                        window,
+                                        cx,
+                                    )
+                                });
+                            },
+                        ))
+                        .item(
+                            PopupMenuItem::new("Choose branch or tag…").on_click(
+                                move |_, window, cx| {
+                                    let _ = reference.update(cx, |this, cx| {
+                                        this.open_history_references(window, cx)
+                                    });
+                                },
+                            ),
+                        )
+                    }),
+            )
+            .into_any_element()
+    }
+
+    pub(super) fn set_history_scope(
+        &mut self,
+        scope: gitk_rs::git::HistoryScope,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.apply_history_scope(scope, cx);
+        self.focus.focus(window, cx);
+    }
+
+    fn apply_history_scope(&mut self, scope: gitk_rs::git::HistoryScope, cx: &mut Context<Self>) {
+        self.history_state.request.source.scope = scope;
+        self.history_state.reset_repository();
+        if let Some(snapshot) = &self.workspace_snapshot {
+            self.history_state.update_local_rows(&snapshot.status);
+        }
+        self.history_state.viewport = 0..10;
+        self.history_state.request.range = 0..128;
+        self.history_state.request.anchor = None;
+        self.dialog = None;
+        self.restore_focus = true;
+        self.scroll.scroll_to_item_strict(0, ScrollStrategy::Top);
+        self.reload(cx);
+    }
+
+    pub(super) fn open_history_references(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.dialog = Some(DialogKind::BrowseReferences);
+        self.dialog_focus.focus(window, cx);
+        self.branch_dialog.reset(window, cx);
+        self.operation_message = "Loading branches and tags…".into();
+        self.operation_id.value += 1;
+        if self.workspace.operate(
+            self.workspace_generation,
+            self.operation_id,
+            Operation::References,
+        ) {
+            self.pending_operation = Some(self.operation_id);
+        } else {
+            self.operation_message = "A repository operation is already pending".into();
+        }
+        cx.notify();
+    }
+
     pub(super) fn switch_branch(&mut self, index: usize, cx: &mut Context<Self>) {
+        if matches!(self.dialog, Some(DialogKind::BrowseReferences)) {
+            if self.pending_operation.is_none()
+                && let Some(name) = self.branch_dialog.selected(index)
+            {
+                self.apply_history_scope(gitk_rs::git::HistoryScope::Reference(name), cx);
+            }
+            return;
+        }
         if !matches!(self.dialog, Some(DialogKind::Branches)) || self.pending_operation.is_some() {
             return;
         }
@@ -128,6 +230,7 @@ impl HistoryWindow {
     pub(super) fn dialog_element(&self, cx: &mut Context<Self>) -> AnyElement {
         let title = match self.dialog {
             Some(DialogKind::Branches) => "Switch local branch",
+            Some(DialogKind::BrowseReferences) => "Browse branch or tag",
             Some(DialogKind::Help) => "Help",
             Some(DialogKind::Preferences) => "Preferences",
             Some(DialogKind::OpenRepository) => "Open repository by path",
@@ -147,7 +250,7 @@ impl HistoryWindow {
             .text_color(rgb(palette.foreground));
         body = body.child(div().flex_shrink_0().text_size(px(18.)).child(title));
         match self.dialog {
-            Some(DialogKind::Branches) => {
+            Some(DialogKind::Branches | DialogKind::BrowseReferences) => {
                 body = self.branch_dialog.render(
                     body,
                     self.config.theme,
@@ -300,7 +403,7 @@ impl HistoryWindow {
             .justify_center()
             .track_focus(&self.dialog_focus)
             .key_context(match self.dialog {
-                Some(DialogKind::Branches) => "Dialog BranchDialog",
+                Some(DialogKind::Branches | DialogKind::BrowseReferences) => "Dialog BranchDialog",
                 Some(DialogKind::Help) => "Dialog HelpDialog",
                 _ => "Dialog",
             })

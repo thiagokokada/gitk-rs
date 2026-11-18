@@ -12,7 +12,7 @@ pub(super) struct BranchDialog {
 impl BranchDialog {
     pub(super) fn new(window: &mut Window, cx: &mut Context<HistoryWindow>) -> Self {
         let branch_filter =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Filter local branches"));
+            cx.new(|cx| InputState::new(window, cx).placeholder("Filter references"));
         let branch_subscription = cx.subscribe_in(
             &branch_filter,
             window,
@@ -71,9 +71,19 @@ impl BranchDialog {
                                                 row.text_color(rgb(colors::ON_SOLID))
                                             })
                                             .child(
-                                                this.branch_dialog.branches
-                                                    [this.branch_dialog.filtered[i]]
-                                                    .clone(),
+                                                if matches!(
+                                                    this.dialog,
+                                                    Some(DialogKind::BrowseReferences)
+                                                ) {
+                                                    gitk_rs::git::reference_label(
+                                                        &this.branch_dialog.branches
+                                                            [this.branch_dialog.filtered[i]],
+                                                    )
+                                                } else {
+                                                    this.branch_dialog.branches
+                                                        [this.branch_dialog.filtered[i]]
+                                                        .clone()
+                                                },
                                             )
                                             .cursor_pointer()
                                             .on_click(cx.listener(move |this, _, _, cx| {

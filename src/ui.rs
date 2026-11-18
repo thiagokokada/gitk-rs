@@ -125,6 +125,7 @@ enum DialogKind {
     Help,
     About,
     Branches,
+    BrowseReferences,
     Preferences,
     OpenRepository,
 }
@@ -478,6 +479,10 @@ impl HistoryWindow {
         {
             self.pending_operation = None;
             match result.result {
+                Ok(OperationOutcome::References(references)) => {
+                    self.branch_dialog.set_branches(references, cx);
+                    self.operation_message.clear();
+                }
                 Ok(OperationOutcome::Branches(branches)) => {
                     self.branch_dialog.set_branches(branches, cx);
                     self.operation_message.clear();
@@ -538,7 +543,11 @@ impl HistoryWindow {
             self.reload(cx);
         } else if refs_changed {
             self.history_state.request.refs_revision += 1;
-            self.submit();
+            if self.history_state.request.source.scope != gitk_rs::git::HistoryScope::Current {
+                self.reload(cx);
+            } else {
+                self.submit();
+            }
         }
         cx.notify();
     }
@@ -844,7 +853,7 @@ impl HistoryWindow {
             .left(px(width))
             .flex()
             .gap_1()
-            .children(labels.into_iter().map(|label| {
+            .children(labels.into_iter().enumerate().map(|(label_index, label)| {
                 let color = match label.kind {
                     RefKind::Head => colors::HEAD_BADGE,
                     RefKind::Branch => colors::BRANCH_BADGE,
@@ -852,6 +861,21 @@ impl HistoryWindow {
                     RefKind::Tag => colors::TAG_BADGE,
                 };
                 div()
+                    .id(SharedString::from(format!(
+                        "ref-label-{index}-{label_index}"
+                    )))
+                    .when_some(label.reference.clone(), |badge, reference| {
+                        badge
+                            .cursor_pointer()
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                cx.stop_propagation();
+                                this.set_history_scope(
+                                    gitk_rs::git::HistoryScope::Reference(reference.clone()),
+                                    window,
+                                    cx,
+                                );
+                            }))
+                    })
                     .px_1()
                     .text_size(px(11.))
                     .bg(rgb(color))
@@ -1315,6 +1339,7 @@ impl Render for HistoryWindow {
                             })
                     )
             )
+            .child(self.history_scope_control(cx))
             .children(search_feedback(self.filter.read(cx).value().as_ref(), self.history_state.request.regex, self.query_error(cx), palette))
             .child(
                 div().flex_1().min_h_0().child(
@@ -1478,6 +1503,7 @@ pub fn run(mut config: Config, preferences: Preferences, launched: Instant) {
     let timing = guard.timing();
     let request = Request {
         source: HistorySource {
+            scope: Default::default(),
             repository: config.repository.clone(),
             graph_columns: config.graph_columns,
             git_workers: config.git_workers,

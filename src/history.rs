@@ -36,6 +36,7 @@ pub struct ReloadGeneration(pub u64);
 /// Settings that determine whether retained history and its Git stream can be reused.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HistorySource {
+    pub scope: crate::git::HistoryScope,
     pub repository: PathBuf,
     pub graph_columns: usize,
     pub git_workers: usize,
@@ -80,6 +81,7 @@ pub struct Entry {
 
 #[derive(Clone, Debug)]
 pub struct RefLabel {
+    pub reference: Option<String>,
     pub name: String,
     pub kind: RefKind,
 }
@@ -745,11 +747,11 @@ impl Session {
     fn open(request: &Request, cancellation: Cancellation) -> Result<Self> {
         let repository = Repository::open(&request.source.repository, &cancellation)?;
         let reusable = history_reusable(&repository, &cancellation)?;
-        let stream = repository
-            .head
-            .as_ref()
-            .map(|_| repository.log_with_readers(cancellation.clone(), request.source.git_workers))
-            .transpose()?;
+        let stream = repository.scoped_log(
+            &request.source.scope,
+            cancellation.clone(),
+            request.source.git_workers,
+        )?;
         let eof = stream.is_none();
         Ok(Self {
             repository,
@@ -774,6 +776,9 @@ impl Session {
     /// Revalidate traversal inputs on the worker before carrying data into a
     /// new UI generation. Retain both loaded entries and the unread stream.
     fn refresh(&mut self, request: &Request) -> Result<bool> {
+        if request.source.scope != crate::git::HistoryScope::Current {
+            return Ok(false);
+        }
         self.reload = None;
         self.search.discard_prefix();
         if self.cancellation.load(Ordering::Acquire) || self.search.query_error.is_some() {
@@ -863,7 +868,9 @@ impl Session {
                         bookmark.ordinal = self.entries.iter().position(|e| &e.commit.id == target);
                         // Avoid streaming an unrelated branch to EOF just to find
                         // a bookmark which is no longer reachable from HEAD.
-                        bookmark.reachable = bookmark.ordinal.is_some()
+                        bookmark.reachable = request.source.scope
+                            != crate::git::HistoryScope::Current
+                            || bookmark.ordinal.is_some()
                             || run_bytes(
                                 &self.repository.root,
                                 &["merge-base", "--all", &target.to_hex(), "HEAD"],
@@ -1154,6 +1161,7 @@ fn load_refs(repository: &Repository, cancel: &Cancellation) -> Result<Refs> {
             }
         }
         refs.entry(id).or_default().push(RefLabel {
+            reference: Some(name.to_owned()),
             name: short.to_owned(),
             kind,
         });
@@ -1162,6 +1170,7 @@ fn load_refs(repository: &Repository, cancel: &Cancellation) -> Result<Refs> {
         refs.entry(head.clone()).or_default().insert(
             0,
             RefLabel {
+                reference: None,
                 name: format!("HEAD -> {}", repository.branch),
                 kind: RefKind::Head,
             },
@@ -1179,6 +1188,7 @@ mod tests {
     fn request(fixture: &Fixture) -> Request {
         Request {
             source: HistorySource {
+                scope: Default::default(),
                 repository: fixture.root().to_owned(),
                 graph_columns: crate::graph::DEFAULT_GRAPH_LANES,
                 git_workers: crate::git::DEFAULT_GIT_WORKERS,
@@ -1603,6 +1613,7 @@ mod tests {
         assert!((1..=crate::git::MAX_GIT_WORKERS).contains(&readers));
         let request = Request {
             source: HistorySource {
+                scope: Default::default(),
                 repository: repository.into(),
                 graph_columns: crate::graph::DEFAULT_GRAPH_LANES,
                 git_workers: readers,
@@ -2168,6 +2179,7 @@ mod tests {
             .unwrap_or_else(|_| "path:ci.yml after:2026-01-01".into());
         let mut request = Request {
             source: HistorySource {
+                scope: Default::default(),
                 repository: repository.into(),
                 graph_columns: crate::graph::DEFAULT_GRAPH_LANES,
                 git_workers: crate::git::DEFAULT_GIT_WORKERS,

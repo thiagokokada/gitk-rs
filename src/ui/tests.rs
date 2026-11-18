@@ -42,6 +42,7 @@ fn open_with_state<'a>(
     };
     let request = Request {
         source: HistorySource {
+            scope: Default::default(),
             repository: config.repository.clone(),
             graph_columns: config.graph_columns,
             git_workers: config.git_workers,
@@ -3460,6 +3461,88 @@ fn committing_selected_local_changes_selects_the_new_head(staged: bool, cx: &mut
                 && view.history_state.viewport.start == 0
                 && view.history_state.local_rows.is_empty()
                 && view.diff.read(cx).has_loaded_selection()
+        })
+    });
+}
+
+#[gpui_kit::test]
+fn browse_reference_keyboard_selection_preserves_checkout(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let root = fixture.commit("root");
+    fixture.git(&["checkout", "-qb", "side"]);
+    let side = fixture.commit("side change");
+    fixture.git(&["checkout", "-q", "main"]);
+    fixture.commit("main change");
+    std::fs::write(fixture.root().join("untracked.txt"), "keep me").unwrap();
+    let (app, cx) = open(&fixture, cx);
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            app.view
+                .read(cx)
+                .history_state
+                .snapshot
+                .as_ref()
+                .is_some_and(|s| s.eof)
+        })
+    });
+    cx.update(|window, cx| {
+        app.view
+            .update(cx, |view, cx| view.open_history_references(window, cx))
+    });
+    until(cx, |cx| {
+        cx.update(|_, cx| app.view.read(cx).pending_operation.is_none())
+    });
+    cx.simulate_input("side");
+    cx.simulate_keystrokes("enter");
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            let view = app.view.read(cx);
+            view.dialog.is_none()
+                && view
+                    .history_state
+                    .snapshot
+                    .as_ref()
+                    .is_some_and(|s| s.eof && s.rows.iter().any(|e| e.commit.id.to_hex() == side))
+        })
+    });
+    cx.update(|window, cx| {
+        let view = app.view.read(cx);
+        assert_eq!(
+            view.history_state.request.source.scope,
+            gitk_rs::git::HistoryScope::Reference("refs/heads/side".into())
+        );
+        assert!(view.history_state.local_rows.is_empty());
+        assert_eq!(view.history_state.snapshot.as_ref().unwrap().loaded, 2);
+        assert!(view.focus.is_focused(window));
+    });
+    assert_eq!(fixture.git(&["branch", "--show-current"]), "main");
+    assert!(fixture.root().join("untracked.txt").exists());
+    cx.update(|window, cx| {
+        app.view.update(cx, |view, cx| {
+            view.set_history_scope(gitk_rs::git::HistoryScope::AllBranches, window, cx)
+        })
+    });
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            app.view
+                .read(cx)
+                .history_state
+                .snapshot
+                .as_ref()
+                .is_some_and(|s| s.eof && s.loaded == 3)
+        })
+    });
+    cx.update(|window, cx| {
+        app.view.update(cx, |view, cx| {
+            view.set_history_scope(gitk_rs::git::HistoryScope::Current, window, cx)
+        })
+    });
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            let view = app.view.read(cx);
+            view.history_state.snapshot.as_ref().is_some_and(|s| {
+                s.eof && s.loaded == 2 && s.rows.iter().any(|e| e.commit.id.to_hex() == root)
+            }) && !view.history_state.local_rows.is_empty()
         })
     });
 }

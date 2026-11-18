@@ -161,6 +161,41 @@ impl Commit {
     }
 }
 
+/// The roots of a history traversal, independent of the checked-out branch.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum HistoryScope {
+    #[default]
+    Current,
+    AllBranches,
+    Reference(String),
+}
+
+impl HistoryScope {
+    pub fn label(&self) -> String {
+        match self {
+            Self::Current => "Current branch".into(),
+            Self::AllBranches => "All branches and tags".into(),
+            Self::Reference(name) => reference_label(name),
+        }
+    }
+}
+
+pub fn reference_label(name: &str) -> String {
+    for prefix in ["refs/heads/", "refs/remotes/", "refs/tags/"] {
+        if let Some(short) = name.strip_prefix(prefix) {
+            let kind = if prefix == "refs/tags/" {
+                "tag"
+            } else if prefix == "refs/remotes/" {
+                "remote"
+            } else {
+                "branch"
+            };
+            return format!("{short} ({kind})");
+        }
+    }
+    name.into()
+}
+
 #[derive(Clone, Debug)]
 pub struct Repository {
     pub root: PathBuf,
@@ -219,7 +254,41 @@ impl Repository {
 
     pub fn log_with_readers(&self, cancel: Cancellation, readers: usize) -> Result<CommitStream> {
         let head = self.head.as_ref().context("repository has no commits")?;
-        CommitStream::open(&self.root, head, cancel, readers)
+        CommitStream::open(&self.root, &[head.to_hex()], cancel, readers)
+    }
+
+    pub fn scoped_log(
+        &self,
+        scope: &HistoryScope,
+        cancel: Cancellation,
+        readers: usize,
+    ) -> Result<Option<CommitStream>> {
+        let revisions = match scope {
+            HistoryScope::Current => match &self.head {
+                Some(head) => vec![head.to_hex()],
+                None => return Ok(None),
+            },
+            HistoryScope::AllBranches => {
+                let mut args = vec!["--branches".into(), "--remotes".into(), "--tags".into()];
+                if let Some(head) = &self.head {
+                    args.push(head.to_hex());
+                }
+                args
+            }
+            HistoryScope::Reference(name) => vec![self.resolve_commit(name, &cancel)?.to_hex()],
+        };
+        CommitStream::open(&self.root, &revisions, cancel, readers).map(Some)
+    }
+
+    pub fn resolve_commit(&self, name: &str, cancel: &Cancellation) -> Result<CommitId> {
+        let expression = format!("{name}^{{commit}}");
+        let bytes = run_bytes(
+            &self.root,
+            &["rev-parse", "--verify", "--end-of-options", &expression],
+            cancel,
+            &[0],
+        )?;
+        CommitId::parse(std::str::from_utf8(trim_newline(&bytes))?)
     }
 
     pub fn refs(&self, cancel: Cancellation) -> Result<GitStream> {
@@ -553,20 +622,17 @@ impl Drop for GitStream {
 
 const LOG_FORMAT: &str = "--pretty=tformat:%H%n%P%n%an%n%ae%n%aI%n%cn%n%ce%n%cI%n%B%x00";
 
-fn pretty_log(root: &Path, head: &CommitId, cancel: Cancellation) -> Result<GitStream> {
-    GitStream::spawn(
-        root,
-        &[
-            "log",
-            "--no-color",
-            "--no-decorate",
-            "--no-patch",
-            LOG_FORMAT,
-            &head.to_hex(),
-        ],
-        cancel,
-        &[0],
-    )
+fn pretty_log(root: &Path, revisions: &[String], cancel: Cancellation) -> Result<GitStream> {
+    let mut args = vec![
+        "log".to_owned(),
+        "--no-color".into(),
+        "--no-decorate".into(),
+        "--no-patch".into(),
+        LOG_FORMAT.into(),
+    ];
+    args.extend_from_slice(revisions);
+    args.push("--".into());
+    GitStream::spawn(root, &args, cancel, &[0])
 }
 
 /// A single traversal, with either a direct pipe or an ordered object-reader pool.
@@ -586,7 +652,12 @@ enum CommitSource {
 }
 
 impl CommitStream {
-    fn open(root: &Path, head: &CommitId, cancel: Cancellation, readers: usize) -> Result<Self> {
+    fn open(
+        root: &Path,
+        revisions: &[String],
+        cancel: Cancellation,
+        readers: usize,
+    ) -> Result<Self> {
         ensure!(
             (1..=MAX_GIT_WORKERS).contains(&readers),
             "Git workers must be between 1 and {MAX_GIT_WORKERS}"
@@ -606,15 +677,13 @@ impl CommitStream {
             )?;
         }
         let source = if !encoding.is_empty() && !utf8_encoding(trim_newline(&encoding)) {
-            CommitSource::Pretty(pretty_log(root, head, cancel)?)
+            CommitSource::Pretty(pretty_log(root, revisions, cancel)?)
         } else if readers == 1 {
             // Preserve the native, buffered OS-pipe fast path for one reader.
-            let mut traversal = GitStream::spawn(
-                root,
-                &["rev-list", "--parents", &head.to_hex()],
-                cancel.clone(),
-                &[0],
-            )?;
+            let mut args = vec!["rev-list".to_owned(), "--parents".into()];
+            args.extend_from_slice(revisions);
+            args.push("--".into());
+            let mut traversal = GitStream::spawn(root, &args, cancel.clone(), &[0])?;
             let pipe = traversal.stdout.take().unwrap().into_inner();
             let reader = GitStream::spawn_inner(
                 root,
@@ -630,7 +699,7 @@ impl CommitStream {
             )?;
             CommitSource::Single { traversal, reader }
         } else {
-            CommitSource::Pool(CommitPool::open(root, head, cancel, readers)?)
+            CommitSource::Pool(CommitPool::open(root, revisions, cancel, readers)?)
         };
         Ok(Self {
             source,
@@ -884,7 +953,8 @@ mod tests {
         let mut raw = repository
             .log_with_readers(cancel.clone(), readers)
             .unwrap();
-        let mut pretty = pretty_log(root, repository.head.as_ref().unwrap(), cancel).unwrap();
+        let mut pretty =
+            pretty_log(root, &[repository.head.as_ref().unwrap().to_hex()], cancel).unwrap();
         let mut count = 0;
         while let Some(expected) = pretty.next_commit().unwrap() {
             let actual = raw.next_commit().unwrap().unwrap();

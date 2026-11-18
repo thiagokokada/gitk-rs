@@ -81,6 +81,7 @@ fn wait<T>(mut poll: impl FnMut() -> Option<T>) -> T {
 fn history_request(fixture: &Fixture) -> Request {
     Request {
         source: HistorySource {
+            scope: Default::default(),
             repository: fixture.root().into(),
             graph_columns: 200,
             git_workers: gitk_rs::git::DEFAULT_GIT_WORKERS,
@@ -906,4 +907,98 @@ fn source_identity_restarts_history_while_viewport_changes_keep_entries() {
     assert!(switched.error.is_none());
     assert_eq!(switched.loaded, 1);
     assert_eq!(switched.rows[0].commit.id.to_hex(), tip);
+}
+
+#[test]
+fn history_scopes_include_unmerged_remote_and_tagged_history_without_checkout() {
+    use gitk_rs::git::HistoryScope;
+    let fixture = Fixture::new();
+    let root = fixture.commit("root");
+    let main = fixture.commit("main tip");
+    fixture.git(&["checkout", "-qb", "side", &root]);
+    let side = fixture.commit("side tip");
+    fixture.git(&["tag", "-a", "release", "-m", "release"]);
+    fixture.git(&["update-ref", "refs/remotes/origin/remote-only", &side]);
+    fixture.git(&["checkout", "-q", "main"]);
+    fixture.git(&["branch", "-D", "side"]);
+    let status = fixture.git(&["status", "--porcelain=v1"]);
+    for readers in [1, 3] {
+        let mut request = history_request(&fixture);
+        request.batch = None;
+        request.source.git_workers = readers;
+        let engine = HistoryEngine::spawn(request.clone());
+        let handle = engine.handle();
+        let current = wait(|| handle.take_snapshot().filter(|s| s.eof));
+        assert_eq!(current.loaded, 2);
+        assert!(current.rows.iter().all(|e| e.commit.id.to_hex() != side));
+        for (scope, expected) in [
+            (HistoryScope::AllBranches, vec![&root, &main, &side]),
+            (
+                HistoryScope::Reference("refs/tags/release".into()),
+                vec![&root, &side],
+            ),
+            (
+                HistoryScope::Reference("refs/remotes/origin/remote-only".into()),
+                vec![&root, &side],
+            ),
+        ] {
+            request.source.scope = scope;
+            request.generation.0 += 1;
+            request.id += 1;
+            handle.request(request.clone());
+            let snapshot = wait(|| {
+                handle
+                    .take_snapshot()
+                    .filter(|s| s.generation == request.generation && s.eof)
+            });
+            assert!(snapshot.error.is_none(), "{:?}", snapshot.error);
+            let mut actual: Vec<_> = snapshot.rows.iter().map(|e| e.commit.id.to_hex()).collect();
+            actual.sort();
+            let mut expected: Vec<_> = expected.into_iter().cloned().collect();
+            expected.sort();
+            assert_eq!(actual, expected);
+        }
+        // Updating a browsed ref must invalidate retained history even with HEAD unchanged.
+        fixture.git(&["update-ref", "refs/remotes/origin/remote-only", &main]);
+        request.generation.0 += 1;
+        request.id += 1;
+        handle.request(request.clone());
+        let refreshed = wait(|| {
+            handle
+                .take_snapshot()
+                .filter(|s| s.generation == request.generation && s.eof)
+        });
+        assert!(refreshed.rows.iter().any(|e| e.commit.id.to_hex() == main));
+        fixture.git(&["update-ref", "refs/remotes/origin/remote-only", &side]);
+    }
+    assert_eq!(fixture.git(&["symbolic-ref", "--short", "HEAD"]), "main");
+    assert_eq!(fixture.git(&["rev-parse", "HEAD"]), main);
+    assert_eq!(fixture.git(&["status", "--porcelain=v1"]), status);
+}
+
+#[test]
+fn changing_scope_discards_stale_results_and_reports_deleted_references() {
+    use gitk_rs::git::HistoryScope;
+    let fixture = Fixture::new();
+    fixture.commit("root");
+    fixture.git(&["branch", "side"]);
+    let mut request = history_request(&fixture);
+    let engine = HistoryEngine::spawn(request.clone());
+    let handle = engine.handle();
+    request.source.scope = HistoryScope::AllBranches;
+    request.generation.0 += 1;
+    handle.request(request.clone());
+    request.source.scope = HistoryScope::Reference("refs/heads/missing".into());
+    request.generation.0 += 1;
+    handle.request(request.clone());
+    let error = wait(|| handle.take_snapshot().filter(|s| s.error.is_some()));
+    assert_eq!(error.generation, request.generation);
+    assert_eq!(error.source.scope, request.source.scope);
+    request.source.scope = HistoryScope::Current;
+    request.generation.0 += 1;
+    handle.request(request.clone());
+    let recovered = wait(|| handle.take_snapshot().filter(|s| s.eof));
+    assert_eq!(recovered.generation, request.generation);
+    assert!(recovered.error.is_none());
+    assert_eq!(recovered.loaded, 1);
 }
