@@ -974,7 +974,10 @@ impl HistoryWindow {
                 };
                 let view = cx.entity().downgrade();
                 let generation = self.workspace_generation;
-                move |menu, _, cx| {
+                move |menu, window, cx| {
+                    let menu_width =
+                        (window.viewport_size().width - px(32.)).clamp(px(160.), px(480.));
+                    let label_width = menu_width - px(48.);
                     let base = view
                         .upgrade()
                         .and_then(|view| view.read(cx).comparison_base.clone());
@@ -987,25 +990,42 @@ impl HistoryWindow {
                     let base_commit = commit.clone();
                     let compare_view = view.clone();
                     let target = commit.id.to_hex();
-                    menu.item(
-                        PopupMenuItem::new("Copy commit hash").on_click(move |_, _, cx| {
-                            cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(hash.clone()))
-                        }),
-                    )
-                    .separator()
-                    .item(PopupMenuItem::new("Set as comparison base").on_click(
-                        move |_, window, cx| {
-                            let _ = base_view.update(cx, |this, cx| {
-                                if this.workspace_generation == generation {
-                                    this.comparison_base = Some(base_commit.clone());
-                                    this.focus.focus(window, cx);
-                                    cx.notify();
-                                }
-                            });
-                        },
-                    ))
-                    .item(
-                        PopupMenuItem::new(compare_label)
+                    menu.max_w(menu_width)
+                        .item(
+                            PopupMenuItem::new("Copy commit hash").on_click(move |_, _, cx| {
+                                cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(
+                                    hash.clone(),
+                                ))
+                            }),
+                        )
+                        .separator()
+                        .item(PopupMenuItem::new("Set as comparison base").on_click(
+                            move |_, window, cx| {
+                                let _ = base_view.update(cx, |this, cx| {
+                                    if this.workspace_generation == generation {
+                                        this.comparison_base = Some(base_commit.clone());
+                                        this.focus.focus(window, cx);
+                                        cx.notify();
+                                    }
+                                });
+                            },
+                        ))
+                        .item(
+                            PopupMenuItem::element(move |_, _| {
+                                let tooltip = compare_label.clone();
+                                div()
+                                    .id("compare-with-base-menu-label")
+                                    .test_support()
+                                    .aria_label(compare_label.clone())
+                                    .flex_1()
+                                    .min_w_0()
+                                    .max_w(label_width)
+                                    .truncate()
+                                    .child(compare_label.clone())
+                                    .hoverable_tooltip(move |window, cx| {
+                                        wrapped_tooltip(tooltip.clone(), window, cx)
+                                    })
+                            })
                             .disabled(base.is_none())
                             .on_click(move |_, window, cx| {
                                 let _ = compare_view.update(cx, |this, cx| {
@@ -1023,7 +1043,7 @@ impl HistoryWindow {
                                     }
                                 });
                             }),
-                    )
+                        )
                 }
             })
             .into_any_element()

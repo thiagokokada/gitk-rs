@@ -950,3 +950,69 @@ fn commit_context_menu_compares_marked_base_and_clears_it_on_repository_change(
     assert_eq!(fixture.git(&["rev-parse", "HEAD"]), target);
     assert!(fixture.git(&["status", "--porcelain=v1"]).is_empty());
 }
+
+#[gpui_kit::test]
+fn long_comparison_base_subject_stays_inside_the_context_menu(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let subject = "Very long base subject with Unicode 日本語 λ ".repeat(12);
+    let base = fixture.commit(&subject);
+    let target = fixture.commit("comparison target");
+    let (app, cx) = open(&fixture, cx);
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            app.view
+                .read(cx)
+                .history_state
+                .snapshot
+                .as_ref()
+                .is_some_and(|s| s.eof)
+        })
+    });
+    app.view.update(cx, |view, cx| {
+        view.comparison_base = Some(crate::ui::comparison_dialog::ComparisonBase {
+            id: gitk_rs::git::CommitId::parse(&base).unwrap(),
+            subject: subject.clone(),
+        });
+        cx.notify();
+    });
+    cx.simulate_resize(gpui_kit::size(px(680.), px(650.)));
+    let row = cx.update(|window, _| window.find(("commit", 0_usize)).bounds());
+    cx.simulate_mouse_down(
+        row.center(),
+        gpui_kit::MouseButton::Right,
+        Modifiers::default(),
+    );
+    cx.simulate_mouse_up(
+        row.center(),
+        gpui_kit::MouseButton::Right,
+        Modifiers::default(),
+    );
+    until(cx, |cx| {
+        cx.update(|window, _| window.try_find("popup-menu").is_some())
+    });
+    cx.update(|window, _| {
+        let menu = window.find("popup-menu").bounds();
+        let label = window.find("compare-with-base-menu-label").bounds();
+        assert!(label.left() >= menu.left());
+        assert!(label.right() <= menu.right());
+        assert!(menu.left() >= px(0.));
+        assert!(menu.right() <= window.viewport_size().width);
+        assert!(menu.size.width <= px(480.));
+    });
+    cx.simulate_keystrokes("down down down enter");
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            app.view
+                .read(cx)
+                .history_state
+                .snapshot
+                .as_ref()
+                .is_some_and(|s| {
+                    s.eof
+                        && s.comparison
+                            .as_ref()
+                            .is_some_and(|e| e.base.to_hex() == base && e.target.to_hex() == target)
+                })
+        })
+    });
+}

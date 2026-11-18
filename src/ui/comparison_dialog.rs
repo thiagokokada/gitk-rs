@@ -211,6 +211,7 @@ impl HistoryWindow {
                     .child(self.history_state.request.source.scope.label()),
             )
             .child(Button::new("swap-comparison").label("Swap base and target")
+                .tooltip("Reverse Base and Target and refresh the comparison, keeping the aggregate diff mode.")
                 .on_click(cx.listener(|this, _, window, cx| {
                     if let HistoryScope::Compare { base, target } = &this.history_state.request.source.scope {
                         let scope = HistoryScope::Compare { base: target.clone(), target: base.clone() };
