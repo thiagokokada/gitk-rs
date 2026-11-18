@@ -372,7 +372,6 @@ impl DiffPane {
             .flex()
             .items_center()
             .gap_2()
-            .px_2()
             .py_1()
             .line_height(px(20.))
             .text_size(px(12.));
