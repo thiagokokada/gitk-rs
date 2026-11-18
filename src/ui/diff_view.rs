@@ -1077,7 +1077,7 @@ impl Render for DiffPane {
                                                             };
                                                             if let Some(request) = history_request.clone() {
                                                                 let view = history_view.clone();
-                                                                menu.item(PopupMenuItem::new("Open file history").on_click(move |_, _, cx| {
+                                                                menu.separator().item(PopupMenuItem::new("Open file history").on_click(move |_, _, cx| {
                                                                     let _ = view.update(cx, |this, cx| {
                                                                         if this.page.selection == request.selection { cx.emit(request.clone()); }
                                                                     });
