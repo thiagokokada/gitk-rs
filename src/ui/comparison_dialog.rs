@@ -134,7 +134,7 @@ impl HistoryWindow {
             )
             .child(
                 Button::new("clear-comparison-base")
-                    .label("Clear")
+                    .label("Clear base")
                     .tooltip("Clear the marked base for future comparisons.")
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.comparison_base = None;

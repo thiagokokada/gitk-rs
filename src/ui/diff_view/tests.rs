@@ -1102,6 +1102,17 @@ fn changed_file_history_follows_old_names_and_returns_to_previous_scope(cx: &mut
             && pane.read(cx).selected_file == Some(2)
     })
     });
+    cx.update(|window, _| {
+        let file = window.find("file-history-label").bounds();
+        let follow = window.find("follow-file-renames").bounds();
+        let exit = window.find("exit-file-history").bounds();
+        let row = window.find("file-history-controls").bounds();
+        assert!(file.top() >= window.find("history-scope").bounds().bottom());
+        assert!(file.right() <= follow.left());
+        assert!((file.center().y - exit.center().y).abs() < px(1.));
+        assert!((follow.center().y - exit.center().y).abs() < px(1.));
+        assert!((exit.right() - row.right()).abs() < px(1.));
+    });
     cx.update(|window, cx| window.click("follow-file-renames", cx));
     until(cx, |cx| {
         cx.update(|_, cx| {

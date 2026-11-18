@@ -116,12 +116,20 @@ impl HistoryWindow {
                     .label("Compare…")
                     .on_click(cx.listener(|this, _, window, cx| this.open_comparison(window, cx))),
             )
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .child(self.history_state.request.source.scope.label()),
+            .when(
+                !matches!(
+                    self.history_state.request.source.scope,
+                    gitk_rs::git::HistoryScope::File(_)
+                ),
+                |bar| {
+                    bar.child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .child(self.history_state.request.source.scope.label()),
+                    )
+                },
             )
             .into_any_element()
     }
