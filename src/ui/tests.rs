@@ -3515,7 +3515,7 @@ fn browse_reference_keyboard_selection_preserves_checkout(cx: &mut TestAppContex
     assert_eq!(fixture.git(&["branch", "--show-current"]), "main");
     assert!(fixture.root().join("untracked.txt").exists());
     cx.update(|window, cx| window.click("history-scope", cx));
-    cx.update(|window, cx| window.click("browse-all", cx));
+    cx.update(|window, cx| window.click(("branch", 1_usize), cx));
     until(cx, |cx| {
         cx.update(|_, cx| {
             app.view
@@ -3527,7 +3527,8 @@ fn browse_reference_keyboard_selection_preserves_checkout(cx: &mut TestAppContex
         })
     });
     cx.update(|window, cx| window.click("history-scope", cx));
-    cx.update(|window, cx| window.click("browse-current", cx));
+    cx.simulate_input("Current branch");
+    cx.simulate_keystrokes("enter");
     until(cx, |cx| {
         cx.update(|_, cx| {
             let view = app.view.read(cx);

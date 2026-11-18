@@ -149,6 +149,8 @@ impl HistoryWindow {
         cx: &mut Context<Self>,
     ) {
         self.open_history_references(window, cx);
+        self.branch_dialog.include_scopes = false;
+        self.branch_dialog.filter(cx);
         self.comparison_dialog.destination = Some(side);
     }
 

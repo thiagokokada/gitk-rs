@@ -1,8 +1,27 @@
 use super::*;
 
+#[derive(Clone, Copy)]
+pub(super) enum BranchChoice {
+    Current,
+    AllBranches,
+    Reference(usize),
+}
+
+impl BranchChoice {
+    fn label(self, branches: &[String], browse: bool) -> String {
+        match self {
+            Self::Current => "Current branch".into(),
+            Self::AllBranches => "All branches and tags".into(),
+            Self::Reference(index) if browse => gitk_rs::git::reference_label(&branches[index]),
+            Self::Reference(index) => branches[index].clone(),
+        }
+    }
+}
+
 pub(super) struct BranchDialog {
     pub(super) branches: Vec<String>,
-    pub(super) filtered: Vec<usize>,
+    pub(super) filtered: Vec<BranchChoice>,
+    pub(super) include_scopes: bool,
     pub(super) filter: Entity<InputState>,
     _subscription: Subscription,
     pub(super) index: usize,
@@ -30,6 +49,7 @@ impl BranchDialog {
         Self {
             branches: Vec::new(),
             filtered: Vec::new(),
+            include_scopes: false,
             filter: branch_filter,
             _subscription: branch_subscription,
             index: 0,
@@ -72,21 +92,14 @@ impl BranchDialog {
                                             .when(i == this.branch_dialog.index, |row| {
                                                 row.text_color(rgb(colors::ON_SOLID))
                                             })
-                                            .child(
-                                                if matches!(
+                                            .child(this.branch_dialog.filtered[i].label(
+                                                &this.branch_dialog.branches,
+                                                matches!(
                                                     this.dialog,
                                                     Some(DialogKind::BrowseReferences)
-                                                ) {
-                                                    gitk_rs::git::reference_label(
-                                                        &this.branch_dialog.branches
-                                                            [this.branch_dialog.filtered[i]],
-                                                    )
-                                                } else {
-                                                    this.branch_dialog.branches
-                                                        [this.branch_dialog.filtered[i]]
-                                                        .clone()
-                                                },
-                                            )
+                                                ),
+                                            ))
+                                            .test_support()
                                             .cursor_pointer()
                                             .on_click(cx.listener(move |this, _, window, cx| {
                                                 this.switch_branch(i, window, cx)
@@ -136,29 +149,48 @@ impl BranchDialog {
 
     pub(super) fn filter(&mut self, cx: &App) {
         let query = self.filter.read(cx).value().trim().to_lowercase();
-        self.filtered = self
-            .branches
-            .iter()
-            .enumerate()
-            .filter_map(|(i, branch)| branch.to_lowercase().contains(&query).then_some(i))
+        self.filtered = [BranchChoice::Current, BranchChoice::AllBranches]
+            .into_iter()
+            .filter(|choice| {
+                self.include_scopes
+                    && choice
+                        .label(&self.branches, true)
+                        .to_lowercase()
+                        .contains(&query)
+            })
+            .chain(self.branches.iter().enumerate().filter_map(|(i, branch)| {
+                branch
+                    .to_lowercase()
+                    .contains(&query)
+                    .then_some(BranchChoice::Reference(i))
+            }))
             .collect();
         self.index = 0;
         self.scroll.scroll_to_item_strict(0, ScrollStrategy::Top);
     }
 
-    pub(super) fn reset(&mut self, window: &mut Window, cx: &mut Context<HistoryWindow>) {
+    pub(super) fn reset(
+        &mut self,
+        include_scopes: bool,
+        window: &mut Window,
+        cx: &mut Context<HistoryWindow>,
+    ) {
+        self.include_scopes = include_scopes;
         self.branches.clear();
         self.filtered.clear();
         self.filter
             .update(cx, |input, cx| input.set_value("", window, cx));
-        self.index = 0;
+        self.filter(cx);
         self.filter.update(cx, |input, cx| input.focus(window, cx));
     }
 
     pub(super) fn selected(&self, index: usize) -> Option<String> {
         self.filtered
             .get(index)
-            .and_then(|i| self.branches.get(*i))
+            .and_then(|choice| match choice {
+                BranchChoice::Reference(i) => self.branches.get(*i),
+                _ => None,
+            })
             .cloned()
     }
 

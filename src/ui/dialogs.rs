@@ -82,7 +82,7 @@ impl HistoryWindow {
     pub(super) fn open_branches(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.dialog = Some(DialogKind::Branches);
         self.dialog_focus.focus(window, cx);
-        self.branch_dialog.reset(window, cx);
+        self.branch_dialog.reset(false, window, cx);
         self.operation_message = "Loading local branches…".into();
         self.operation_id.value += 1;
         if self.workspace.operate(
@@ -108,6 +108,11 @@ impl HistoryWindow {
                     .on_click(
                         cx.listener(|this, _, window, cx| this.open_history_references(window, cx)),
                     ),
+            )
+            .child(
+                Button::new("open-comparison")
+                    .label("Compare…")
+                    .on_click(cx.listener(|this, _, window, cx| this.open_comparison(window, cx))),
             )
             .child(
                 div()
@@ -150,7 +155,7 @@ impl HistoryWindow {
         self.comparison_dialog.destination = None;
         self.dialog = Some(DialogKind::BrowseReferences);
         self.dialog_focus.focus(window, cx);
-        self.branch_dialog.reset(window, cx);
+        self.branch_dialog.reset(true, window, cx);
         self.operation_message = "Loading branches and tags…".into();
         self.operation_id.value += 1;
         if self.workspace.operate(
@@ -172,6 +177,17 @@ impl HistoryWindow {
         cx: &mut Context<Self>,
     ) {
         if matches!(self.dialog, Some(DialogKind::BrowseReferences)) {
+            match self.branch_dialog.filtered.get(index) {
+                Some(branch_dialog::BranchChoice::Current) => {
+                    self.set_history_scope(gitk_rs::git::HistoryScope::Current, window, cx);
+                    return;
+                }
+                Some(branch_dialog::BranchChoice::AllBranches) => {
+                    self.set_history_scope(gitk_rs::git::HistoryScope::AllBranches, window, cx);
+                    return;
+                }
+                _ => {}
+            }
             if self.pending_operation.is_none()
                 && let Some(name) = self.branch_dialog.selected(index)
             {
@@ -251,42 +267,6 @@ impl HistoryWindow {
         body = body.child(div().flex_shrink_0().text_size(px(18.)).child(title));
         match self.dialog {
             Some(DialogKind::Branches | DialogKind::BrowseReferences) => {
-                if matches!(self.dialog, Some(DialogKind::BrowseReferences))
-                    && self.comparison_dialog.destination.is_none()
-                {
-                    body = body.child(
-                        div()
-                            .flex()
-                            .flex_wrap()
-                            .flex_shrink_0()
-                            .gap_2()
-                            .child(
-                                Button::new("browse-current")
-                                    .label("Current branch")
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.set_history_scope(
-                                            gitk_rs::git::HistoryScope::Current,
-                                            window,
-                                            cx,
-                                        )
-                                    })),
-                            )
-                            .child(
-                                Button::new("browse-all")
-                                    .label("All branches and tags")
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.set_history_scope(
-                                            gitk_rs::git::HistoryScope::AllBranches,
-                                            window,
-                                            cx,
-                                        )
-                                    })),
-                            )
-                            .child(Button::new("open-comparison").label("Compare…").on_click(
-                                cx.listener(|this, _, window, cx| this.open_comparison(window, cx)),
-                            )),
-                    );
-                }
                 body = self.branch_dialog.render(
                     body,
                     self.config.theme,
