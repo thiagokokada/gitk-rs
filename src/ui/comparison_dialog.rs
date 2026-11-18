@@ -196,6 +196,7 @@ impl HistoryWindow {
             return;
         }
         self.set_history_scope(HistoryScope::Compare { base, target }, window, cx);
+        self.comparison_diff = Some(ComparisonMode::SinceMergeBase);
     }
 
     pub(super) fn comparison_controls(&self, cx: &mut Context<Self>) -> AnyElement {

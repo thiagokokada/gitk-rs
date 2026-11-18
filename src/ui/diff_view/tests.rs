@@ -714,14 +714,23 @@ fn comparison_picker_direction_and_diff_modes_work_without_checkout(cx: &mut Tes
             pane.read(cx)
                 .snapshot
                 .as_ref()
-                .is_some_and(|s| s.error.is_none() && s.files.len() == 2)
+                .is_some_and(|s| s.error.is_none() && s.files.len() == 1)
         })
     });
     assert_eq!(selected(&app.view, cx).as_deref(), Some(feature.as_str()));
     assert_eq!(
         cx.update(|_, cx| app.view.read(cx).comparison_diff),
-        Some(ComparisonMode::Endpoints)
+        Some(ComparisonMode::SinceMergeBase)
     );
+    cx.update(|window, cx| window.click("comparison-endpoints", cx));
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            pane.read(cx)
+                .snapshot
+                .as_ref()
+                .is_some_and(|s| s.error.is_none() && s.files.len() == 2)
+        })
+    });
     cx.update(|window, cx| window.click("comparison-merge-base", cx));
     until(cx, |cx| {
         cx.update(|_, cx| {
@@ -906,7 +915,10 @@ fn commit_context_menu_compares_marked_base_and_clears_it_on_repository_change(
                         .is_some_and(|e| e.base.to_hex() == base && e.target.to_hex() == target)
             }) && matches!(
                 pane.read(cx).current.as_ref().map(|s| &s.source),
-                Some(super::DiffSource::Comparison { .. })
+                Some(super::DiffSource::Comparison {
+                    mode: gitk_rs::diff::ComparisonMode::Endpoints,
+                    ..
+                })
             ) && pane
                 .read(cx)
                 .snapshot
