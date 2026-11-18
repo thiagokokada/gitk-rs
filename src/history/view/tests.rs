@@ -10,6 +10,7 @@ fn state() -> HistoryViewState {
     HistoryViewState::new(Request {
         generation: Generation(1),
         source: HistorySource {
+            scope: Default::default(),
             repository: PathBuf::from("repository"),
             graph_columns: 256,
             git_workers: 4,
@@ -48,6 +49,7 @@ fn page(state: &HistoryViewState, start: usize, count: usize, visible: usize) ->
         })
         .collect();
     Snapshot {
+        comparison: None,
         generation: state.request.generation,
         source: state.request.source.clone(),
         request_id: state.request.id,

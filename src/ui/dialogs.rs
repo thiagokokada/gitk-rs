@@ -47,6 +47,9 @@ impl HistoryWindow {
         self.config.repository = std::path::absolute(&path).unwrap_or(path);
         self.workspace_generation.0 += 1;
         self.workspace_snapshot = None;
+        self.comparison_diff = None;
+        self.comparison_base = None;
+        self.history_state.request.source.scope = Default::default();
         self.history_state.reset_repository();
         self.pending_operation = None;
         self.operation_message.clear();
@@ -80,7 +83,7 @@ impl HistoryWindow {
     pub(super) fn open_branches(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.dialog = Some(DialogKind::Branches);
         self.dialog_focus.focus(window, cx);
-        self.branch_dialog.reset(window, cx);
+        self.branch_dialog.reset(false, window, cx);
         self.operation_message = "Loading local branches…".into();
         self.operation_id.value += 1;
         if self.workspace.operate(
@@ -94,7 +97,122 @@ impl HistoryWindow {
         }
         cx.notify();
     }
-    pub(super) fn switch_branch(&mut self, index: usize, cx: &mut Context<Self>) {
+    pub(super) fn history_scope_control(&self, cx: &mut Context<Self>) -> AnyElement {
+        div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .child("History:")
+            .child(
+                Button::new("history-scope")
+                    .label("Browse branch or tag…")
+                    .on_click(
+                        cx.listener(|this, _, window, cx| this.open_history_references(window, cx)),
+                    ),
+            )
+            .child(
+                Button::new("open-comparison")
+                    .label("Compare…")
+                    .on_click(cx.listener(|this, _, window, cx| this.open_comparison(window, cx))),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .child(self.history_state.request.source.scope.label()),
+            )
+            .into_any_element()
+    }
+
+    pub(super) fn set_history_scope(
+        &mut self,
+        scope: gitk_rs::git::HistoryScope,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.apply_history_scope(scope, cx);
+        self.focus.focus(window, cx);
+    }
+
+    fn apply_history_scope(&mut self, scope: gitk_rs::git::HistoryScope, cx: &mut Context<Self>) {
+        self.comparison_diff = matches!(scope, gitk_rs::git::HistoryScope::Compare { .. })
+            .then_some(gitk_rs::diff::ComparisonMode::Endpoints);
+        self.history_state.request.source.scope = scope;
+        self.history_state.reset_repository();
+        if let Some(snapshot) = &self.workspace_snapshot {
+            self.history_state.update_local_rows(&snapshot.status);
+        }
+        self.history_state.viewport = 0..10;
+        self.history_state.request.range = 0..128;
+        self.history_state.request.anchor = None;
+        self.dialog = None;
+        self.restore_focus = true;
+        self.scroll.scroll_to_item_strict(0, ScrollStrategy::Top);
+        self.reload(cx);
+    }
+
+    pub(super) fn open_history_references(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.comparison_dialog.destination = None;
+        self.dialog = Some(DialogKind::BrowseReferences);
+        self.dialog_focus.focus(window, cx);
+        self.branch_dialog.reset(true, window, cx);
+        self.operation_message = "Loading branches and tags…".into();
+        self.operation_id.value += 1;
+        if self.workspace.operate(
+            self.workspace_generation,
+            self.operation_id,
+            Operation::References,
+        ) {
+            self.pending_operation = Some(self.operation_id);
+        } else {
+            self.operation_message = "A repository operation is already pending".into();
+        }
+        cx.notify();
+    }
+
+    pub(super) fn switch_branch(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if matches!(self.dialog, Some(DialogKind::BrowseReferences)) {
+            match self.branch_dialog.filtered.get(index) {
+                Some(branch_dialog::BranchChoice::Current) => {
+                    self.set_history_scope(gitk_rs::git::HistoryScope::Current, window, cx);
+                    return;
+                }
+                Some(branch_dialog::BranchChoice::AllBranches) => {
+                    self.set_history_scope(gitk_rs::git::HistoryScope::AllBranches, window, cx);
+                    return;
+                }
+                _ => {}
+            }
+            if self.pending_operation.is_none()
+                && let Some(name) = self.branch_dialog.selected(index)
+            {
+                if let Some(side) = self.comparison_dialog.destination.take() {
+                    let input = match side {
+                        comparison_dialog::ComparisonSide::Base => {
+                            self.comparison_dialog.base.clone()
+                        }
+                        comparison_dialog::ComparisonSide::Target => {
+                            self.comparison_dialog.target.clone()
+                        }
+                    };
+                    input.update(cx, |input, cx| {
+                        input.set_value(name, window, cx);
+                        input.focus(window, cx);
+                    });
+                    self.dialog = Some(DialogKind::Compare);
+                    cx.notify();
+                } else {
+                    self.apply_history_scope(gitk_rs::git::HistoryScope::Reference(name), cx);
+                }
+            }
+            return;
+        }
         if !matches!(self.dialog, Some(DialogKind::Branches)) || self.pending_operation.is_some() {
             return;
         }
@@ -128,6 +246,8 @@ impl HistoryWindow {
     pub(super) fn dialog_element(&self, cx: &mut Context<Self>) -> AnyElement {
         let title = match self.dialog {
             Some(DialogKind::Branches) => "Switch local branch",
+            Some(DialogKind::BrowseReferences) => "Browse branch or tag",
+            Some(DialogKind::Compare) => "Compare branches or revisions",
             Some(DialogKind::Help) => "Help",
             Some(DialogKind::Preferences) => "Preferences",
             Some(DialogKind::OpenRepository) => "Open repository by path",
@@ -147,14 +267,18 @@ impl HistoryWindow {
             .text_color(rgb(palette.foreground));
         body = body.child(div().flex_shrink_0().text_size(px(18.)).child(title));
         match self.dialog {
-            Some(DialogKind::Branches) => {
+            Some(DialogKind::Branches | DialogKind::BrowseReferences) => {
                 body = self.branch_dialog.render(
                     body,
                     self.config.theme,
                     &self.operation_message,
                     self.pending_operation.is_some(),
+                    self.preferences.font_size,
                     cx,
                 );
+            }
+            Some(DialogKind::Compare) => {
+                body = self.comparison_dialog.render(body, self.config.theme, cx);
             }
             Some(DialogKind::OpenRepository) => {
                 body = body
@@ -300,7 +424,7 @@ impl HistoryWindow {
             .justify_center()
             .track_focus(&self.dialog_focus)
             .key_context(match self.dialog {
-                Some(DialogKind::Branches) => "Dialog BranchDialog",
+                Some(DialogKind::Branches | DialogKind::BrowseReferences) => "Dialog BranchDialog",
                 Some(DialogKind::Help) => "Dialog HelpDialog",
                 _ => "Dialog",
             })

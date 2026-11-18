@@ -58,7 +58,19 @@ pub struct FileSection {
 #[derive(Clone)]
 pub enum DiffSource {
     Commit(Arc<Commit>),
-    Local { staged: bool },
+    Local {
+        staged: bool,
+    },
+    Comparison {
+        endpoints: crate::git::ComparisonEndpoints,
+        mode: ComparisonMode,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ComparisonMode {
+    Endpoints,
+    SinceMergeBase,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -210,6 +222,36 @@ impl DiffDocument {
             &["rev-parse", "--show-toplevel"],
             cancellation,
         )?;
+        if let DiffSource::Comparison {
+            endpoints,
+            mode: ComparisonMode::SinceMergeBase,
+        } = &mut rooted.source
+        {
+            let bytes = crate::git::run_bytes(
+                &rooted.repository,
+                &[
+                    "merge-base",
+                    "--all",
+                    &endpoints.base.to_hex(),
+                    &endpoints.target.to_hex(),
+                ],
+                cancellation,
+                &[0, 1],
+            )?;
+            let bases: Vec<_> = bytes
+                .split(|b| *b == b'\n')
+                .filter(|b| !b.is_empty())
+                .collect();
+            ensure!(
+                !bases.is_empty(),
+                "These revisions have no common ancestor. Use Base → Target to compare unrelated histories."
+            );
+            ensure!(
+                bases.len() == 1,
+                "These revisions have multiple merge bases. Use Base → Target to choose an unambiguous comparison."
+            );
+            endpoints.base = crate::git::CommitId::parse(std::str::from_utf8(bases[0])?)?;
+        }
         let selection = &rooted;
         let commands = DiffCommands::new(selection, cancellation)?;
         let mut files = load_files(selection, &commands, cancellation)?;
@@ -226,6 +268,16 @@ impl DiffDocument {
         let mut max_width = 0;
         let header = match &selection.source {
             DiffSource::Commit(commit) => commit_header(commit),
+            DiffSource::Comparison { endpoints, mode } => format!(
+                "{}\nFrom: {}\nTo:   {}\n\n",
+                if *mode == ComparisonMode::Endpoints {
+                    "Endpoint comparison"
+                } else {
+                    "Changes since merge base"
+                },
+                endpoints.base,
+                endpoints.target
+            ),
             DiffSource::Local { staged } => format!(
                 "{}\n\n",
                 if *staged {
@@ -634,6 +686,10 @@ fn diff_args(source: &DiffSource, numstat: bool) -> Vec<OsString> {
                 args.push(parent.to_hex().into());
             }
             args.push(commit.id.to_hex().into());
+        }
+        DiffSource::Comparison { endpoints, .. } => {
+            args.push(endpoints.base.to_hex().into());
+            args.push(endpoints.target.to_hex().into());
         }
         DiffSource::Local { staged: true } => args.push("--cached".into()),
         DiffSource::Local { staged: false } => args.push("--ours".into()),

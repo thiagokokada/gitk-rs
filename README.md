@@ -16,6 +16,8 @@ A lightweight Git history explorer for Linux and macOS, written in Rust with
 - Diff, old/new sides, adjustable context, whitespace filtering and word diffs
 - File list to jump between changes, with text selection and copying
 - Staged, unstaged and untracked changes
+- Browse all branches, remote tracking branches and tags without checkout
+- Compare branch histories and diffs between endpoints or since their merge base
 - Branch switching, automatic refresh and keyboard navigation
 
 ## Usage

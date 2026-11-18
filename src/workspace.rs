@@ -109,6 +109,30 @@ pub fn branches(root: &Path, cancel: &Cancellation) -> Result<Vec<String>> {
     Ok(branches)
 }
 
+/// Full names preserve branch/tag distinctions and avoid ambiguous short refs.
+pub fn references(root: &Path, cancel: &Cancellation) -> Result<Vec<String>> {
+    let mut stream = GitStream::spawn(
+        root,
+        &[
+            "for-each-ref",
+            "--format=%(refname)",
+            "refs/heads/",
+            "refs/remotes/",
+            "refs/tags/",
+        ],
+        cancel.clone(),
+        &[0],
+    )?;
+    let mut names = Vec::new();
+    let mut bytes = 0;
+    while let Some(record) = stream.record(b'\n')? {
+        bytes += record.bytes.len();
+        ensure!(bytes <= 2 * 1024 * 1024, "reference names exceed 2 MiB");
+        names.push(String::from_utf8(record.bytes)?);
+    }
+    Ok(names)
+}
+
 pub fn switch_branch(root: &Path, branch: &str, cancel: &Cancellation) -> Result<()> {
     // Validate against local names as well as Git's branch syntax. No shell, force,
     // stash or discard. --no-guess prevents accidentally creating tracking branches.
@@ -345,6 +369,7 @@ pub struct WorkspaceSnapshot {
 #[derive(Clone)]
 pub enum Operation {
     Branches,
+    References,
     Switch(String),
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -355,6 +380,7 @@ pub struct OperationId {
 #[derive(Debug, PartialEq, Eq)]
 pub enum OperationOutcome {
     Branches(Vec<String>),
+    References(Vec<String>),
     BranchSwitched,
 }
 
@@ -538,6 +564,9 @@ fn workspace_worker(shared: Arc<WorkShared>) {
             && generation == request.generation
         {
             let result = match operation {
+                Operation::References => {
+                    references(&request.repository, &cancel).map(OperationOutcome::References)
+                }
                 Operation::Branches => {
                     branches(&request.repository, &cancel).map(OperationOutcome::Branches)
                 }

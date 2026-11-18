@@ -178,10 +178,10 @@ impl HistoryViewState {
         let old_count = self.local_rows.len();
         let old_top = self.viewport.start;
         self.local_rows.clear();
-        if status.unstaged {
+        if status.unstaged && self.request.source.scope == crate::git::HistoryScope::Current {
             self.local_rows.push(LocalChangeKind::Unstaged);
         }
-        if status.staged {
+        if status.staged && self.request.source.scope == crate::git::HistoryScope::Current {
             self.local_rows.push(LocalChangeKind::Staged);
         }
         if let Some((index, _)) = &mut self.selected {

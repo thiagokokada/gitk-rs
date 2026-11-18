@@ -665,3 +665,354 @@ fn file_context_menu_keeps_copy_after_open_file(cx: &mut TestAppContext) {
             == Some(path)
     });
 }
+
+#[gpui_kit::test]
+fn comparison_picker_direction_and_diff_modes_work_without_checkout(cx: &mut TestAppContext) {
+    use crate::ui::DialogKind;
+    use gitk_rs::{diff::ComparisonMode, git::HistoryScope};
+    let fixture = Fixture::new();
+    fixture.commit("shared");
+    fixture.git(&["checkout", "-qb", "feature"]);
+    let feature = fixture.commit("feature change");
+    fixture.git(&["checkout", "-q", "main"]);
+    std::fs::write(fixture.root().join("main.txt"), "main only\n").unwrap();
+    fixture.git(&["add", "main.txt"]);
+    fixture.git(&["commit", "-qm", "main change"]);
+    let main = fixture.git(&["rev-parse", "HEAD"]);
+    let (app, cx) = open(&fixture, cx);
+    let pane = cx.update(|_, cx| app.view.read(cx).diff.clone());
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            app.view
+                .read(cx)
+                .history_state
+                .snapshot
+                .as_ref()
+                .is_some_and(|s| s.eof)
+        })
+    });
+    cx.update(|window, cx| window.click("open-comparison", cx));
+    cx.update(|window, cx| window.click("choose-comparison-target", cx));
+    until(cx, |cx| {
+        cx.update(|_, cx| app.view.read(cx).pending_operation.is_none())
+    });
+    cx.simulate_input("feature");
+    cx.simulate_keystrokes("enter");
+    until(cx, |cx| {
+        cx.update(|_, cx| matches!(app.view.read(cx).dialog, Some(DialogKind::Compare)))
+    });
+    cx.update(|window, _| {
+        let close = window.find("close-dialog").bounds();
+        let compare = window.find("apply-comparison").bounds();
+        assert_eq!(compare.size.width, close.size.width);
+        assert_eq!(compare.size.height, close.size.height);
+        assert!(compare.bottom() <= close.top());
+    });
+    cx.update(|window, cx| window.click("apply-comparison", cx));
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            pane.read(cx)
+                .snapshot
+                .as_ref()
+                .is_some_and(|s| s.error.is_none() && s.files.len() == 2)
+        })
+    });
+    assert_eq!(selected(&app.view, cx).as_deref(), Some(feature.as_str()));
+    assert_eq!(
+        cx.update(|_, cx| app.view.read(cx).comparison_diff),
+        Some(ComparisonMode::Endpoints)
+    );
+    cx.update(|window, cx| window.click("comparison-merge-base", cx));
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            pane.read(cx)
+                .snapshot
+                .as_ref()
+                .is_some_and(|s| s.error.is_none() && s.files.len() == 1)
+        })
+    });
+    assert_eq!(
+        cx.update(|_, cx| app.view.read(cx).comparison_diff),
+        Some(ComparisonMode::SinceMergeBase)
+    );
+    cx.update(|window, cx| window.click("comparison-selected-commit", cx));
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            matches!(
+                pane.read(cx).current.as_ref().map(|s| &s.source),
+                Some(super::DiffSource::Commit(_))
+            ) && pane.read(cx).snapshot.is_some()
+        })
+    });
+    cx.update(|window, cx| window.click("comparison-endpoints", cx));
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            pane.read(cx)
+                .snapshot
+                .as_ref()
+                .is_some_and(|s| s.files.len() == 2)
+        })
+    });
+    // Reverse the comparison directly, preserving the chosen aggregate diff mode.
+    cx.update(|window, cx| window.click("comparison-merge-base", cx));
+    cx.update(|window, cx| window.click("swap-comparison", cx));
+    until(cx, |cx| {
+        selected(&app.view, cx).as_deref() == Some(main.as_str())
+    });
+    assert!(cx.update(|_, cx| matches!(&app.view.read(cx).history_state.request.source.scope, HistoryScope::Compare { base, target } if base == "refs/heads/feature" && target == "HEAD")));
+    assert_eq!(
+        cx.update(|_, cx| app.view.read(cx).comparison_diff),
+        Some(ComparisonMode::SinceMergeBase)
+    );
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            pane.read(cx).snapshot.as_ref().is_some_and(|s| {
+                s.files.len() == 1 && s.files[0].path == std::path::Path::new("main.txt")
+            })
+        })
+    });
+    // Canceling a reference picker returns to the comparison form with edits retained.
+    cx.update(|window, cx| window.click("open-comparison", cx));
+    cx.update(|window, cx| window.click("choose-comparison-base", cx));
+    cx.simulate_keystrokes("escape");
+    assert!(cx.update(|_, cx| matches!(app.view.read(cx).dialog, Some(DialogKind::Compare))));
+    cx.simulate_keystrokes("escape");
+    assert!(cx.update(|_, cx| app.view.read(cx).dialog.is_none()));
+    // Equal endpoints show an empty range but retain the valid aggregate diff.
+    cx.update(|window, cx| {
+        app.view.update(cx, |view, cx| {
+            view.set_history_scope(
+                HistoryScope::Compare {
+                    base: "main".into(),
+                    target: "main".into(),
+                },
+                window,
+                cx,
+            )
+        })
+    });
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            let view = app.view.read(cx);
+            view.history_state
+                .snapshot
+                .as_ref()
+                .is_some_and(|s| s.eof && s.loaded == 0)
+                && pane
+                    .read(cx)
+                    .snapshot
+                    .as_ref()
+                    .is_some_and(|s| s.error.is_none() && s.files.is_empty())
+        })
+    });
+    assert!(cx.update(|_, cx| app.view.read(cx).detail.contains("no commits missing")));
+    cx.update(|window, cx| window.click("exit-comparison", cx));
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            let view = app.view.read(cx);
+            view.history_state.request.source.scope == HistoryScope::Current
+                && view.comparison_diff.is_none()
+                && view
+                    .history_state
+                    .snapshot
+                    .as_ref()
+                    .is_some_and(|s| s.eof && s.loaded == 2)
+                && matches!(
+                    pane.read(cx).current.as_ref().map(|s| &s.source),
+                    Some(super::DiffSource::Commit(_))
+                )
+        })
+    });
+    assert_eq!(fixture.git(&["branch", "--show-current"]), "main");
+    assert_eq!(fixture.git(&["rev-parse", "HEAD"]), main);
+}
+
+#[gpui_kit::test]
+fn commit_context_menu_compares_marked_base_and_clears_it_on_repository_change(
+    cx: &mut TestAppContext,
+) {
+    use gitk_rs::git::HistoryScope;
+    let fixture = Fixture::new();
+    fixture.commit("shared root");
+    let base = fixture.commit("base revision");
+    let target = fixture.commit("target revision");
+    let (app, cx) = open(&fixture, cx);
+    let pane = cx.update(|_, cx| app.view.read(cx).diff.clone());
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            app.view
+                .read(cx)
+                .history_state
+                .snapshot
+                .as_ref()
+                .is_some_and(|s| s.eof)
+                && pane.read(cx).snapshot.is_some()
+        })
+    });
+    let open_menu = |cx: &mut gpui_kit::VisualTestContext, row: usize| {
+        let bounds = cx.update(|window, _| window.find(("commit", row)).bounds());
+        cx.simulate_mouse_down(
+            bounds.center(),
+            gpui_kit::MouseButton::Right,
+            Modifiers::default(),
+        );
+        cx.simulate_mouse_up(
+            bounds.center(),
+            gpui_kit::MouseButton::Right,
+            Modifiers::default(),
+        );
+        until(cx, |cx| {
+            cx.update(|window, _| window.try_find("popup-menu").is_some())
+        });
+    };
+    // Mark a nonselected row. This must not replace the currently displayed diff.
+    let selection = cx.update(|_, cx| pane.read(cx).selection_id());
+    open_menu(cx, 1);
+    let set_base = cx.update(|window, _| window.find_by_label("Set as comparison base").bounds());
+    cx.simulate_click(set_base.center(), Modifiers::default());
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            app.view
+                .read(cx)
+                .comparison_base
+                .as_ref()
+                .is_some_and(|b| b.id.to_hex() == base)
+        })
+    });
+    assert_eq!(cx.update(|_, cx| pane.read(cx).selection_id()), selection);
+    cx.update(|window, cx| {
+        assert!(window.find("comparison-base-indicator").visible());
+        assert_eq!(
+            app.view.read(cx).comparison_base.as_ref().unwrap().label(),
+            format!("{} · base revision", &base[..7])
+        );
+    });
+    // The target row's menu identifies the pinned base and compares exact commits.
+    open_menu(cx, 0);
+    let compare = cx.update(|window, _| {
+        window
+            .find_by_label(&format!("Compare with base {} · base revision", &base[..7]))
+            .bounds()
+    });
+    cx.simulate_click(compare.center(), Modifiers::default());
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            let view = app.view.read(cx);
+            view.history_state.snapshot.as_ref().is_some_and(|s| {
+                s.eof
+                    && s.loaded == 1
+                    && s.comparison
+                        .as_ref()
+                        .is_some_and(|e| e.base.to_hex() == base && e.target.to_hex() == target)
+            }) && matches!(
+                pane.read(cx).current.as_ref().map(|s| &s.source),
+                Some(super::DiffSource::Comparison { .. })
+            ) && pane
+                .read(cx)
+                .snapshot
+                .as_ref()
+                .is_some_and(|s| s.error.is_none())
+        })
+    });
+    // Clearing the marker affects future comparisons, keeping this comparison usable.
+    cx.update(|window, cx| window.click("clear-comparison-base", cx));
+    assert!(cx.update(|_, cx| app.view.read(cx).comparison_base.is_none()));
+    assert!(cx.update(|_, cx| matches!(
+        app.view.read(cx).history_state.request.source.scope,
+        HistoryScope::Compare { .. }
+    )));
+    cx.update(|window, cx| window.click("exit-comparison", cx));
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            app.view
+                .read(cx)
+                .history_state
+                .snapshot
+                .as_ref()
+                .is_some_and(|s| s.eof && s.loaded == 3)
+        })
+    });
+    open_menu(cx, 1);
+    cx.simulate_keystrokes("down down enter");
+    until(cx, |cx| {
+        cx.update(|_, cx| app.view.read(cx).comparison_base.is_some())
+    });
+    let other = Fixture::new();
+    let other_head = other.commit("another repository");
+    app.view.update(cx, |view, cx| {
+        view.change_repository(other.root().into(), cx)
+    });
+    until(cx, |cx| {
+        selected(&app.view, cx).as_deref() == Some(other_head.as_str())
+    });
+    assert!(cx.update(|_, cx| app.view.read(cx).comparison_base.is_none()));
+    assert_eq!(fixture.git(&["branch", "--show-current"]), "main");
+    assert_eq!(fixture.git(&["rev-parse", "HEAD"]), target);
+    assert!(fixture.git(&["status", "--porcelain=v1"]).is_empty());
+}
+
+#[gpui_kit::test]
+fn long_comparison_base_subject_stays_inside_the_context_menu(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let subject = "Very long base subject with Unicode 日本語 λ ".repeat(12);
+    let base = fixture.commit(&subject);
+    let target = fixture.commit("comparison target");
+    let (app, cx) = open(&fixture, cx);
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            app.view
+                .read(cx)
+                .history_state
+                .snapshot
+                .as_ref()
+                .is_some_and(|s| s.eof)
+        })
+    });
+    app.view.update(cx, |view, cx| {
+        view.comparison_base = Some(crate::ui::comparison_dialog::ComparisonBase {
+            id: gitk_rs::git::CommitId::parse(&base).unwrap(),
+            subject: subject.clone(),
+        });
+        cx.notify();
+    });
+    cx.simulate_resize(gpui_kit::size(px(680.), px(650.)));
+    let row = cx.update(|window, _| window.find(("commit", 0_usize)).bounds());
+    cx.simulate_mouse_down(
+        row.center(),
+        gpui_kit::MouseButton::Right,
+        Modifiers::default(),
+    );
+    cx.simulate_mouse_up(
+        row.center(),
+        gpui_kit::MouseButton::Right,
+        Modifiers::default(),
+    );
+    until(cx, |cx| {
+        cx.update(|window, _| window.try_find("popup-menu").is_some())
+    });
+    cx.update(|window, _| {
+        let menu = window.find("popup-menu").bounds();
+        let label = window.find("compare-with-base-menu-label").bounds();
+        assert!(label.left() >= menu.left());
+        assert!(label.right() <= menu.right());
+        assert!(menu.left() >= px(0.));
+        assert!(menu.right() <= window.viewport_size().width);
+        assert!(menu.size.width <= px(480.));
+    });
+    cx.simulate_keystrokes("down down down enter");
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            app.view
+                .read(cx)
+                .history_state
+                .snapshot
+                .as_ref()
+                .is_some_and(|s| {
+                    s.eof
+                        && s.comparison
+                            .as_ref()
+                            .is_some_and(|e| e.base.to_hex() == base && e.target.to_hex() == target)
+                })
+        })
+    });
+}

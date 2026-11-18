@@ -97,6 +97,11 @@ impl UniformListDecoration for DiffViewport {
 enum DiffIdentity {
     Commit(PathBuf, gitk_rs::git::CommitId),
     Local(PathBuf, LocalChangeKind, u64),
+    Comparison(
+        PathBuf,
+        gitk_rs::git::ComparisonEndpoints,
+        gitk_rs::diff::ComparisonMode,
+    ),
 }
 
 pub(super) struct DiffPane {
@@ -274,6 +279,23 @@ impl DiffPane {
             DiffSource::Commit(commit),
             identity,
             "Loading diff…",
+            cx,
+        );
+    }
+
+    pub(super) fn load_comparison(
+        &mut self,
+        repository: PathBuf,
+        endpoints: gitk_rs::git::ComparisonEndpoints,
+        mode: gitk_rs::diff::ComparisonMode,
+        cx: &mut Context<Self>,
+    ) {
+        let identity = DiffIdentity::Comparison(repository.clone(), endpoints.clone(), mode);
+        self.load_source(
+            repository,
+            DiffSource::Comparison { endpoints, mode },
+            identity,
+            "Loading comparison…",
             cx,
         );
     }

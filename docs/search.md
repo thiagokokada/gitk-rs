@@ -50,12 +50,12 @@ unsupported. Compilation errors appear below the input and can be corrected
 without reloading. There are no separate glob operators: use `.*` for an
 arbitrary sequence in regex mode.
 
-Path search covers history reachable from the opened HEAD, as does the ordinary
-history list. It matches additions, modifications, deletions, and both sides of
-renames. Merges compare with their first parent, as in the diff view. It does
-not follow a file through earlier names automatically. Paths containing invalid
-UTF-8 are decoded with replacement characters for substring matching. Dates use
-the author's recorded timezone and exclude the boundary day.
+Path search covers the selected history scope, as does the ordinary history
+list. It matches additions, modifications, deletions, and both sides of renames.
+Merges compare with their first parent, as in the diff view. It does not follow
+a file through earlier names automatically. Paths containing invalid UTF-8 are
+decoded with replacement characters for substring matching. Dates use the
+author's recorded timezone and exclude the boundary day.
 
 Contents search examines added and removed text lines, excluding the diff's
 headers and unchanged context. Matching is per line, without the leading `+` or
@@ -63,7 +63,7 @@ headers and unchanged context. Matching is per line, without the leading `+` or
 and compares merges with their first parent. Binary patches are not searched.
 One `contents:` qualifier is allowed per query. Combining `path:` and
 `contents:` requires both to match the commit; they can match different files.
-Like path search, it covers history reachable from HEAD and reports results
+Like path search, it covers the selected history scope and reports results
 incrementally.
 
 A function present in the current file only appears in contents results when a

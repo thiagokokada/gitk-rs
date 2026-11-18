@@ -3,6 +3,7 @@ mod tests;
 
 mod branch_dialog;
 mod colors;
+mod comparison_dialog;
 mod dialogs;
 mod diff_view;
 mod filter_completion;
@@ -125,6 +126,8 @@ enum DialogKind {
     Help,
     About,
     Branches,
+    BrowseReferences,
+    Compare,
     Preferences,
     OpenRepository,
 }
@@ -147,6 +150,9 @@ struct HistoryWindow {
     restore_repository_focus: bool,
     repository_prompt_pending: bool,
     branch_dialog: BranchDialog,
+    comparison_dialog: comparison_dialog::ComparisonDialog,
+    comparison_diff: Option<gitk_rs::diff::ComparisonMode>,
+    comparison_base: Option<comparison_dialog::ComparisonBase>,
     repository_input: Entity<InputState>,
     _repository_subscription: Subscription,
     help_scroll: ScrollHandle,
@@ -199,6 +205,7 @@ impl HistoryWindow {
         }
         let preference_dialog = PreferencesDialog::new(&preferences, window, cx);
         let branch_dialog = BranchDialog::new(window, cx);
+        let comparison_dialog = comparison_dialog::ComparisonDialog::new(window, cx);
         let repository_input = cx.new(|cx| InputState::new(window, cx));
         let repository_subscription =
             cx.subscribe_in(&repository_input, window, |this, _, event, _, cx| {
@@ -302,6 +309,9 @@ impl HistoryWindow {
             restore_repository_focus: false,
             repository_prompt_pending: false,
             branch_dialog,
+            comparison_dialog,
+            comparison_diff: None,
+            comparison_base: None,
             repository_input,
             _repository_subscription: repository_subscription,
             help_scroll: ScrollHandle::new(),
@@ -414,14 +424,20 @@ impl HistoryWindow {
         if let Some(error) = &snapshot.error {
             self.detail = error.clone().into();
         } else if snapshot.eof && snapshot.visible == 0 {
-            self.detail = if snapshot.loaded == 0 {
+            self.detail = if snapshot.loaded == 0
+                && matches!(
+                    snapshot.source.scope,
+                    gitk_rs::git::HistoryScope::Compare { .. }
+                ) {
+                "Target has no commits missing from Base."
+            } else if snapshot.loaded == 0 {
                 "This repository has no commits."
             } else {
                 "No matching commits."
             }
             .into();
         }
-        if update.clear_diff {
+        if update.clear_diff && (self.comparison_diff.is_none() || snapshot.error.is_some()) {
             let message = if snapshot.error.is_some() {
                 "No commit selected."
             } else {
@@ -444,7 +460,9 @@ impl HistoryWindow {
                 true
             });
         }
-        if let Some(selection) = update.selection {
+        if self.comparison_diff.is_some() {
+            self.load_comparison(cx);
+        } else if let Some(selection) = update.selection {
             self.load_selection(selection, cx);
         }
         if let Some(scroll) = update.scroll {
@@ -478,6 +496,10 @@ impl HistoryWindow {
         {
             self.pending_operation = None;
             match result.result {
+                Ok(OperationOutcome::References(references)) => {
+                    self.branch_dialog.set_branches(references, cx);
+                    self.operation_message.clear();
+                }
                 Ok(OperationOutcome::Branches(branches)) => {
                     self.branch_dialog.set_branches(branches, cx);
                     self.operation_message.clear();
@@ -538,7 +560,11 @@ impl HistoryWindow {
             self.reload(cx);
         } else if refs_changed {
             self.history_state.request.refs_revision += 1;
-            self.submit();
+            if self.history_state.request.source.scope != gitk_rs::git::HistoryScope::Current {
+                self.reload(cx);
+            } else {
+                self.submit();
+            }
         }
         cx.notify();
     }
@@ -599,6 +625,7 @@ impl HistoryWindow {
         let Some(selection) = self.history_state.select_row(index) else {
             return;
         };
+        self.comparison_diff = None;
         self.focus.focus(window, cx);
         match selection {
             RowSelection::Ready(selection) => self.load_selection(selection, cx),
@@ -844,7 +871,7 @@ impl HistoryWindow {
             .left(px(width))
             .flex()
             .gap_1()
-            .children(labels.into_iter().map(|label| {
+            .children(labels.into_iter().enumerate().map(|(label_index, label)| {
                 let color = match label.kind {
                     RefKind::Head => colors::HEAD_BADGE,
                     RefKind::Branch => colors::BRANCH_BADGE,
@@ -852,6 +879,21 @@ impl HistoryWindow {
                     RefKind::Tag => colors::TAG_BADGE,
                 };
                 div()
+                    .id(SharedString::from(format!(
+                        "ref-label-{index}-{label_index}"
+                    )))
+                    .when_some(label.reference.clone(), |badge, reference| {
+                        badge
+                            .cursor_pointer()
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                cx.stop_propagation();
+                                this.set_history_scope(
+                                    gitk_rs::git::HistoryScope::Reference(reference.clone()),
+                                    window,
+                                    cx,
+                                );
+                            }))
+                    })
                     .px_1()
                     .text_size(px(11.))
                     .bg(rgb(color))
@@ -860,6 +902,7 @@ impl HistoryWindow {
             }));
         div()
             .id(("commit", index))
+            .test_support()
             .h(px((self.preferences.font_size * 2.).max(26.)))
             .w_full()
             .flex()
@@ -925,14 +968,82 @@ impl HistoryWindow {
                 ),
             )
             .context_menu({
-                let hash = entry.commit.id.to_string();
-                move |menu, _, _| {
-                    menu.item(PopupMenuItem::new("Copy commit hash").on_click({
-                        let hash = hash.clone();
-                        move |_, _, cx| {
-                            cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(hash.clone()))
-                        }
-                    }))
+                let commit = comparison_dialog::ComparisonBase {
+                    id: entry.commit.id.clone(),
+                    subject: entry.commit.summary().to_owned(),
+                };
+                let view = cx.entity().downgrade();
+                let generation = self.workspace_generation;
+                move |menu, window, cx| {
+                    let menu_width =
+                        (window.viewport_size().width - px(32.)).clamp(px(160.), px(480.));
+                    let label_width = menu_width - px(48.);
+                    let base = view
+                        .upgrade()
+                        .and_then(|view| view.read(cx).comparison_base.clone());
+                    let compare_label = base.as_ref().map_or_else(
+                        || "Compare with base (set a base first)".to_owned(),
+                        |base| format!("Compare with base {}", base.label()),
+                    );
+                    let hash = commit.id.to_hex();
+                    let base_view = view.clone();
+                    let base_commit = commit.clone();
+                    let compare_view = view.clone();
+                    let target = commit.id.to_hex();
+                    menu.max_w(menu_width)
+                        .item(
+                            PopupMenuItem::new("Copy commit hash").on_click(move |_, _, cx| {
+                                cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(
+                                    hash.clone(),
+                                ))
+                            }),
+                        )
+                        .separator()
+                        .item(PopupMenuItem::new("Set as comparison base").on_click(
+                            move |_, window, cx| {
+                                let _ = base_view.update(cx, |this, cx| {
+                                    if this.workspace_generation == generation {
+                                        this.comparison_base = Some(base_commit.clone());
+                                        this.focus.focus(window, cx);
+                                        cx.notify();
+                                    }
+                                });
+                            },
+                        ))
+                        .item(
+                            PopupMenuItem::element(move |_, _| {
+                                let tooltip = compare_label.clone();
+                                div()
+                                    .id("compare-with-base-menu-label")
+                                    .test_support()
+                                    .aria_label(compare_label.clone())
+                                    .flex_1()
+                                    .min_w_0()
+                                    .max_w(label_width)
+                                    .truncate()
+                                    .child(compare_label.clone())
+                                    .hoverable_tooltip(move |window, cx| {
+                                        wrapped_tooltip(tooltip.clone(), window, cx)
+                                    })
+                            })
+                            .disabled(base.is_none())
+                            .on_click(move |_, window, cx| {
+                                let _ = compare_view.update(cx, |this, cx| {
+                                    if this.workspace_generation == generation
+                                        && let Some(base) = &base
+                                    {
+                                        this.set_history_scope(
+                                            gitk_rs::git::HistoryScope::Compare {
+                                                base: base.id.to_hex(),
+                                                target: target.clone(),
+                                            },
+                                            window,
+                                            cx,
+                                        );
+                                    }
+                                });
+                            }),
+                        )
                 }
             })
             .into_any_element()
@@ -1236,6 +1347,12 @@ impl Render for HistoryWindow {
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &CloseDialog, window, cx| {
+                if matches!(this.dialog, Some(DialogKind::BrowseReferences)) && this.comparison_dialog.destination.take().is_some() {
+                    this.dialog = Some(DialogKind::Compare);
+                    this.comparison_dialog.target.update(cx, |input, cx| input.focus(window, cx));
+                    cx.notify();
+                    return;
+                }
                 this.dialog = None;
                 this.focus.focus(window, cx);
                 cx.notify();
@@ -1248,8 +1365,8 @@ impl Render for HistoryWindow {
                 this.branch_dialog.move_selection(true);
                 cx.notify();
             }))
-            .on_action(cx.listener(|this, _: &BranchAccept, _, cx| {
-                this.switch_branch(this.branch_dialog.index, cx)
+            .on_action(cx.listener(|this, _: &BranchAccept, window, cx| {
+                this.switch_branch(this.branch_dialog.index, window, cx)
             }))
             .on_action(cx.listener(|this, _: &Reload, _, cx| this.reload(cx)))
             .on_action(cx.listener(|this, _: &ForceReload, _, cx| this.force_reload(cx)))
@@ -1315,6 +1432,9 @@ impl Render for HistoryWindow {
                             })
                     )
             )
+            .child(self.history_scope_control(cx))
+            .when(self.comparison_base.is_some(), |view| view.child(self.comparison_base_control(cx)))
+            .when(matches!(self.history_state.request.source.scope, gitk_rs::git::HistoryScope::Compare { .. }), |view| view.child(self.comparison_controls(cx)))
             .children(search_feedback(self.filter.read(cx).value().as_ref(), self.history_state.request.regex, self.query_error(cx), palette))
             .child(
                 div().flex_1().min_h_0().child(
@@ -1478,6 +1598,7 @@ pub fn run(mut config: Config, preferences: Preferences, launched: Instant) {
     let timing = guard.timing();
     let request = Request {
         source: HistorySource {
+            scope: Default::default(),
             repository: config.repository.clone(),
             graph_columns: config.graph_columns,
             git_workers: config.git_workers,
