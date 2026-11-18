@@ -45,8 +45,12 @@ impl ComparisonDialog {
     pub(super) fn render(
         &self,
         body: gpui_kit::Stateful<gpui_kit::Div>,
+        theme: Theme,
         cx: &mut Context<HistoryWindow>,
     ) -> gpui_kit::Stateful<gpui_kit::Div> {
+        let palette = Palette::for_theme(theme);
+        let can_compare = !self.base.read(cx).value().trim().is_empty()
+            && !self.target.read(cx).value().trim().is_empty();
         body.child("Show commits reachable from Target that are missing from Base.")
             .child("Base")
             .child(
@@ -80,42 +84,42 @@ impl ComparisonDialog {
             )
             .child(
                 div()
-                    .flex()
+                    .id("swap-comparison-inputs")
+                    .test_support()
+                    .w_full()
                     .flex_shrink_0()
-                    .gap_2()
-                    .child(
-                        Button::new("swap-comparison-inputs")
-                            .flex_1()
-                            .h(px(44.))
-                            .min_h(px(44.))
-                            .label("Swap base and target")
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                let base = this.comparison_dialog.base.read(cx).value();
-                                let target = this.comparison_dialog.target.read(cx).value();
-                                this.comparison_dialog
-                                    .base
-                                    .update(cx, |input, cx| input.set_value(target, window, cx));
-                                this.comparison_dialog
-                                    .target
-                                    .update(cx, |input, cx| input.set_value(base, window, cx));
-                            })),
-                    )
-                    .child(
-                        Button::new("apply-comparison")
-                            .flex_1()
-                            .h(px(44.))
-                            .min_h(px(44.))
-                            .label("Compare")
-                            .disabled(
-                                self.base.read(cx).value().trim().is_empty()
-                                    || self.target.read(cx).value().trim().is_empty(),
-                            )
-                            .on_click(
-                                cx.listener(|this, _, window, cx| {
-                                    this.apply_comparison(window, cx)
-                                }),
-                            ),
-                    ),
+                    .px_3()
+                    .py_2()
+                    .bg(rgb(palette.dialog_button))
+                    .cursor_pointer()
+                    .child("Swap base and target")
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        let base = this.comparison_dialog.base.read(cx).value();
+                        let target = this.comparison_dialog.target.read(cx).value();
+                        this.comparison_dialog
+                            .base
+                            .update(cx, |input, cx| input.set_value(target, window, cx));
+                        this.comparison_dialog
+                            .target
+                            .update(cx, |input, cx| input.set_value(base, window, cx));
+                    })),
+            )
+            .child(
+                div()
+                    .id("apply-comparison")
+                    .test_support()
+                    .w_full()
+                    .flex_shrink_0()
+                    .px_3()
+                    .py_2()
+                    .bg(rgb(palette.dialog_button))
+                    .child("Compare")
+                    .when(can_compare, |button| {
+                        button.cursor_pointer().on_click(
+                            cx.listener(|this, _, window, cx| this.apply_comparison(window, cx)),
+                        )
+                    })
+                    .when(!can_compare, |button| button.opacity(0.5)),
             )
     }
 }
@@ -189,7 +193,8 @@ impl HistoryWindow {
             )
             .child(
                 Button::new("comparison-selected-commit")
-                    .label("Selected commit")
+                    .label("Selected commit diff")
+                    .tooltip("Show the changes introduced by the highlighted commit, compared with its first parent.")
                     .disabled(self.comparison_diff.is_none())
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.comparison_diff = None;
@@ -204,7 +209,7 @@ impl HistoryWindow {
             )
             .child(
                 Button::new("comparison-endpoints")
-                    .label("Endpoints")
+                    .label("Base → Target")
                     .tooltip("Compare the trees at Base and Target. Includes differences unique to either side; filters only narrow the commit list.")
                     .disabled(self.comparison_diff == Some(ComparisonMode::Endpoints))
                     .on_click(cx.listener(|this, _, _, cx| {
@@ -213,13 +218,16 @@ impl HistoryWindow {
             )
             .child(
                 Button::new("comparison-merge-base")
-                    .label("Since merge base")
+                    .label("Merge base → Target")
                     .tooltip("Compare Target with its common ancestor with Base. Filters only narrow the commit list.")
                     .disabled(self.comparison_diff == Some(ComparisonMode::SinceMergeBase))
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.set_comparison_diff(ComparisonMode::SinceMergeBase, cx)
                     })),
             )
+            .child(Button::new("exit-comparison").label("Exit comparison")
+                .tooltip("Return to current branch history.")
+                .on_click(cx.listener(|this, _, window, cx| this.set_history_scope(HistoryScope::Current, window, cx))))
             .into_any_element()
     }
 

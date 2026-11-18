@@ -244,11 +244,11 @@ impl DiffDocument {
                 .collect();
             ensure!(
                 !bases.is_empty(),
-                "These revisions have no common ancestor. Use Endpoints to compare unrelated histories."
+                "These revisions have no common ancestor. Use Base → Target to compare unrelated histories."
             );
             ensure!(
                 bases.len() == 1,
-                "These revisions have multiple merge bases. Use Endpoints to choose an unambiguous comparison."
+                "These revisions have multiple merge bases. Use Base → Target to choose an unambiguous comparison."
             );
             endpoints.base = crate::git::CommitId::parse(std::str::from_utf8(bases[0])?)?;
         }

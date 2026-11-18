@@ -702,11 +702,15 @@ fn comparison_picker_direction_and_diff_modes_work_without_checkout(cx: &mut Tes
         cx.update(|_, cx| matches!(app.view.read(cx).dialog, Some(DialogKind::Compare)))
     });
     cx.update(|window, _| {
-        for id in ["swap-comparison-inputs", "apply-comparison"] {
-            let bounds = window.find(id).bounds();
-            assert!(bounds.size.height >= px(44.));
-            assert!(bounds.size.width >= px(200.));
+        let close = window.find("close-dialog").bounds();
+        let swap = window.find("swap-comparison-inputs").bounds();
+        let compare = window.find("apply-comparison").bounds();
+        for bounds in [swap, compare] {
+            assert_eq!(bounds.size.width, close.size.width);
+            assert_eq!(bounds.size.height, close.size.height);
         }
+        assert!(swap.bottom() <= compare.top());
+        assert!(compare.bottom() <= close.top());
     });
     cx.update(|window, cx| window.click("apply-comparison", cx));
     until(cx, |cx| {
@@ -796,6 +800,23 @@ fn comparison_picker_direction_and_diff_modes_work_without_checkout(cx: &mut Tes
         })
     });
     assert!(cx.update(|_, cx| app.view.read(cx).detail.contains("no commits missing")));
+    cx.update(|window, cx| window.click("exit-comparison", cx));
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            let view = app.view.read(cx);
+            view.history_state.request.source.scope == HistoryScope::Current
+                && view.comparison_diff.is_none()
+                && view
+                    .history_state
+                    .snapshot
+                    .as_ref()
+                    .is_some_and(|s| s.eof && s.loaded == 2)
+                && matches!(
+                    pane.read(cx).current.as_ref().map(|s| &s.source),
+                    Some(super::DiffSource::Commit(_))
+                )
+        })
+    });
     assert_eq!(fixture.git(&["branch", "--show-current"]), "main");
     assert_eq!(fixture.git(&["rev-parse", "HEAD"]), main);
 }

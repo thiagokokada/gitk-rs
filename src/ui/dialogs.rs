@@ -276,7 +276,7 @@ impl HistoryWindow {
                 );
             }
             Some(DialogKind::Compare) => {
-                body = self.comparison_dialog.render(body, cx);
+                body = self.comparison_dialog.render(body, self.config.theme, cx);
             }
             Some(DialogKind::OpenRepository) => {
                 body = body
