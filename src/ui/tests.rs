@@ -3485,10 +3485,7 @@ fn browse_reference_keyboard_selection_preserves_checkout(cx: &mut TestAppContex
                 .is_some_and(|s| s.eof)
         })
     });
-    cx.update(|window, cx| {
-        app.view
-            .update(cx, |view, cx| view.open_history_references(window, cx))
-    });
+    cx.update(|window, cx| window.click("history-scope", cx));
     until(cx, |cx| {
         cx.update(|_, cx| app.view.read(cx).pending_operation.is_none())
     });
@@ -3517,11 +3514,8 @@ fn browse_reference_keyboard_selection_preserves_checkout(cx: &mut TestAppContex
     });
     assert_eq!(fixture.git(&["branch", "--show-current"]), "main");
     assert!(fixture.root().join("untracked.txt").exists());
-    cx.update(|window, cx| {
-        app.view.update(cx, |view, cx| {
-            view.set_history_scope(gitk_rs::git::HistoryScope::AllBranches, window, cx)
-        })
-    });
+    cx.update(|window, cx| window.click("history-scope", cx));
+    cx.update(|window, cx| window.click("browse-all", cx));
     until(cx, |cx| {
         cx.update(|_, cx| {
             app.view
@@ -3532,11 +3526,8 @@ fn browse_reference_keyboard_selection_preserves_checkout(cx: &mut TestAppContex
                 .is_some_and(|s| s.eof && s.loaded == 3)
         })
     });
-    cx.update(|window, cx| {
-        app.view.update(cx, |view, cx| {
-            view.set_history_scope(gitk_rs::git::HistoryScope::Current, window, cx)
-        })
-    });
+    cx.update(|window, cx| window.click("history-scope", cx));
+    cx.update(|window, cx| window.click("browse-current", cx));
     until(cx, |cx| {
         cx.update(|_, cx| {
             let view = app.view.read(cx);

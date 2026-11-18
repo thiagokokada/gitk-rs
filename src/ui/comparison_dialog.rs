@@ -81,9 +81,13 @@ impl ComparisonDialog {
             .child(
                 div()
                     .flex()
+                    .flex_shrink_0()
                     .gap_2()
                     .child(
                         Button::new("swap-comparison-inputs")
+                            .flex_1()
+                            .h(px(44.))
+                            .min_h(px(44.))
                             .label("Swap base and target")
                             .on_click(cx.listener(|this, _, window, cx| {
                                 let base = this.comparison_dialog.base.read(cx).value();
@@ -98,6 +102,9 @@ impl ComparisonDialog {
                     )
                     .child(
                         Button::new("apply-comparison")
+                            .flex_1()
+                            .h(px(44.))
+                            .min_h(px(44.))
                             .label("Compare")
                             .disabled(
                                 self.base.read(cx).value().trim().is_empty()

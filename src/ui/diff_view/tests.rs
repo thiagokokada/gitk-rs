@@ -691,6 +691,7 @@ fn comparison_picker_direction_and_diff_modes_work_without_checkout(cx: &mut Tes
                 .is_some_and(|s| s.eof)
         })
     });
+    cx.update(|window, cx| window.click("history-scope", cx));
     cx.update(|window, cx| window.click("open-comparison", cx));
     cx.update(|window, cx| window.click("choose-comparison-target", cx));
     until(cx, |cx| {
@@ -700,6 +701,13 @@ fn comparison_picker_direction_and_diff_modes_work_without_checkout(cx: &mut Tes
     cx.simulate_keystrokes("enter");
     until(cx, |cx| {
         cx.update(|_, cx| matches!(app.view.read(cx).dialog, Some(DialogKind::Compare)))
+    });
+    cx.update(|window, _| {
+        for id in ["swap-comparison-inputs", "apply-comparison"] {
+            let bounds = window.find(id).bounds();
+            assert!(bounds.size.height >= px(44.));
+            assert!(bounds.size.width >= px(200.));
+        }
     });
     cx.update(|window, cx| window.click("apply-comparison", cx));
     until(cx, |cx| {
@@ -747,6 +755,7 @@ fn comparison_picker_direction_and_diff_modes_work_without_checkout(cx: &mut Tes
         })
     });
     // Swap direction in the dialog and confirm it exposes main's unique commit.
+    cx.update(|window, cx| window.click("history-scope", cx));
     cx.update(|window, cx| window.click("open-comparison", cx));
     cx.update(|window, cx| window.click("swap-comparison-inputs", cx));
     cx.update(|window, cx| window.click("apply-comparison", cx));
@@ -755,6 +764,7 @@ fn comparison_picker_direction_and_diff_modes_work_without_checkout(cx: &mut Tes
     });
     assert!(cx.update(|_, cx| matches!(&app.view.read(cx).history_state.request.source.scope, HistoryScope::Compare { base, target } if base == "refs/heads/feature" && target == "HEAD")));
     // Canceling a reference picker returns to the comparison form with edits retained.
+    cx.update(|window, cx| window.click("history-scope", cx));
     cx.update(|window, cx| window.click("open-comparison", cx));
     cx.update(|window, cx| window.click("choose-comparison-base", cx));
     cx.simulate_keystrokes("escape");

@@ -97,7 +97,6 @@ impl HistoryWindow {
         cx.notify();
     }
     pub(super) fn history_scope_control(&self, cx: &mut Context<Self>) -> AnyElement {
-        let view = cx.entity().downgrade();
         div()
             .flex()
             .items_center()
@@ -105,57 +104,17 @@ impl HistoryWindow {
             .child("History:")
             .child(
                 Button::new("history-scope")
-                    .label(
-                        if matches!(
-                            self.history_state.request.source.scope,
-                            gitk_rs::git::HistoryScope::Compare { .. }
-                        ) {
-                            "Branch comparison".into()
-                        } else {
-                            self.history_state.request.source.scope.label()
-                        },
-                    )
-                    .dropdown_menu(move |menu, _, _| {
-                        let current = view.clone();
-                        let all = view.clone();
-                        let reference = view.clone();
-                        menu.item(PopupMenuItem::new("Current branch").on_click(
-                            move |_, window, cx| {
-                                let _ = current.update(cx, |this, cx| {
-                                    this.set_history_scope(
-                                        gitk_rs::git::HistoryScope::Current,
-                                        window,
-                                        cx,
-                                    )
-                                });
-                            },
-                        ))
-                        .item(PopupMenuItem::new("All branches and tags").on_click(
-                            move |_, window, cx| {
-                                let _ = all.update(cx, |this, cx| {
-                                    this.set_history_scope(
-                                        gitk_rs::git::HistoryScope::AllBranches,
-                                        window,
-                                        cx,
-                                    )
-                                });
-                            },
-                        ))
-                        .item(
-                            PopupMenuItem::new("Choose branch or tag…").on_click(
-                                move |_, window, cx| {
-                                    let _ = reference.update(cx, |this, cx| {
-                                        this.open_history_references(window, cx)
-                                    });
-                                },
-                            ),
-                        )
-                    }),
+                    .label("Browse branch or tag…")
+                    .on_click(
+                        cx.listener(|this, _, window, cx| this.open_history_references(window, cx)),
+                    ),
             )
             .child(
-                Button::new("open-comparison")
-                    .label("Compare…")
-                    .on_click(cx.listener(|this, _, window, cx| this.open_comparison(window, cx))),
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .child(self.history_state.request.source.scope.label()),
             )
             .into_any_element()
     }
@@ -292,6 +251,42 @@ impl HistoryWindow {
         body = body.child(div().flex_shrink_0().text_size(px(18.)).child(title));
         match self.dialog {
             Some(DialogKind::Branches | DialogKind::BrowseReferences) => {
+                if matches!(self.dialog, Some(DialogKind::BrowseReferences))
+                    && self.comparison_dialog.destination.is_none()
+                {
+                    body = body.child(
+                        div()
+                            .flex()
+                            .flex_wrap()
+                            .flex_shrink_0()
+                            .gap_2()
+                            .child(
+                                Button::new("browse-current")
+                                    .label("Current branch")
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.set_history_scope(
+                                            gitk_rs::git::HistoryScope::Current,
+                                            window,
+                                            cx,
+                                        )
+                                    })),
+                            )
+                            .child(
+                                Button::new("browse-all")
+                                    .label("All branches and tags")
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.set_history_scope(
+                                            gitk_rs::git::HistoryScope::AllBranches,
+                                            window,
+                                            cx,
+                                        )
+                                    })),
+                            )
+                            .child(Button::new("open-comparison").label("Compare…").on_click(
+                                cx.listener(|this, _, window, cx| this.open_comparison(window, cx)),
+                            )),
+                    );
+                }
                 body = self.branch_dialog.render(
                     body,
                     self.config.theme,
