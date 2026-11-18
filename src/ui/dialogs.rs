@@ -273,6 +273,7 @@ impl HistoryWindow {
                     self.config.theme,
                     &self.operation_message,
                     self.pending_operation.is_some(),
+                    self.preferences.font_size,
                     cx,
                 );
             }

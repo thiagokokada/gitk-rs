@@ -63,9 +63,11 @@ impl BranchDialog {
         theme: Theme,
         operation_message: &str,
         pending: bool,
+        font_size: f32,
         cx: &mut Context<HistoryWindow>,
     ) -> gpui_kit::Stateful<gpui_kit::Div> {
         let palette = Palette::for_theme(theme);
+        let status_message = self.status_message(operation_message, pending);
         body.overflow_hidden()
             .child(Input::new(&self.filter).cleanable(true))
             .child(
@@ -128,6 +130,9 @@ impl BranchDialog {
                 div()
                     .id("branch-operation-status")
                     .test_support()
+                    .flex_shrink_0()
+                    .h(px((font_size * 1.5).max(24.)))
+                    .overflow_hidden()
                     .flex()
                     .items_center()
                     .gap_2()
@@ -138,8 +143,38 @@ impl BranchDialog {
                                 .color(rgb(palette.foreground).into()),
                         )
                     })
-                    .child(operation_message.to_owned()),
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .child(status_message.clone()),
+                    )
+                    .hoverable_tooltip(move |window, cx| {
+                        wrapped_tooltip(status_message.clone(), window, cx)
+                    }),
             )
+    }
+
+    pub(super) fn status_message(&self, operation_message: &str, pending: bool) -> String {
+        if !operation_message.is_empty() {
+            return operation_message.to_owned();
+        }
+        if pending {
+            return "Loading references…".into();
+        }
+        if self.filtered.is_empty() {
+            return "No matching entries".into();
+        }
+        let total = self.branches.len() + if self.include_scopes { 2 } else { 0 };
+        if self.filtered.len() == total {
+            format!("{} entries · Enter to select", self.filtered.len())
+        } else {
+            format!(
+                "{} of {total} entries · Enter to select",
+                self.filtered.len()
+            )
+        }
     }
 
     pub(super) fn set_branches(&mut self, branches: Vec<String>, cx: &App) {

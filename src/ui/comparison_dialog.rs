@@ -96,28 +96,6 @@ impl ComparisonDialog {
             )
             .child(
                 div()
-                    .id("swap-comparison-inputs")
-                    .test_support()
-                    .w_full()
-                    .flex_shrink_0()
-                    .px_3()
-                    .py_2()
-                    .bg(rgb(palette.dialog_button))
-                    .cursor_pointer()
-                    .child("Swap base and target")
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        let base = this.comparison_dialog.base.read(cx).value();
-                        let target = this.comparison_dialog.target.read(cx).value();
-                        this.comparison_dialog
-                            .base
-                            .update(cx, |input, cx| input.set_value(target, window, cx));
-                        this.comparison_dialog
-                            .target
-                            .update(cx, |input, cx| input.set_value(base, window, cx));
-                    })),
-            )
-            .child(
-                div()
                     .id("apply-comparison")
                     .test_support()
                     .w_full()
@@ -232,6 +210,15 @@ impl HistoryWindow {
                     .test_support()
                     .child(self.history_state.request.source.scope.label()),
             )
+            .child(Button::new("swap-comparison").label("Swap base and target")
+                .on_click(cx.listener(|this, _, window, cx| {
+                    if let HistoryScope::Compare { base, target } = &this.history_state.request.source.scope {
+                        let scope = HistoryScope::Compare { base: target.clone(), target: base.clone() };
+                        let mode = this.comparison_diff.unwrap_or(ComparisonMode::Endpoints);
+                        this.set_history_scope(scope, window, cx);
+                        this.comparison_diff = Some(mode);
+                    }
+                })))
             .child(
                 Button::new("comparison-selected-commit")
                     .label("Selected commit diff")

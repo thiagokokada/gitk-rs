@@ -703,13 +703,9 @@ fn comparison_picker_direction_and_diff_modes_work_without_checkout(cx: &mut Tes
     });
     cx.update(|window, _| {
         let close = window.find("close-dialog").bounds();
-        let swap = window.find("swap-comparison-inputs").bounds();
         let compare = window.find("apply-comparison").bounds();
-        for bounds in [swap, compare] {
-            assert_eq!(bounds.size.width, close.size.width);
-            assert_eq!(bounds.size.height, close.size.height);
-        }
-        assert!(swap.bottom() <= compare.top());
+        assert_eq!(compare.size.width, close.size.width);
+        assert_eq!(compare.size.height, close.size.height);
         assert!(compare.bottom() <= close.top());
     });
     cx.update(|window, cx| window.click("apply-comparison", cx));
@@ -757,14 +753,24 @@ fn comparison_picker_direction_and_diff_modes_work_without_checkout(cx: &mut Tes
                 .is_some_and(|s| s.files.len() == 2)
         })
     });
-    // Swap direction in the dialog and confirm it exposes main's unique commit.
-    cx.update(|window, cx| window.click("open-comparison", cx));
-    cx.update(|window, cx| window.click("swap-comparison-inputs", cx));
-    cx.update(|window, cx| window.click("apply-comparison", cx));
+    // Reverse the comparison directly, preserving the chosen aggregate diff mode.
+    cx.update(|window, cx| window.click("comparison-merge-base", cx));
+    cx.update(|window, cx| window.click("swap-comparison", cx));
     until(cx, |cx| {
         selected(&app.view, cx).as_deref() == Some(main.as_str())
     });
     assert!(cx.update(|_, cx| matches!(&app.view.read(cx).history_state.request.source.scope, HistoryScope::Compare { base, target } if base == "refs/heads/feature" && target == "HEAD")));
+    assert_eq!(
+        cx.update(|_, cx| app.view.read(cx).comparison_diff),
+        Some(ComparisonMode::SinceMergeBase)
+    );
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            pane.read(cx).snapshot.as_ref().is_some_and(|s| {
+                s.files.len() == 1 && s.files[0].path == std::path::Path::new("main.txt")
+            })
+        })
+    });
     // Canceling a reference picker returns to the comparison form with edits retained.
     cx.update(|window, cx| window.click("open-comparison", cx));
     cx.update(|window, cx| window.click("choose-comparison-base", cx));
