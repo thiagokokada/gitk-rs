@@ -155,6 +155,7 @@ struct HistoryWindow {
     comparison_diff: Option<gitk_rs::diff::ComparisonMode>,
     comparison_base: Option<comparison_dialog::ComparisonBase>,
     file_history_return: Option<file_history::FileHistoryReturn>,
+    follow_file_renames: bool,
     _file_history_subscription: Subscription,
     repository_input: Entity<InputState>,
     _repository_subscription: Subscription,
@@ -201,6 +202,7 @@ impl HistoryWindow {
         } = services;
         let layout = diff_handle.initial_layout();
         let search = diff_handle.initial_search();
+        let follow_file_renames = diff_handle.initial_follow_renames();
         if request.regex != search.regex {
             request.regex = search.regex;
             request.id += 1;
@@ -323,6 +325,7 @@ impl HistoryWindow {
             comparison_diff: None,
             comparison_base: None,
             file_history_return: None,
+            follow_file_renames,
             _file_history_subscription: file_history_subscription,
             repository_input,
             _repository_subscription: repository_subscription,

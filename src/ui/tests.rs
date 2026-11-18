@@ -3600,3 +3600,75 @@ fn reference_footer_keeps_close_stable_for_loading_results_and_no_matches(cx: &m
         assert_eq!(window.find("close-dialog").bounds(), ready_close);
     });
 }
+
+#[gpui_kit::test]
+fn follow_renames_persists_across_file_histories_and_restarts(cx: &mut TestAppContext) {
+    use gitk_rs::{
+        diff::options::{self, State},
+        git::HistoryScope,
+    };
+    let settings = tempfile::tempdir().unwrap();
+    let path = settings.path().join("state.toml");
+    let mut initial = State::default();
+    initial.diff.context = 7;
+    initial.layout.graph_width = 300.;
+    initial.search.regex = true;
+    options::save_state_to(initial, &path).unwrap();
+    let fixture = Fixture::new();
+    let head = fixture.commit("root");
+    for enabled in [true, false] {
+        {
+            let (app, cx) = open_with_state(&fixture, None, Some(path.clone()), cx);
+            until(cx, |cx| {
+                cx.update(|_, cx| app.view.read(cx).diff.read(cx).has_loaded_selection())
+            });
+            assert_eq!(
+                cx.update(|_, cx| app.view.read(cx).follow_file_renames),
+                !enabled
+            );
+            let open_history = |cx: &mut VisualTestContext| {
+                cx.update(|window, cx| {
+                    app.view.update(cx, |view, cx| {
+                        let request = diff_view::OpenFileHistory {
+                            selection: view.diff.read(cx).selection_id(),
+                            repository: view.config.repository.clone(),
+                            revision: Some(gitk_rs::git::CommitId::parse(&head).unwrap()),
+                            path: "file.txt".into(),
+                        };
+                        view.open_file_history(&request, window, cx);
+                    })
+                });
+                until(cx, |cx| {
+                    cx.update(|_, cx| {
+                        app.view
+                            .read(cx)
+                            .history_state
+                            .snapshot
+                            .as_ref()
+                            .is_some_and(|s| {
+                                s.eof && matches!(s.source.scope, HistoryScope::File(_))
+                            })
+                    })
+                });
+            };
+            open_history(cx);
+            assert!(cx.update(|_, cx| matches!(&app.view.read(cx).history_state.request.source.scope, HistoryScope::File(h) if h.follow_renames == !enabled)));
+            cx.update(|window, cx| window.click("follow-file-renames", cx));
+            assert_eq!(
+                cx.update(|_, cx| app.view.read(cx).follow_file_renames),
+                enabled
+            );
+            cx.update(|window, cx| window.click("exit-file-history", cx));
+            until(cx, |cx| {
+                cx.update(|_, cx| app.view.read(cx).diff.read(cx).has_loaded_selection())
+            });
+            open_history(cx);
+            assert!(cx.update(|_, cx| matches!(&app.view.read(cx).history_state.request.source.scope, HistoryScope::File(h) if h.follow_renames == enabled)));
+        }
+        let saved = options::load_state_from(&path).unwrap();
+        assert_eq!(saved.follow_renames, enabled);
+        assert_eq!(saved.diff.context, 7);
+        assert_eq!(saved.layout.graph_width, 300.);
+        assert!(saved.search.regex);
+    }
+}

@@ -89,7 +89,8 @@ Target when viewing an aggregate diff. Local changes use the worktree's HEAD.
 The starting revision appears beside the history controls.
 
 Enable **Follow renames** to include earlier filenames using Git's rename
-recognition. Selecting a commit jumps to that file in its commit diff, including
+recognition. This choice is remembered across file histories and application
+restarts. Selecting a commit jumps to that file in its commit diff, including
 its earlier name. The search input still narrows these commits. **Exit file
 history** returns to the previous scope.
 

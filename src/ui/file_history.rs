@@ -33,7 +33,7 @@ impl HistoryWindow {
             HistoryScope::File(FileHistory {
                 path: request.path.clone(),
                 revision: request.revision.clone(),
-                follow_renames: false,
+                follow_renames: self.follow_file_renames,
             }),
             window,
             cx,
@@ -59,6 +59,8 @@ impl HistoryWindow {
                             &mut this.history_state.request.source.scope
                         {
                             history.follow_renames = *checked;
+                            this.follow_file_renames = *checked;
+                            this.layout_handle.save_follow_renames(*checked);
                             this.reload(cx);
                         }
                     })),

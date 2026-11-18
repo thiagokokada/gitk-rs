@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 #[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct State {
+    pub follow_renames: bool,
     pub diff: DiffOptions,
     pub layout: Layout,
     pub search: Search,
@@ -218,6 +219,7 @@ mod layout_tests {
         fs::write(&path, "[diff]\ncontext = 7\n").unwrap();
         assert_eq!(load_state_from(&path).unwrap().layout, Layout::default());
         assert!(!load_state_from(&path).unwrap().search.regex);
+        assert!(!load_state_from(&path).unwrap().follow_renames);
         let engine = DiffEngine::with_options_file(Some(path.clone()));
         let handle = engine.handle();
         handle.save_layout(LayoutChange::GraphWidth(410.));
@@ -231,14 +233,17 @@ mod layout_tests {
             handle.save_options(diff);
         }
         handle.save_search(Search { regex: true });
+        handle.save_follow_renames(true);
         handle.save_layout(LayoutChange::FileListWidth(350.));
         drop(engine);
         let saved = load_state_from(&path).unwrap();
         assert_eq!(saved.diff, diff);
         assert!(saved.search.regex);
+        assert!(saved.follow_renames);
         let next = DiffEngine::with_options_file(Some(path.clone()));
         assert_eq!(next.handle().initial_options(), diff);
         assert!(next.handle().initial_search().regex);
+        assert!(next.handle().initial_follow_renames());
         drop(next);
         assert_eq!(
             saved.layout,
@@ -251,6 +256,7 @@ mod layout_tests {
         save_to(DiffOptions::default(), &path).unwrap();
         assert_eq!(load_state_from(&path).unwrap().layout, saved.layout);
         assert!(load_state_from(&path).unwrap().search.regex);
+        assert!(load_state_from(&path).unwrap().follow_renames);
         assert!(!root.path().join("preferences.toml").exists());
     }
 
