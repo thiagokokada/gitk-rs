@@ -2,6 +2,18 @@ use super::*;
 use gitk_rs::{diff::ComparisonMode, git::HistoryScope};
 use gpui_kit::base::Disableable;
 
+#[derive(Clone)]
+pub(super) struct ComparisonBase {
+    pub(super) id: gitk_rs::git::CommitId,
+    pub(super) subject: String,
+}
+
+impl ComparisonBase {
+    pub(super) fn label(&self) -> String {
+        format!("{} · {}", &self.id.to_hex()[..7], self.subject)
+    }
+}
+
 #[derive(Clone, Copy)]
 pub(super) enum ComparisonSide {
     Base,
@@ -125,6 +137,35 @@ impl ComparisonDialog {
 }
 
 impl HistoryWindow {
+    pub(super) fn comparison_base_control(&self, cx: &mut Context<Self>) -> AnyElement {
+        let Some(base) = &self.comparison_base else {
+            return div().into_any_element();
+        };
+        div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .child(
+                div()
+                    .id("comparison-base-indicator")
+                    .test_support()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .child(format!("Comparison base: {}", base.label())),
+            )
+            .child(
+                Button::new("clear-comparison-base")
+                    .label("Clear")
+                    .tooltip("Clear the marked base for future comparisons.")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.comparison_base = None;
+                        cx.notify();
+                    })),
+            )
+            .into_any_element()
+    }
+
     pub(super) fn open_comparison(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let (base, target) = match &self.history_state.request.source.scope {
             HistoryScope::Compare { base, target } => (base.clone(), target.clone()),

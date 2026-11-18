@@ -208,6 +208,9 @@ pub fn reference_label(name: &str) -> String {
             return format!("{short} ({kind})");
         }
     }
+    if let Ok(id) = CommitId::parse(name) {
+        return id.to_hex()[..7].to_owned();
+    }
     name.into()
 }
 

@@ -152,6 +152,7 @@ struct HistoryWindow {
     branch_dialog: BranchDialog,
     comparison_dialog: comparison_dialog::ComparisonDialog,
     comparison_diff: Option<gitk_rs::diff::ComparisonMode>,
+    comparison_base: Option<comparison_dialog::ComparisonBase>,
     repository_input: Entity<InputState>,
     _repository_subscription: Subscription,
     help_scroll: ScrollHandle,
@@ -310,6 +311,7 @@ impl HistoryWindow {
             branch_dialog,
             comparison_dialog,
             comparison_diff: None,
+            comparison_base: None,
             repository_input,
             _repository_subscription: repository_subscription,
             help_scroll: ScrollHandle::new(),
@@ -900,6 +902,7 @@ impl HistoryWindow {
             }));
         div()
             .id(("commit", index))
+            .test_support()
             .h(px((self.preferences.font_size * 2.).max(26.)))
             .w_full()
             .flex()
@@ -965,14 +968,62 @@ impl HistoryWindow {
                 ),
             )
             .context_menu({
-                let hash = entry.commit.id.to_string();
-                move |menu, _, _| {
-                    menu.item(PopupMenuItem::new("Copy commit hash").on_click({
-                        let hash = hash.clone();
-                        move |_, _, cx| {
+                let commit = comparison_dialog::ComparisonBase {
+                    id: entry.commit.id.clone(),
+                    subject: entry.commit.summary().to_owned(),
+                };
+                let view = cx.entity().downgrade();
+                let generation = self.workspace_generation;
+                move |menu, _, cx| {
+                    let base = view
+                        .upgrade()
+                        .and_then(|view| view.read(cx).comparison_base.clone());
+                    let compare_label = base.as_ref().map_or_else(
+                        || "Compare with base (set a base first)".to_owned(),
+                        |base| format!("Compare with base {}", base.label()),
+                    );
+                    let hash = commit.id.to_hex();
+                    let base_view = view.clone();
+                    let base_commit = commit.clone();
+                    let compare_view = view.clone();
+                    let target = commit.id.to_hex();
+                    menu.item(
+                        PopupMenuItem::new("Copy commit hash").on_click(move |_, _, cx| {
                             cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(hash.clone()))
-                        }
-                    }))
+                        }),
+                    )
+                    .separator()
+                    .item(PopupMenuItem::new("Set as comparison base").on_click(
+                        move |_, window, cx| {
+                            let _ = base_view.update(cx, |this, cx| {
+                                if this.workspace_generation == generation {
+                                    this.comparison_base = Some(base_commit.clone());
+                                    this.focus.focus(window, cx);
+                                    cx.notify();
+                                }
+                            });
+                        },
+                    ))
+                    .item(
+                        PopupMenuItem::new(compare_label)
+                            .disabled(base.is_none())
+                            .on_click(move |_, window, cx| {
+                                let _ = compare_view.update(cx, |this, cx| {
+                                    if this.workspace_generation == generation
+                                        && let Some(base) = &base
+                                    {
+                                        this.set_history_scope(
+                                            gitk_rs::git::HistoryScope::Compare {
+                                                base: base.id.to_hex(),
+                                                target: target.clone(),
+                                            },
+                                            window,
+                                            cx,
+                                        );
+                                    }
+                                });
+                            }),
+                    )
                 }
             })
             .into_any_element()
@@ -1362,6 +1413,7 @@ impl Render for HistoryWindow {
                     )
             )
             .child(self.history_scope_control(cx))
+            .when(self.comparison_base.is_some(), |view| view.child(self.comparison_base_control(cx)))
             .when(matches!(self.history_state.request.source.scope, gitk_rs::git::HistoryScope::Compare { .. }), |view| view.child(self.comparison_controls(cx)))
             .children(search_feedback(self.filter.read(cx).value().as_ref(), self.history_state.request.regex, self.query_error(cx), palette))
             .child(
