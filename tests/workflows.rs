@@ -1182,3 +1182,159 @@ fn ambiguous_merge_bases_require_an_explicit_endpoint_comparison() {
     let snapshot = wait(|| handle.take_snapshot().filter(|s| s.error.is_some()));
     assert!(snapshot.error.unwrap().contains("multiple merge bases"));
 }
+
+#[test]
+fn file_history_tracks_exact_paths_renames_and_original_commit_parents() {
+    use gitk_rs::git::{FileHistory, HistoryScope};
+    let fixture = Fixture::new();
+    let old = "old [name]*.rs";
+    let new = "new [name]*.rs";
+    fs::write(fixture.root().join(old), "first\n").unwrap();
+    fixture.git(&["add", "."]);
+    fixture.git(&["commit", "-qm", "create file"]);
+    let root = fixture.git(&["rev-parse", "HEAD"]);
+    fs::write(fixture.root().join(old), "first\nsecond\n").unwrap();
+    fixture.git(&["commit", "-qam", "edit old name"]);
+    let old_edit = fixture.git(&["rev-parse", "HEAD"]);
+    let unrelated = fixture.commit("unrelated file change");
+    fixture.git(&["mv", "--", old, new]);
+    fixture.git(&["commit", "-qm", "rename file"]);
+    let rename = fixture.git(&["rev-parse", "HEAD"]);
+    fs::write(fixture.root().join(new), "first\nsecond\nthird\n").unwrap();
+    fixture.git(&["commit", "-qam", "edit new name"]);
+    let new_edit = fixture.git(&["rev-parse", "HEAD"]);
+    fixture.git(&["rm", "--", new]);
+    fixture.git(&["commit", "-qm", "delete file"]);
+    let deletion = fixture.git(&["rev-parse", "HEAD"]);
+    fixture.git(&["config", "log.follow", "true"]);
+    fixture.git(&["config", "diff.renames", "false"]);
+    let mut request = history_request(&fixture);
+    request.batch = None;
+    request.source.scope = HistoryScope::File(FileHistory {
+        path: new.into(),
+        revision: None,
+        follow_renames: false,
+    });
+    let engine = HistoryEngine::spawn(request.clone());
+    let handle = engine.handle();
+    let exact = wait(|| {
+        handle
+            .take_snapshot()
+            .filter(|s| s.eof || s.error.is_some())
+    });
+    assert!(exact.error.is_none(), "{:?}", exact.error);
+    assert_eq!(
+        exact
+            .rows
+            .iter()
+            .map(|e| e.commit.id.to_hex())
+            .collect::<Vec<_>>(),
+        [&deletion, &new_edit, &rename].map(String::clone)
+    );
+    request.source.scope = HistoryScope::File(FileHistory {
+        path: new.into(),
+        revision: None,
+        follow_renames: true,
+    });
+    request.generation.0 += 1;
+    handle.request(request.clone());
+    let followed = wait(|| {
+        handle
+            .take_snapshot()
+            .filter(|s| s.generation == request.generation && (s.eof || s.error.is_some()))
+    });
+    assert!(followed.error.is_none(), "{:?}", followed.error);
+    assert_eq!(
+        followed
+            .rows
+            .iter()
+            .map(|e| e.commit.id.to_hex())
+            .collect::<Vec<_>>(),
+        [&deletion, &new_edit, &rename, &old_edit, &root].map(String::clone)
+    );
+    assert_eq!(followed.rows[2].commit.parents[0].to_hex(), unrelated);
+    assert_eq!(
+        followed.rows[2].file_path.as_deref(),
+        Some(std::path::Path::new(new))
+    );
+    assert_eq!(
+        followed.rows[3].file_path.as_deref(),
+        Some(std::path::Path::new(old))
+    );
+    assert!(Arc::ptr_eq(
+        followed.rows[0].file_path.as_ref().unwrap(),
+        followed.rows[1].file_path.as_ref().unwrap()
+    ));
+    request.source.scope = HistoryScope::File(FileHistory {
+        path: old.into(),
+        revision: Some(gitk_rs::git::CommitId::parse(&old_edit).unwrap()),
+        follow_renames: true,
+    });
+    request.generation.0 += 1;
+    handle.request(request.clone());
+    let historical = wait(|| {
+        handle
+            .take_snapshot()
+            .filter(|s| s.generation == request.generation && s.eof)
+    });
+    assert_eq!(
+        historical
+            .rows
+            .iter()
+            .map(|e| e.commit.id.to_hex())
+            .collect::<Vec<_>>(),
+        [&old_edit, &root].map(String::clone)
+    );
+    assert_eq!(fixture.git(&["rev-parse", "HEAD"]), deletion);
+    assert!(fixture.git(&["status", "--porcelain=v1"]).is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn file_history_preserves_unusual_filenames_and_rejects_obsolete_scopes() {
+    use gitk_rs::git::{FileHistory, HistoryScope};
+    let fixture = Fixture::new();
+    // APFS rejects invalid UTF-8 names. Linux also exercises byte-preserving paths.
+    #[cfg(target_os = "macos")]
+    let path = std::path::PathBuf::from("-literal[1]*\n日本語.rs");
+    #[cfg(not(target_os = "macos"))]
+    let path = {
+        use std::os::unix::ffi::OsStringExt;
+        std::path::PathBuf::from(std::ffi::OsString::from_vec(
+            b"-literal[1]*\n\xff.rs".to_vec(),
+        ))
+    };
+    fs::write(fixture.root().join(&path), "content\n").unwrap();
+    fixture.git(&["add", "."]);
+    fixture.git(&["commit", "-qm", "unusual filename"]);
+    let mut request = history_request(&fixture);
+    request.source.scope = HistoryScope::File(FileHistory {
+        path: path.clone(),
+        revision: None,
+        follow_renames: true,
+    });
+    let engine = HistoryEngine::spawn(request.clone());
+    let handle = engine.handle();
+    let snapshot = wait(|| {
+        handle
+            .take_snapshot()
+            .filter(|s| s.eof || s.error.is_some())
+    });
+    assert!(snapshot.error.is_none(), "{:?}", snapshot.error);
+    assert_eq!(snapshot.rows.len(), 1);
+    assert_eq!(snapshot.rows[0].file_path.as_deref(), Some(path.as_path()));
+    for name in ["absent.rs", "also absent.rs"] {
+        request.generation.0 += 1;
+        request.source.scope = HistoryScope::File(FileHistory {
+            path: name.into(),
+            revision: None,
+            follow_renames: false,
+        });
+        handle.request(request.clone());
+    }
+    let final_snapshot = wait(|| handle.take_snapshot().filter(|s| s.eof));
+    assert_eq!(final_snapshot.generation, request.generation);
+    assert_eq!(final_snapshot.source, request.source);
+    assert_eq!(final_snapshot.loaded, 0);
+    assert!(final_snapshot.error.is_none());
+}

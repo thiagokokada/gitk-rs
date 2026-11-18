@@ -2619,6 +2619,7 @@ fn graph_paints_a_folded_column_at_the_maximum_lane_limit(cx: &mut TestAppContex
             ..GraphRow::default()
         };
         snapshot.rows[0] = Arc::new(Entry {
+            file_path: entry.file_path.clone(),
             ordinal: entry.ordinal,
             commit: entry.commit.clone(),
             graph,

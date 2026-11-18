@@ -74,6 +74,7 @@ pub struct Restored {
 
 #[derive(Clone, Debug)]
 pub struct Entry {
+    pub file_path: Option<Arc<std::path::Path>>,
     pub ordinal: usize,
     pub commit: Commit,
     pub graph: GraphRow,
@@ -694,6 +695,7 @@ impl LinearReload {
             intern_signatures(&mut commit, &mut self.strings, Some(retained_strings));
             self.entries.push(Arc::new(Entry {
                 ordinal: self.entries.len(),
+                file_path: None,
                 graph: self.graph.push(&commit),
                 commit,
             }));
@@ -919,7 +921,12 @@ impl Session {
             };
         // Publish a small first viewport before ref discovery or further batches.
         if self.entries.is_empty() && !self.eof {
-            self.load(request.batch.unwrap_or(1000).clamp(1, 64), 64)?;
+            let first = if matches!(request.source.scope, crate::git::HistoryScope::File(_)) {
+                1
+            } else {
+                64
+            };
+            self.load(request.batch.unwrap_or(1000).clamp(1, first), first)?;
             return Ok(true);
         }
         if !self.refs_loaded || self.refs_revision != request.refs_revision {
@@ -1003,7 +1010,18 @@ impl Session {
             // Share repeated identities within this history generation. Full
             // messages and exact timestamps remain available for search/details.
             intern_signatures(&mut commit, &mut self.strings, None);
-            let graph = self.graph.push(&commit);
+            let file_path = self.stream.as_ref().unwrap().file_path();
+            // A file walk omits intervening commits. Do not invent ancestry
+            // connections or grow lanes for parents absent from this view.
+            let graph = if file_path.is_some() {
+                GraphRow {
+                    node: Some(0),
+                    width: 1,
+                    ..Default::default()
+                }
+            } else {
+                self.graph.push(&commit)
+            };
             let ordinal = self.entries.len();
             if let Some(restore) = &self.restore {
                 for (bookmark, target) in [
@@ -1017,6 +1035,7 @@ impl Session {
             }
             self.search.consider(&commit, ordinal);
             self.entries.push(Arc::new(Entry {
+                file_path,
                 ordinal,
                 commit,
                 graph,
