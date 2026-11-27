@@ -920,7 +920,7 @@ fn parse_raw_commit(id: CommitId, parents: Box<[CommitId]>, record: &[u8]) -> Re
 }
 
 fn parse_raw_signature(value: &str) -> Result<Signature> {
-    use chrono::{Datelike, FixedOffset, SecondsFormat};
+    use jiff::{Timestamp, fmt::temporal::DateTimePrinter, tz::Offset};
     let (name, rest) = value.split_once('<').context("missing identity email")?;
     let (email, date) = rest
         .split_once('>')
@@ -941,9 +941,9 @@ fn parse_raw_signature(value: &str) -> Result<Signature> {
         "date needs Git formatting"
     );
     let seconds = (hours * 3600 + minutes * 60) * if offset[0] == b'-' { -1 } else { 1 };
-    let date = chrono::DateTime::from_timestamp(timestamp, 0)
-        .context("timestamp out of range")?
-        .with_timezone(&FixedOffset::east_opt(seconds).context("timezone out of range")?);
+    let timestamp = Timestamp::from_second(timestamp)?;
+    let offset = Offset::from_seconds(seconds)?;
+    let date = offset.to_datetime(timestamp);
     ensure!(
         (0..=9999).contains(&date.year()),
         "year needs Git formatting"
@@ -953,7 +953,12 @@ fn parse_raw_signature(value: &str) -> Result<Signature> {
             .trim_end_matches(|c: char| c.is_ascii_whitespace())
             .into(),
         email: email.into(),
-        time: date.to_rfc3339_opts(SecondsFormat::Secs, true).into(),
+        time: if seconds == 0 {
+            timestamp.to_string()
+        } else {
+            DateTimePrinter::new().timestamp_with_offset_to_string(&timestamp, offset)
+        }
+        .into(),
     })
 }
 
@@ -1078,6 +1083,16 @@ mod tests {
         let tree = fixture.git(&["rev-parse", "HEAD^{tree}"]);
         let cases: &[(&[u8], &[u8], &[u8])] = &[
             (b"A <a@b> 1000000000 +0530", b"", b"no final newline"),
+            (b"A <a@b> 0 +0000", b"", b"epoch\n"),
+            (b"A <a@b> 86400 -0100", b"", b"previous calendar day\n"),
+            (b"A <a@b> 1000000000 +2359", b"", b"maximum offset\n"),
+            (b"A <a@b> 1000000000 -2359", b"", b"minimum offset\n"),
+            (
+                b"A <a@b> 253402300799 +0000",
+                b"",
+                b"last four-digit year\n",
+            ),
+            (b"A <a@b> 253402300800 +0000", b"", b"extended year\n"),
             (
                 b"A <a@b> 1000000000 -0330",
                 b"",
