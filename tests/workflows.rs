@@ -1338,3 +1338,114 @@ fn file_history_preserves_unusual_filenames_and_rejects_obsolete_scopes() {
     assert_eq!(final_snapshot.loaded, 0);
     assert!(final_snapshot.error.is_none());
 }
+
+#[test]
+fn index_worker_stages_lines_and_unstages_files_with_generation_guards() {
+    use gitk_rs::diff::IndexTarget;
+    let fixture = Fixture::new();
+    fixture.commit("old\n");
+    fs::write(fixture.root().join("file.txt"), "new\n").unwrap();
+    let engine = DiffEngine::spawn();
+    let handle = engine.handle();
+    let select = |id, staged| {
+        handle.select(
+            DiffSelection {
+                id: SelectionId(id),
+                repository: fixture.root().into(),
+                source: DiffSource::Local { staged },
+                options: Default::default(),
+            },
+            diff_page(id),
+        );
+        wait(|| {
+            handle
+                .take_snapshot()
+                .filter(|s| s.selection == SelectionId(id) && !s.highlighting)
+        })
+    };
+    let snapshot = select(1, false);
+    let row = snapshot.start
+        + snapshot
+            .lines
+            .iter()
+            .position(|l| l.text == "+new")
+            .unwrap();
+    handle.edit_index(SelectionId(1), IndexTarget::Lines(row..row + 1));
+    let (id, result) = wait(|| handle.take_index_result());
+    assert_eq!(id, SelectionId(1));
+    result.unwrap();
+    assert_eq!(fixture.git(&["show", ":file.txt"]), "old\nnew");
+    select(2, true);
+    handle.edit_index(SelectionId(1), IndexTarget::File(0));
+    handle.edit_index(SelectionId(2), IndexTarget::File(0));
+    let (id, result) = wait(|| handle.take_index_result());
+    assert_eq!(id, SelectionId(2));
+    result.unwrap();
+    assert_eq!(fixture.git(&["show", ":file.txt"]), "old");
+    assert_eq!(
+        fs::read_to_string(fixture.root().join("file.txt")).unwrap(),
+        "new\n"
+    );
+}
+
+#[test]
+fn hunk_index_edits_resolve_offscreen_headers_without_changing_other_hunks() {
+    use gitk_rs::diff::IndexTarget;
+    let fixture = Fixture::new();
+    let original: String = (0..1000).map(|i| format!("before {i}\n")).collect();
+    fixture.commit(&original);
+    let changed: String = (0..1000)
+        .map(|i| {
+            format!(
+                "{} {i}\n",
+                if !(300..700).contains(&i) {
+                    "after"
+                } else {
+                    "before"
+                }
+            )
+        })
+        .collect();
+    fs::write(fixture.root().join("file.txt"), &changed).unwrap();
+    let engine = DiffEngine::spawn();
+    let handle = engine.handle();
+    let select = |id, staged, range| {
+        let mut page = diff_page(id);
+        page.range = range;
+        handle.select(
+            DiffSelection {
+                id: SelectionId(id),
+                repository: fixture.root().into(),
+                source: DiffSource::Local { staged },
+                options: Default::default(),
+            },
+            page,
+        );
+        wait(|| {
+            handle
+                .take_snapshot()
+                .filter(|s| s.selection == SelectionId(id) && !s.highlighting)
+        })
+    };
+    let snapshot = select(1, false, 950..980);
+    assert!(
+        snapshot
+            .lines
+            .iter()
+            .all(|line| line.kind != LineKind::Hunk)
+    );
+    handle.edit_index(SelectionId(1), IndexTarget::Hunk(snapshot.start));
+    wait(|| handle.take_index_result()).1.unwrap();
+    let expected: String = (0..1000)
+        .map(|i| format!("{} {i}\n", if i >= 700 { "after" } else { "before" }))
+        .collect();
+    assert_eq!(fixture.git(&["show", ":file.txt"]), expected.trim_end());
+    let snapshot = select(2, true, 400..430);
+    handle.edit_index(SelectionId(2), IndexTarget::Hunk(snapshot.start));
+    wait(|| handle.take_index_result()).1.unwrap();
+    assert_eq!(fixture.git(&["show", ":file.txt"]), original.trim_end());
+    assert_eq!(
+        fs::read_to_string(fixture.root().join("file.txt")).unwrap(),
+        changed
+    );
+}

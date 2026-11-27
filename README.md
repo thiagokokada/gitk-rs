@@ -16,7 +16,7 @@ A lightweight Git history explorer for Linux and macOS, written in Rust with
 - Diff, old/new sides, adjustable context, whitespace filtering and word diffs
 - File list to jump between changes, with text selection and copying
 - File history from the changed-file list, with optional rename following
-- Staged, unstaged and untracked changes
+- Staged, unstaged and untracked changes, with file and line staging
 - Browse all branches, remote tracking branches and tags without checkout
 - Compare branch histories and diffs between endpoints or since their merge base
 - Branch switching, automatic refresh and keyboard navigation
@@ -41,6 +41,14 @@ Filter commits with words or metadata, for example
 regular expressions; leave it off for literal searches. See
 [commit search](docs/search.md) for qualifiers, including `contents:` for added
 or removed text, and matching rules.
+
+Select the staged or unstaged row in history to manage local changes.
+Right-click a file in the file list to stage or unstage the whole file. In the
+diff, select text and right-click to stage or unstage the selected changed
+lines. With no text selected, right-click a hunk to stage or unstage the whole
+hunk. The menu names show which action will run. Line and hunk actions use Diff
+and Line diff with whitespace filtering off. Unstaging keeps the working files
+intact.
 
 History streams in the background until the whole repository history is loaded.
 For lower memory use, `--limit N` opts into loading history on demand in batches

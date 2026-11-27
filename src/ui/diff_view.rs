@@ -9,8 +9,8 @@ use super::{
 use gitk_rs::{
     diff::{
         CopyRequest, DiffHandle, DiffOptions, DiffPage, DiffPosition, DiffSelection, DiffSettings,
-        DiffSnapshot, DiffSource, DiffVersion, LineKind, SelectionId, TextPoint, TextSelection,
-        WordDiff, selection::DisplayText,
+        DiffSnapshot, DiffSource, DiffVersion, IndexTarget, LineKind, SelectionId, TextPoint,
+        TextSelection, WordDiff, selection::DisplayText,
     },
     git::Commit,
 };
@@ -19,7 +19,7 @@ use gpui_kit::component::{
     button::Button,
     checkbox::Checkbox,
     input::{InputEvent, InputState, NumberInput},
-    menu::{ContextMenuExt, DropdownMenu, PopupMenuItem},
+    menu::{ContextMenuExt, DropdownMenu, PopupMenu, PopupMenuItem},
     radio::Radio,
     resizable::{h_resizable, resizable_panel},
     scroll::{Scrollbar, ScrollbarMode},
@@ -34,7 +34,15 @@ use unicode_segmentation::UnicodeSegmentation;
 actions!(
     gitk_diff,
     [
-        Copy, CopyCode, SelectAll, PageDown, PageUp, LinesDown, LinesUp
+        Copy,
+        CopyCode,
+        SelectAll,
+        PageDown,
+        PageUp,
+        LinesDown,
+        LinesUp,
+        StageChanges,
+        UnstageChanges
     ]
 );
 
@@ -113,6 +121,17 @@ enum DiffIdentity {
     ),
 }
 
+impl DiffIdentity {
+    fn same_content(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Local(root, kind, _), Self::Local(other_root, other_kind, _)) => {
+                root == other_root && kind == other_kind
+            }
+            _ => self == other,
+        }
+    }
+}
+
 pub(super) struct DiffPane {
     restore_position: Option<DiffPosition>,
     history_file: Option<Arc<std::path::Path>>,
@@ -136,11 +155,14 @@ pub(super) struct DiffPane {
     file_jump_pending: bool,
     selection: Option<TextSelection>,
     dragging: bool,
+    editing_index: bool,
     viewport: Range<usize>,
     layouts: Rc<RefCell<HashMap<usize, PaintedLine>>>,
     _poll: Task<()>,
 }
 
+pub(super) struct IndexChanged;
+impl gpui_kit::EventEmitter<IndexChanged> for DiffPane {}
 impl gpui_kit::EventEmitter<OpenFileHistory> for DiffPane {}
 
 impl DiffPane {
@@ -197,6 +219,19 @@ impl DiffPane {
                             this.focus_history_file(cx);
                             cx.notify();
                         }
+                        if let Some((id, result)) = this.handle.take_index_result()
+                            && id == this.page.selection
+                        {
+                            this.editing_index = false;
+                            match result {
+                                Ok(()) => {
+                                    this.message.clear();
+                                    cx.emit(IndexChanged);
+                                }
+                                Err(error) => this.message = error,
+                            }
+                            cx.notify();
+                        }
                         if let Some(copy) = this.handle.take_copy()
                             && copy.selection == this.page.selection
                         {
@@ -243,6 +278,7 @@ impl DiffPane {
             file_jump_pending: false,
             selection: None,
             dragging: false,
+            editing_index: false,
             viewport: 0..1,
             layouts: Rc::new(RefCell::new(HashMap::new())),
             _poll: poll,
@@ -304,7 +340,7 @@ impl DiffPane {
         cx: &mut Context<Self>,
     ) {
         let identity = DiffIdentity::File(repository.clone(), commit.id.clone(), path.clone());
-        if self.identity.as_ref() == Some(&identity) {
+        if self.current.is_some() && self.identity.as_ref() == Some(&identity) {
             return;
         }
         self.load_source(
@@ -370,6 +406,9 @@ impl DiffPane {
         cx: &mut Context<Self>,
     ) {
         let identity = DiffIdentity::Local(repository.clone(), kind, revision);
+        if self.current.is_some() && self.identity.as_ref() == Some(&identity) {
+            return;
+        }
         self.load_source(
             repository,
             DiffSource::Local {
@@ -389,10 +428,16 @@ impl DiffPane {
         message: &str,
         cx: &mut Context<Self>,
     ) {
-        if self.identity.as_ref() == Some(&identity) {
+        if self.current.is_some() && self.identity.as_ref() == Some(&identity) {
             return;
         }
+        let position = self
+            .identity
+            .as_ref()
+            .filter(|previous| previous.same_content(&identity))
+            .and_then(|_| self.capture_position());
         self.clear(message, cx);
+        self.restore_position = position;
         self.identity = Some(identity);
         let selection = DiffSelection {
             options: self.options,
@@ -402,6 +447,22 @@ impl DiffPane {
         };
         self.current = Some(selection.clone());
         self.handle.select(selection, self.page.clone());
+    }
+
+    pub(super) fn clear_for_reload(&mut self, message: &str, cx: &mut Context<Self>) {
+        let position = self.capture_position();
+        let identity = self.identity.take();
+        self.clear(message, cx);
+        self.identity = identity;
+        self.restore_position = position;
+    }
+
+    fn capture_position(&self) -> Option<DiffPosition> {
+        self.restore_position.clone().or_else(|| {
+            self.snapshot
+                .as_ref()
+                .map(|snapshot| DiffPosition::capture(snapshot, self.viewport.start))
+        })
     }
 
     pub(super) fn clear(&mut self, message: &str, cx: &mut Context<Self>) {
@@ -420,6 +481,7 @@ impl DiffPane {
         self.message = message.into();
         self.selection = None;
         self.dragging = false;
+        self.editing_index = false;
         self.scroll.scroll_to_item_strict(0, ScrollStrategy::Top);
         self.files_scroll.scroll_to_item(0, ScrollStrategy::Top);
         cx.notify();
@@ -447,6 +509,117 @@ impl DiffPane {
             self.handle.select(selection, self.page.clone());
         }
         cx.notify();
+    }
+
+    fn index_label(&self) -> Option<&'static str> {
+        match self.current.as_ref()?.source {
+            DiffSource::Local { staged: true } => Some("Unstage"),
+            DiffSource::Local { staged: false } => Some("Stage"),
+            _ => None,
+        }
+    }
+
+    fn edit_index(&mut self, target: IndexTarget, cx: &mut Context<Self>) {
+        if self.editing_index || self.index_label().is_none() {
+            return;
+        }
+        self.editing_index = true;
+        self.message = "Updating index…".into();
+        self.handle.edit_index(self.page.selection, target);
+        cx.notify();
+    }
+
+    fn edit_text(&mut self, unstage: bool, cx: &mut Context<Self>) {
+        if !self.can_edit_text()
+            || !matches!(self.current.as_ref().map(|selection| &selection.source),
+            Some(DiffSource::Local { staged }) if *staged == unstage)
+        {
+            return;
+        }
+        if let Some(target) = self.text_index_target(None).1 {
+            self.edit_index(target, cx);
+        } else {
+            self.message = "Click inside a diff hunk or select changed lines first.".into();
+            cx.notify();
+        }
+    }
+
+    fn can_edit_text(&self) -> bool {
+        !self.editing_index
+            && self.index_label().is_some()
+            && self.options.version == DiffVersion::Diff
+            && self.options.words == WordDiff::Lines
+            && !self.options.ignore_space
+    }
+
+    fn text_index_target(&self, row: Option<usize>) -> (&'static str, Option<IndexTarget>) {
+        if let Some(selection) = self
+            .selection
+            .filter(|selection| selection.anchor != selection.cursor)
+        {
+            let (start, end) = selection.ordered();
+            let end_line = if end.byte == 0 && end.line > start.line {
+                end.line
+            } else {
+                end.line + 1
+            };
+            return (
+                "selected lines",
+                Some(IndexTarget::Lines(start.line..end_line)),
+            );
+        }
+        let row = row
+            .or_else(|| self.selection.map(|selection| selection.cursor.line))
+            .or(Some(self.viewport.start));
+        let target = row
+            .filter(|row| {
+                self.snapshot.as_ref().is_some_and(|snapshot| {
+                    snapshot.selection == self.page.selection
+                        && row
+                            .checked_sub(snapshot.start)
+                            .and_then(|i| snapshot.lines.get(i))
+                            .is_some_and(|line| {
+                                line.kind.code()
+                                    || line.kind == LineKind::Hunk
+                                    || line.text.starts_with("\\ No newline")
+                            })
+                })
+            })
+            .map(IndexTarget::Hunk);
+        ("hunk", target)
+    }
+
+    fn text_menu(&self, menu: PopupMenu, row: Option<usize>, view: WeakEntity<Self>) -> PopupMenu {
+        let menu = menu
+            .action_context(self.focus.clone())
+            .menu("Copy selection", Box::new(Copy))
+            .menu("Copy without diff markers", Box::new(CopyCode))
+            .menu("Select all", Box::new(SelectAll));
+        let Some(verb) = self.index_label() else {
+            return menu;
+        };
+        let (scope, target) = self.text_index_target(row);
+        let label = format!("{verb} {scope}");
+        let enabled = self.can_edit_text() && target.is_some();
+        let generation = self.page.selection;
+        menu.separator().item(
+            PopupMenuItem::new(label)
+                .action(if verb == "Stage" {
+                    Box::new(StageChanges)
+                } else {
+                    Box::new(UnstageChanges)
+                })
+                .disabled(!enabled)
+                .on_click(move |_, _, cx| {
+                    if let Some(target) = target.clone() {
+                        let _ = view.update(cx, |this, cx| {
+                            if this.page.selection == generation {
+                                this.edit_index(target, cx);
+                            }
+                        });
+                    }
+                }),
+        )
     }
 
     fn controls(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -665,12 +838,16 @@ impl DiffPane {
         let width =
             self.snapshot.as_ref().map_or(100, |s| s.max_width).max(100) as f32 * font_size * 0.65
                 + 24.;
+        let view = cx.entity().downgrade();
+        let generation = self.page.selection;
         div()
             .id(("diff-line", index))
+            .test_support()
             .h(px(self.font_size * 1.55))
             .w(px(width))
             .min_w_full()
             .bg(rgb(background))
+            .flex()
             .cursor_text()
             .on_mouse_down(
                 MouseButton::Left,
@@ -804,8 +981,37 @@ impl DiffPane {
                         );
                     },
                 )
-                .size_full(),
+                .h_full()
+                .flex_1()
+                .min_w_0(),
             )
+            .context_menu(move |menu, _, cx| {
+                if let Some(entity) = view.upgrade()
+                    && entity.read(cx).page.selection == generation
+                {
+                    entity.update(cx, |this, cx| {
+                        // Preserve selected text; otherwise the menu and its keyboard
+                        // action both target the hunk under the pointer.
+                        if this
+                            .selection
+                            .is_none_or(|selection| selection.anchor == selection.cursor)
+                        {
+                            let cursor = TextPoint {
+                                line: index,
+                                byte: 0,
+                            };
+                            this.selection = Some(TextSelection {
+                                anchor: cursor,
+                                cursor,
+                            });
+                            cx.notify();
+                        }
+                        this.text_menu(menu, Some(index), view.clone())
+                    })
+                } else {
+                    menu
+                }
+            })
             .into_any_element()
     }
 }
@@ -859,6 +1065,8 @@ impl Render for DiffPane {
                 MouseButton::Left,
                 cx.listener(|this, _, _, _| this.dragging = false),
             )
+            .on_action(cx.listener(|this, _: &StageChanges, _, cx| this.edit_text(false, cx)))
+            .on_action(cx.listener(|this, _: &UnstageChanges, _, cx| this.edit_text(true, cx)))
             .on_action(cx.listener(|this, _: &Copy, _, _| this.copy(false)))
             .on_action(cx.listener(|this, _: &CopyCode, _, _| this.copy(true)))
             .on_action(cx.listener(|this, _: &SelectAll, _, cx| {
@@ -971,7 +1179,7 @@ impl Render for DiffPane {
                                                         );
                                                         (
                                                             file_label(
-                                                                "Commit".into(),
+                                                                if this.index_label().is_some() { "Local changes".into() } else { "Commit".into() },
                                                                 counts,
                                                                 this.settings.dark,
                                                             ),
@@ -1014,6 +1222,10 @@ impl Render for DiffPane {
                                                         path: path.clone(),
                                                     }));
                                                     let history_view = cx.entity().downgrade();
+                                                    let file_focus = this.focus.clone();
+                                                    let file_generation = this.page.selection;
+                                                    let index_action = this.index_label().filter(|_| i > 0)
+                                                        .map(|label| (label, this.page.selection, this.editing_index));
                                                     div()
                                                         .id(("diff-file", i))
                                                         .test_support()
@@ -1040,15 +1252,20 @@ impl Render for DiffPane {
                                                                 .child(label),
                                                         )
                                                         .on_click(cx.listener(
-                                                            move |this, _, _, cx| {
+                                                            move |this, _, window, cx| {
+                                                                this.focus.focus(window, cx);
+                                                                this.select_file(i, cx);
                                                                 if let Some(line) = line {
-                                                                    this.select_file(i, cx);
                                                                     this.file_jump_pending = true;
                                                                     this.jump(line, cx);
                                                                 }
                                                             },
                                                         ))
-                                                        .context_menu(move |menu, _, _| {
+                                                        .context_menu(move |menu, _, cx| {
+                                                            let _ = history_view.update(cx, |this, cx| {
+                                                                if this.page.selection == file_generation { this.select_file(i, cx); }
+                                                            });
+                                                            let menu = menu.action_context(file_focus.clone());
                                                             let menu = if let Some(path) = open_path.clone() {
                                                                 menu.item(
                                                                     PopupMenuItem::new("Open file")
@@ -1075,6 +1292,18 @@ impl Render for DiffPane {
                                                             } else {
                                                                 menu
                                                             };
+                                                            let menu = if let Some((label, generation, busy)) = index_action {
+                                                                let view = history_view.clone();
+                                                                menu.separator().item(PopupMenuItem::new(format!("{label} file"))
+                                                                    .disabled(busy)
+                                                                    .on_click(move |_, _, cx| {
+                                                                        let _ = view.update(cx, |this, cx| {
+                                                                            if this.page.selection == generation {
+                                                                                this.edit_index(IndexTarget::File(i - 1), cx);
+                                                                            }
+                                                                        });
+                                                                    }))
+                                                            } else { menu };
                                                             if let Some(request) = history_request.clone() {
                                                                 let view = history_view.clone();
                                                                 menu.separator().item(PopupMenuItem::new("Open file history").on_click(move |_, _, cx| {
@@ -1109,12 +1338,11 @@ impl Render for DiffPane {
                     ),
             )
             .context_menu({
-                let focus = self.focus.clone();
-                move |menu, _, _| {
-                    menu.action_context(focus.clone())
-                        .menu("Copy selection", Box::new(Copy))
-                        .menu("Copy without diff markers", Box::new(CopyCode))
-                        .menu("Select all", Box::new(SelectAll))
+                let view = cx.entity().downgrade();
+                move |menu, _, cx| {
+                    if let Some(entity) = view.upgrade() {
+                        entity.read(cx).text_menu(menu, None, view.clone())
+                    } else { menu }
                 }
             })
     }

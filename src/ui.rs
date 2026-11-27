@@ -300,6 +300,10 @@ impl HistoryWindow {
                 cx,
             )
         });
+        cx.subscribe(&diff, |this, _, _: &diff_view::IndexChanged, _| {
+            this.refresh_workspace();
+        })
+        .detach();
         let file_history_subscription = cx.subscribe_in(
             &diff,
             window,
@@ -696,7 +700,8 @@ impl HistoryWindow {
             } else {
                 "Loading commits…"
             };
-            self.diff.update(cx, |diff, cx| diff.clear(message, cx));
+            self.diff
+                .update(cx, |diff, cx| diff.clear_for_reload(message, cx));
         }
         if let Some(selection) = update.selection {
             self.load_selection(selection, cx);
