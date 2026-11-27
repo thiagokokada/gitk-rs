@@ -1143,6 +1143,7 @@ impl Render for DiffPane {
                                         .child(
                                             div().absolute().top_0().left_0().size_full().child(
                                                 Scrollbar::new(&self.scroll)
+                                                    .styles(super::scrollbar_styles)
                                                     .mode(ScrollbarMode::Always)
                                                     .id("diff-scrollbar"),
                                             ),
@@ -1330,6 +1331,7 @@ impl Render for DiffPane {
                                         .test_support()
                                         .child(
                                             Scrollbar::vertical(&self.files_scroll)
+                                                .styles(super::scrollbar_styles)
                                                 .mode(ScrollbarMode::Always)
                                                 .id("files-scrollbar"),
                                         ),

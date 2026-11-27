@@ -121,6 +121,7 @@ impl BranchDialog {
                             .test_support()
                             .child(
                                 Scrollbar::vertical(&self.scroll)
+                                    .styles(super::scrollbar_styles)
                                     .mode(ScrollbarMode::Always)
                                     .id("branch-scrollbar"),
                             ),
