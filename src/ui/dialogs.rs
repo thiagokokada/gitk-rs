@@ -393,6 +393,7 @@ impl HistoryWindow {
                                 .test_support()
                                 .child(
                                     Scrollbar::vertical(&self.help_scroll)
+                                        .styles(super::scrollbar_styles)
                                         .mode(ScrollbarMode::Always)
                                         .id("help-scrollbar"),
                                 ),
