@@ -15,6 +15,8 @@ use std::{
     thread::{self, JoinHandle},
 };
 
+mod staging;
+pub use staging::IndexTarget;
 mod highlight;
 #[cfg(test)]
 mod highlight_tests;
@@ -691,8 +693,10 @@ fn diff_args(source: &DiffSource, numstat: bool) -> Vec<OsString> {
             args.push(endpoints.base.to_hex().into());
             args.push(endpoints.target.to_hex().into());
         }
-        DiffSource::Local { staged: true } => args.push("--cached".into()),
-        DiffSource::Local { staged: false } => args.push("--ours".into()),
+        DiffSource::Local { staged } => {
+            args.push(if *staged { "--cached" } else { "--ours" }.into());
+            args.extend(["--src-prefix=a/", "--dst-prefix=b/"].map(OsString::from));
+        }
     }
     args
 }
@@ -813,6 +817,9 @@ fn load_files(
             } else {
                 (path_from_bytes(path.to_vec())?, None)
             };
+            // --no-index represents an untracked file as /dev/null -> path.
+            // /dev/null is a patch sentinel, not a repository rename source.
+            let old_path = if command > 0 { None } else { old_path };
             // Git emits a zero-count unmerged entry followed by its actual patch
             // numstat. Keep one navigation entry in the patch's file order.
             if let Some(previous) = files
@@ -855,6 +862,8 @@ struct DiffMailbox {
     copy: Option<CopyRequest>,
     snapshot: Option<DiffSnapshot>,
     copied: Option<CopyResult>,
+    index_edit: Option<(SelectionId, IndexTarget)>,
+    index_result: Option<(SelectionId, Result<(), String>)>,
     current: SelectionId,
     cancellation: Cancellation,
     clear: bool,
@@ -900,6 +909,8 @@ impl DiffEngine {
                 copy: None,
                 snapshot: None,
                 copied: None,
+                index_edit: None,
+                index_result: None,
                 current: SelectionId(0),
                 cancellation: Cancellation::default(),
                 clear: false,
@@ -1016,6 +1027,8 @@ impl DiffHandle {
                 mailbox.copy.take(),
                 mailbox.snapshot.take(),
                 mailbox.copied.take(),
+                mailbox.index_edit.take(),
+                mailbox.index_result.take(),
             )
         };
         drop(old);
@@ -1042,6 +1055,18 @@ impl DiffHandle {
             mailbox.copy = Some(copy);
         }
         self.shared.changed.notify_one();
+    }
+
+    pub fn edit_index(&self, selection: SelectionId, target: IndexTarget) {
+        let mut mailbox = self.shared.mailbox.lock().unwrap();
+        if mailbox.current == selection && mailbox.index_edit.is_none() {
+            mailbox.index_edit = Some((selection, target));
+            self.shared.changed.notify_one();
+        }
+    }
+
+    pub fn take_index_result(&self) -> Option<(SelectionId, Result<(), String>)> {
+        self.shared.mailbox.lock().unwrap().index_result.take()
     }
 
     pub fn take_snapshot(&self) -> Option<DiffSnapshot> {
@@ -1084,12 +1109,14 @@ fn diff_error(page: &DiffPage, error: String) -> DiffSnapshot {
 
 fn diff_worker(shared: Arc<DiffShared>) {
     let mut state: Option<std::result::Result<DiffDocument, String>> = None;
+    let mut current = None;
     loop {
-        let (selection, page, copy, cancellation, clear, options, stopped) = {
+        let (selection, page, copy, index_edit, cancellation, clear, options, stopped) = {
             let mut mailbox = shared.mailbox.lock().unwrap();
             while mailbox.selection.is_none()
                 && mailbox.page.is_none()
                 && mailbox.copy.is_none()
+                && mailbox.index_edit.is_none()
                 && !mailbox.save_state
                 && !mailbox.clear
                 && !mailbox.stopped
@@ -1101,6 +1128,7 @@ fn diff_worker(shared: Arc<DiffShared>) {
                 mailbox.selection.take(),
                 mailbox.page.take(),
                 mailbox.copy.take(),
+                mailbox.index_edit.take(),
                 mailbox.cancellation.clone(),
                 clear,
                 std::mem::take(&mut mailbox.save_state).then_some(mailbox.state),
@@ -1118,8 +1146,10 @@ fn diff_worker(shared: Arc<DiffShared>) {
         }
         if clear {
             state = None;
+            current = None;
         }
         if let Some(selection) = selection {
+            current = Some(selection.clone());
             state = Some(
                 DiffDocument::load(&selection, &cancellation).map_err(|error| format!("{error:#}")),
             );
@@ -1136,6 +1166,19 @@ fn diff_worker(shared: Arc<DiffShared>) {
                     selection: copy.selection,
                     result,
                 });
+            }
+        }
+        if let Some((id, target)) = index_edit {
+            let result = match (&mut state, &current) {
+                (Some(Ok(document)), Some(selection)) if selection.id == id => {
+                    staging::edit(document, selection, target, &cancellation)
+                }
+                _ => Err(anyhow::anyhow!("Diff is no longer available")),
+            }
+            .map_err(|error| format!("{error:#}"));
+            let mut mailbox = shared.mailbox.lock().unwrap();
+            if mailbox.current == id {
+                mailbox.index_result = Some((id, result));
             }
         }
         let Some(page) = page else {

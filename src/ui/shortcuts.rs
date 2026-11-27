@@ -136,6 +136,7 @@ const HISTORY: Option<&str> = Some("GitHistory && !Input && !Dialog");
 const HISTORY_INPUT: Option<&str> = Some("GitHistory && !Dialog");
 const INPUT: Option<&str> = Some("Input");
 const DIFF: Option<&str> = Some("Diff");
+const DIFF_EDIT: Option<&str> = Some("Diff && !Input && !Dialog");
 const BRANCH: Option<&str> = Some("BranchDialog");
 const BRANCH_INPUT: Option<&str> = Some("BranchDialog > Input");
 const HELP: Option<&str> = Some("HelpDialog");
@@ -181,6 +182,8 @@ pub(super) const GROUPS: &[ShortcutGroup] = &[
             shortcut!("Select all diff text"; [DIFF], diff_view::SelectAll => [command!("a")]),
             shortcut!("Copy selected text"; [DIFF], diff_view::Copy => [command!("c")]),
             shortcut!("Copy without +/- markers"; [DIFF], diff_view::CopyCode => [command!("shift-c")]),
+            shortcut!("Stage selected lines or current hunk (unstaged diff)"; [DIFF_EDIT], diff_view::StageChanges => [command!("s")]),
+            shortcut!("Unstage selected lines or current hunk (staged diff)"; [DIFF_EDIT], diff_view::UnstageChanges => [command!("shift-s")]),
         ],
     },
     ShortcutGroup {

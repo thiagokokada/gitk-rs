@@ -1292,3 +1292,499 @@ fn file_history_from_aggregate_diff_uses_target_and_restores_comparison(cx: &mut
     })
     });
 }
+
+#[gpui_kit::test]
+fn diff_and_file_context_menus_stage_and_unstage_changes(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    fixture.commit("old\n");
+    std::fs::write(fixture.root().join("file.txt"), "new\n").unwrap();
+    let (app, cx) = open(&fixture, cx);
+    let pane = cx.update(|_, cx| app.view.read(cx).diff.clone());
+    until(cx, |cx| {
+        cx.update(|_, cx| !app.view.read(cx).history_state.local_rows.is_empty())
+    });
+    cx.simulate_keystrokes("home");
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            pane.read(cx)
+                .snapshot
+                .as_ref()
+                .is_some_and(|s| s.lines.iter().any(|l| l.text == "+new"))
+        })
+    });
+    let added_line = cx.update(|_, cx| {
+        let snapshot = pane.read(cx).snapshot.as_ref().unwrap();
+        snapshot.start
+            + snapshot
+                .lines
+                .iter()
+                .position(|line| line.text == "+new")
+                .unwrap()
+    });
+    pane.update(cx, |pane, cx| {
+        pane.selection = Some(super::TextSelection {
+            anchor: super::TextPoint {
+                line: added_line,
+                byte: 0,
+            },
+            cursor: super::TextPoint {
+                line: added_line,
+                byte: 4,
+            },
+        });
+        cx.notify();
+    });
+    diff_index_menu(cx, added_line, "Stage selected lines");
+    until(cx, |cx| cx.update(|_, cx| !pane.read(cx).editing_index));
+    assert_eq!(fixture.git(&["show", ":file.txt"]), "old\nnew");
+    until(cx, |cx| {
+        cx.update(|_, cx| app.view.read(cx).history_state.local_rows.len() == 2)
+    });
+    cx.update(|window, cx| app.view.update(cx, |view, cx| view.select(1, window, cx)));
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            pane.read(cx)
+                .snapshot
+                .as_ref()
+                .is_some_and(|s| s.lines.iter().any(|l| l.text == "+new"))
+        })
+    });
+    let added_line = cx.update(|_, cx| {
+        let snapshot = pane.read(cx).snapshot.as_ref().unwrap();
+        snapshot.start
+            + snapshot
+                .lines
+                .iter()
+                .position(|line| line.text == "+new")
+                .unwrap()
+    });
+    pane.update(cx, |pane, cx| {
+        pane.selection = Some(super::TextSelection {
+            anchor: super::TextPoint {
+                line: added_line,
+                byte: 0,
+            },
+            cursor: super::TextPoint {
+                line: added_line,
+                byte: 4,
+            },
+        });
+        cx.notify();
+    });
+    diff_index_menu(cx, added_line, "Unstage selected lines");
+    until(cx, |cx| cx.update(|_, cx| !pane.read(cx).editing_index));
+    assert_eq!(fixture.git(&["show", ":file.txt"]), "old");
+    until(cx, |cx| {
+        cx.update(|_, cx| app.view.read(cx).history_state.local_rows.len() == 1)
+    });
+    cx.update(|window, cx| app.view.update(cx, |view, cx| view.select(0, window, cx)));
+    until(cx, |cx| {
+        cx.update(|_, cx| pane.read(cx).has_loaded_selection())
+    });
+    file_index_menu(cx, "Stage file");
+    until(cx, |cx| cx.update(|_, cx| !pane.read(cx).editing_index));
+    assert_eq!(fixture.git(&["show", ":file.txt"]), "new");
+    until(cx, |cx| {
+        cx.update(|_, cx| app.view.read(cx).history_state.local_rows == [LocalChangeKind::Staged])
+    });
+    cx.update(|window, cx| app.view.update(cx, |view, cx| view.select(0, window, cx)));
+    until(cx, |cx| {
+        cx.update(|_, cx| pane.read(cx).has_loaded_selection())
+    });
+    file_index_menu(cx, "Unstage file");
+    until(cx, |cx| cx.update(|_, cx| !pane.read(cx).editing_index));
+    assert_eq!(fixture.git(&["show", ":file.txt"]), "old");
+    assert_eq!(
+        std::fs::read_to_string(fixture.root().join("file.txt")).unwrap(),
+        "new\n"
+    );
+}
+
+fn file_index_menu(cx: &mut gpui_kit::VisualTestContext, label: &str) {
+    let bounds = cx.update(|window, _| window.find(("diff-file", 1_usize)).bounds());
+    cx.simulate_mouse_down(
+        bounds.center(),
+        gpui_kit::MouseButton::Right,
+        Modifiers::default(),
+    );
+    cx.simulate_mouse_up(
+        bounds.center(),
+        gpui_kit::MouseButton::Right,
+        Modifiers::default(),
+    );
+    until(cx, |cx| {
+        cx.update(|window, _| window.try_find("popup-menu").is_some())
+    });
+    let bounds = cx.update(|window, _| window.find_by_label(label).bounds());
+    cx.simulate_click(bounds.center(), Modifiers::default());
+}
+
+fn diff_index_menu(cx: &mut gpui_kit::VisualTestContext, row: usize, label: &str) {
+    let bounds = cx.update(|window, _| window.find(("diff-line", row)).bounds());
+    cx.simulate_mouse_down(
+        bounds.center(),
+        gpui_kit::MouseButton::Right,
+        Modifiers::default(),
+    );
+    cx.simulate_mouse_up(
+        bounds.center(),
+        gpui_kit::MouseButton::Right,
+        Modifiers::default(),
+    );
+    until(cx, |cx| {
+        cx.update(|window, _| window.try_find("popup-menu").is_some())
+    });
+    let bounds = cx.update(|window, _| window.find_by_label(label).bounds());
+    cx.simulate_click(bounds.center(), Modifiers::default());
+}
+
+#[gpui_kit::test]
+fn empty_text_selection_stages_and_unstages_the_clicked_hunk(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let original: String = (0..100).map(|i| format!("line {i}\n")).collect();
+    fixture.commit(&original);
+    let changed = original
+        .replace("line 1\n", "first\n")
+        .replace("line 90\n", "last\n");
+    std::fs::write(fixture.root().join("file.txt"), &changed).unwrap();
+    let (app, cx) = open(&fixture, cx);
+    let pane = cx.update(|_, cx| app.view.read(cx).diff.clone());
+    until(cx, |cx| {
+        cx.update(|_, cx| !app.view.read(cx).history_state.local_rows.is_empty())
+    });
+    cx.simulate_keystrokes("home");
+    until(cx, |cx| {
+        cx.update(|_, cx| pane.read(cx).has_loaded_selection())
+    });
+    let row = cx.update(|_, cx| {
+        let snapshot = pane.read(cx).snapshot.as_ref().unwrap();
+        snapshot.start
+            + snapshot
+                .lines
+                .iter()
+                .position(|line| line.text == "+last")
+                .unwrap()
+    });
+    // A normal click creates an empty selection: the menu should target the hunk.
+    let bounds = cx.update(|window, _| window.find(("diff-line", row)).bounds());
+    cx.simulate_click(bounds.center(), Modifiers::default());
+    diff_index_menu(cx, row, "Stage hunk");
+    until(cx, |cx| {
+        cx.update(|_, cx| app.view.read(cx).history_state.local_rows.len() == 2)
+    });
+    assert_eq!(
+        fixture.git(&["show", ":file.txt"]),
+        original.replace("line 90\n", "last\n").trim_end()
+    );
+    cx.update(|window, cx| app.view.update(cx, |view, cx| view.select(1, window, cx)));
+    until(cx, |cx| {
+        cx.update(|_, cx| pane.read(cx).has_loaded_selection())
+    });
+    let row = cx.update(|_, cx| {
+        let snapshot = pane.read(cx).snapshot.as_ref().unwrap();
+        snapshot.start
+            + snapshot
+                .lines
+                .iter()
+                .position(|line| line.kind == super::LineKind::Hunk)
+                .unwrap()
+    });
+    diff_index_menu(cx, row, "Unstage hunk");
+    until(cx, |cx| {
+        cx.update(|_, cx| app.view.read(cx).history_state.local_rows == [LocalChangeKind::Unstaged])
+    });
+    assert_eq!(fixture.git(&["show", ":file.txt"]), original.trim_end());
+    assert_eq!(
+        std::fs::read_to_string(fixture.root().join("file.txt")).unwrap(),
+        changed
+    );
+}
+
+#[gpui_kit::test]
+fn staging_selected_lines_preserves_scrolled_local_view(cx: &mut TestAppContext) {
+    local_index_edit_preserves_position(false, cx);
+}
+
+#[gpui_kit::test]
+fn unstaging_selected_lines_preserves_scrolled_local_view(cx: &mut TestAppContext) {
+    local_index_edit_preserves_position(true, cx);
+}
+
+fn local_index_edit_preserves_position(staged: bool, cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    fixture.commit("base");
+    let content: String = (0..1000).map(|i| format!("line {i}\n")).collect();
+    std::fs::write(fixture.root().join("large.txt"), &content).unwrap();
+    if staged {
+        fixture.git(&["add", "large.txt"]);
+    }
+    let (app, cx) = open(&fixture, cx);
+    let pane = cx.update(|_, cx| app.view.read(cx).diff.clone());
+    until(cx, |cx| {
+        cx.update(|_, cx| !app.view.read(cx).history_state.local_rows.is_empty())
+    });
+    cx.simulate_keystrokes("home");
+    until(cx, |cx| {
+        cx.update(|_, cx| pane.read(cx).has_loaded_selection())
+    });
+    pane.update(cx, |pane, cx| pane.jump(450, cx));
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            pane.read(cx).viewport.start >= 440 && pane.read(cx).has_loaded_selection()
+        })
+    });
+    let before = cx.update(|_, cx| pane.read(cx).viewport.start);
+    let generation = cx.update(|_, cx| pane.read(cx).page.selection);
+    let row = before + 2;
+    pane.update(cx, |pane, cx| {
+        pane.selection = Some(super::TextSelection {
+            anchor: super::TextPoint { line: row, byte: 0 },
+            cursor: super::TextPoint { line: row, byte: 3 },
+        });
+        cx.notify();
+    });
+    diff_index_menu(
+        cx,
+        row,
+        if staged {
+            "Unstage selected lines"
+        } else {
+            "Stage selected lines"
+        },
+    );
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            pane.read(cx).page.selection != generation && pane.read(cx).has_loaded_selection()
+        })
+    });
+    until(cx, |cx| {
+        cx.update(|_, cx| pane.read(cx).viewport.start.abs_diff(before) <= 3)
+    });
+    // A second refresh must preserve the restored position too, and pending
+    // refreshes must not replace the bookmark with the temporary loading view.
+    let kind = if staged {
+        LocalChangeKind::Staged
+    } else {
+        LocalChangeKind::Unstaged
+    };
+    pane.update(cx, |pane, cx| {
+        pane.load_local(fixture.root().into(), kind, u64::MAX - 1, cx);
+        pane.load_local(fixture.root().into(), kind, u64::MAX, cx);
+    });
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            pane.read(cx).has_loaded_selection()
+                && pane.read(cx).viewport.start.abs_diff(before) <= 3
+        })
+    });
+    let generation = cx.update(|_, cx| pane.read(cx).page.selection);
+    app.view.update(cx, |view, cx| view.force_reload(cx));
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            pane.read(cx).page.selection != generation
+                && pane.read(cx).has_loaded_selection()
+                && pane.read(cx).viewport.start.abs_diff(before) <= 3
+        })
+    });
+    assert_eq!(
+        std::fs::read_to_string(fixture.root().join("large.txt")).unwrap(),
+        content
+    );
+}
+
+#[gpui_kit::test]
+fn forced_history_reload_preserves_same_commit_diff_position(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let content: String = (0..1000).map(|i| format!("line {i}\n")).collect();
+    fixture.commit(&content);
+    let (app, cx) = open(&fixture, cx);
+    let pane = cx.update(|_, cx| app.view.read(cx).diff.clone());
+    until(cx, |cx| {
+        cx.update(|_, cx| pane.read(cx).has_loaded_selection())
+    });
+    pane.update(cx, |pane, cx| pane.jump(450, cx));
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            pane.read(cx).viewport.start >= 440 && pane.read(cx).has_loaded_selection()
+        })
+    });
+    let before = cx.update(|_, cx| pane.read(cx).viewport.start);
+    let generation = cx.update(|_, cx| pane.read(cx).page.selection);
+    app.view.update(cx, |view, cx| view.force_reload(cx));
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            pane.read(cx).page.selection != generation
+                && pane.read(cx).has_loaded_selection()
+                && pane.read(cx).viewport.start.abs_diff(before) <= 3
+        })
+    });
+    // Once restored, the next refresh should remember where the user scrolled.
+    pane.update(cx, |pane, cx| pane.jump(650, cx));
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            pane.read(cx).viewport.start >= 640 && pane.read(cx).has_loaded_selection()
+        })
+    });
+    let generation = cx.update(|_, cx| pane.read(cx).page.selection);
+    app.view.update(cx, |view, cx| view.force_reload(cx));
+    until(cx, |cx| {
+        cx.update(|_, cx| {
+            pane.read(cx).page.selection != generation
+                && pane.read(cx).has_loaded_selection()
+                && pane.read(cx).viewport.start.abs_diff(650) <= 3
+        })
+    });
+}
+
+#[gpui_kit::test]
+fn diff_shortcuts_stage_selected_lines_or_current_hunk_and_respect_focus(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let original: String = (0..100).map(|i| format!("line {i}\n")).collect();
+    fixture.commit(&original);
+    let changed = original
+        .replace("line 1\n", "first\n")
+        .replace("line 90\n", "last\n");
+    std::fs::write(fixture.root().join("file.txt"), &changed).unwrap();
+    let (app, cx) = open(&fixture, cx);
+    let pane = cx.update(|_, cx| app.view.read(cx).diff.clone());
+    until(cx, |cx| {
+        cx.update(|_, cx| !app.view.read(cx).history_state.local_rows.is_empty())
+    });
+    let modifiers: &[&str] = if cfg!(target_os = "macos") {
+        &["ctrl", "cmd"]
+    } else {
+        &["ctrl"]
+    };
+    for modifier in modifiers {
+        cx.update(|window, cx| app.view.update(cx, |view, cx| view.select(0, window, cx)));
+        until(cx, |cx| {
+            cx.update(|_, cx| pane.read(cx).has_loaded_selection())
+        });
+        let row = shortcut_diff_row(&pane, "+first", cx);
+        select_diff_text(cx, row);
+        assert!(cx.update(|_, cx| {
+            pane.read(cx)
+                .selection
+                .is_some_and(|selection| selection.anchor != selection.cursor)
+        }));
+        // The selected text is the target only when focus is in the diff.
+        cx.update(|window, cx| app.view.read(cx).focus.clone().focus(window, cx));
+        cx.simulate_keystrokes(&format!("{modifier}-s"));
+        assert_eq!(fixture.git(&["diff", "--cached", "--name-only"]), "");
+        cx.simulate_keystrokes("/");
+        cx.simulate_keystrokes(&format!("{modifier}-s {modifier}-shift-s"));
+        assert_eq!(fixture.git(&["diff", "--cached", "--name-only"]), "");
+        cx.simulate_keystrokes("escape f1");
+        cx.simulate_keystrokes(&format!("{modifier}-s"));
+        assert_eq!(fixture.git(&["diff", "--cached", "--name-only"]), "");
+        cx.simulate_keystrokes("escape");
+        cx.update(|window, cx| pane.read(cx).focus.clone().focus(window, cx));
+        cx.simulate_keystrokes(&format!("{modifier}-s"));
+        until(cx, |cx| {
+            cx.update(|_, cx| app.view.read(cx).history_state.local_rows.len() == 2)
+        });
+        let expected = original.replace("line 1\n", "line 1\nfirst\n");
+        assert_eq!(fixture.git(&["show", ":file.txt"]), expected.trim_end());
+        cx.simulate_keystrokes(&format!("{modifier}-shift-s"));
+        assert_eq!(fixture.git(&["show", ":file.txt"]), expected.trim_end());
+        cx.update(|window, cx| app.view.update(cx, |view, cx| view.select(1, window, cx)));
+        until(cx, |cx| {
+            cx.update(|_, cx| pane.read(cx).has_loaded_selection())
+        });
+        let row = shortcut_diff_row(&pane, "+first", cx);
+        select_diff_text(cx, row);
+        cx.simulate_keystrokes(&format!("{modifier}-shift-s"));
+        until(cx, |cx| {
+            cx.update(|_, cx| {
+                app.view.read(cx).history_state.local_rows == [LocalChangeKind::Unstaged]
+            })
+        });
+        assert_eq!(fixture.git(&["show", ":file.txt"]), original.trim_end());
+        // A caret with no selected text stages the entire second hunk.
+        cx.update(|window, cx| app.view.update(cx, |view, cx| view.select(0, window, cx)));
+        until(cx, |cx| {
+            cx.update(|_, cx| pane.read(cx).has_loaded_selection())
+        });
+        let row = shortcut_diff_row(&pane, "+last", cx);
+        let bounds = cx.update(|window, _| window.find(("diff-line", row)).bounds());
+        cx.simulate_click(bounds.center(), Modifiers::default());
+        assert!(cx.update(|_, cx| {
+            pane.read(cx)
+                .selection
+                .is_some_and(|selection| selection.anchor == selection.cursor)
+        }));
+        cx.simulate_keystrokes(&format!("{modifier}-s"));
+        until(cx, |cx| {
+            cx.update(|_, cx| app.view.read(cx).history_state.local_rows.len() == 2)
+        });
+        assert_eq!(
+            fixture.git(&["show", ":file.txt"]),
+            original.replace("line 90\n", "last\n").trim_end()
+        );
+        cx.update(|window, cx| app.view.update(cx, |view, cx| view.select(1, window, cx)));
+        until(cx, |cx| {
+            cx.update(|_, cx| pane.read(cx).has_loaded_selection())
+        });
+        let row = shortcut_diff_row(&pane, "+last", cx);
+        let bounds = cx.update(|window, _| window.find(("diff-line", row)).bounds());
+        // Opening a menu with an empty selection places the caret in that hunk,
+        // so its displayed shortcut and its click handler have the same target.
+        cx.simulate_mouse_down(
+            bounds.center(),
+            gpui_kit::MouseButton::Right,
+            Modifiers::default(),
+        );
+        cx.simulate_mouse_up(
+            bounds.center(),
+            gpui_kit::MouseButton::Right,
+            Modifiers::default(),
+        );
+        until(cx, |cx| {
+            cx.update(|window, _| window.try_find("popup-menu").is_some())
+        });
+        cx.simulate_keystrokes(&format!("{modifier}-shift-s"));
+        // Close the menu if the shortcut was handled without dismissing it.
+        cx.simulate_keystrokes("escape");
+        until(cx, |cx| {
+            cx.update(|_, cx| {
+                app.view.read(cx).history_state.local_rows == [LocalChangeKind::Unstaged]
+            })
+        });
+        assert_eq!(fixture.git(&["show", ":file.txt"]), original.trim_end());
+        assert_eq!(
+            std::fs::read_to_string(fixture.root().join("file.txt")).unwrap(),
+            changed
+        );
+    }
+}
+
+fn shortcut_diff_row(
+    pane: &gpui_kit::Entity<super::DiffPane>,
+    text: &str,
+    cx: &mut gpui_kit::VisualTestContext,
+) -> usize {
+    cx.update(|_, cx| {
+        let snapshot = pane.read(cx).snapshot.as_ref().unwrap();
+        snapshot.start
+            + snapshot
+                .lines
+                .iter()
+                .position(|line| line.text == text)
+                .unwrap()
+    })
+}
+
+fn select_diff_text(cx: &mut gpui_kit::VisualTestContext, row: usize) {
+    let bounds = cx.update(|window, _| window.find(("diff-line", row)).bounds());
+    cx.simulate_click(
+        point(bounds.left() + px(1.), bounds.center().y),
+        Modifiers::default(),
+    );
+    cx.simulate_click(
+        point(bounds.left() + px(28.), bounds.center().y),
+        Modifiers {
+            shift: true,
+            ..Modifiers::default()
+        },
+    );
+}
