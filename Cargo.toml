@@ -12,10 +12,10 @@ default = ["system-fonts"]
 system-fonts = ["dep:fontconfig"]
 
 [dependencies]
-gpui-kit = { version = "=0.10.0", features = ["gpui-fast"] }
+gpui-kit = { version = "=0.11.0", features = ["gpui-fast", "x11"] }
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
-chrono = { version = "0.4", default-features = false, features = ["std"] }
+jiff = { version = "1", default-features = false, features = ["std"] }
 dirs = "7"
 serde = { version = "1", features = ["derive"] }
 toml = "1"
@@ -24,11 +24,11 @@ tempfile = "3"
 syntect = { version = "5.3", default-features = false, features = ["parsing", "regex-fancy", "dump-load"] }
 two-face = { version = "=0.5.2", default-features = false, features = ["syntect-fancy"] }
 unicode-segmentation = "1.13"
-notify = "8"
+notify = "9"
 regex = "1"
 
 [target.'cfg(unix)'.dependencies]
-nix = { version = "0.31", features = ["signal", "process"] }
+nix = { version = "0.32", features = ["signal", "process"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 fontconfig = { version = "0.11", optional = true, features = ["dlopen"] }
@@ -39,7 +39,7 @@ objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std"
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSData"] }
 
 [dev-dependencies]
-gpui-kit = { version = "=0.10.0", features = ["gpui-fast", "test-support"] }
+gpui-kit = { version = "=0.11.0", features = ["gpui-fast", "x11", "test-support"] }
 
 [profile.release]
 debug = "line-tables-only"

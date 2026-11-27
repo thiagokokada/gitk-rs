@@ -1,7 +1,7 @@
 //! Parsed commit filters shared by the worker and search feedback UI.
 use crate::git::Commit;
 use anyhow::{Result, ensure};
-use chrono::NaiveDate;
+use jiff::civil::Date;
 use std::{fmt, ops::Range, str::FromStr};
 
 /// Maximum UTF-8 query length shared by parsing and qualifier completion.
@@ -462,8 +462,8 @@ enum Predicate {
     Committer(Matcher),
     Message(Matcher),
     Hash(Matcher),
-    Before(NaiveDate),
-    After(NaiveDate),
+    Before(Date),
+    After(Date),
     Merge(bool),
 }
 
@@ -511,8 +511,8 @@ fn valid_date(value: &str) -> bool {
     parse_date(value).is_some()
 }
 
-fn parse_date(value: &str) -> Option<NaiveDate> {
-    NaiveDate::parse_from_str(value, "%Y-%m-%d").ok()
+fn parse_date(value: &str) -> Option<Date> {
+    Date::strptime("%Y-%m-%d", value).ok()
 }
 
 #[cfg(test)]
@@ -846,6 +846,7 @@ mod tests {
         for bad in [
             "author:",
             "before:2025-02-29",
+            "before:1900-02-29",
             "after:2026-13-01",
             "before:2026-00-01",
             "merge:yes",
@@ -858,9 +859,10 @@ mod tests {
         }
         for input in [
             "before:2000-02-29",
+            "before:2400-02-29",
             "before:2026-1-3",
             "after:0000-01-01",
-            "before:+10000-01-01",
+            "before:9999-12-31",
         ] {
             assert!(Query::parse(input).is_ok(), "{input}");
         }
