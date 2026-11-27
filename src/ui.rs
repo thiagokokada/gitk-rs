@@ -1083,6 +1083,14 @@ impl HistoryWindow {
     }
 }
 
+fn scrollbar_styles(styles: gpui_kit::base::ScrollbarStyles) -> gpui_kit::base::ScrollbarStyles {
+    // Keep large histories compact while leaving room to grab the thumb.
+    styles
+        .thumb(|style| style.min_length(px(24.)))
+        .thumb_hover(|style| style.min_length(px(24.)))
+        .thumb_active(|style| style.min_length(px(24.)))
+}
+
 fn apply_theme(theme: Theme, window: &mut Window, cx: &mut App) {
     gpui_kit::component::Theme::change(
         if theme == Theme::Dark {
@@ -1567,6 +1575,7 @@ impl Render for HistoryWindow {
                                                     .test_support()
                                                     .child(
                                                         Scrollbar::vertical(&self.scroll)
+                                                            .styles(scrollbar_styles)
                                                             .mode(ScrollbarMode::Always)
                                                             .id("history-scrollbar"),
                                                     ),
